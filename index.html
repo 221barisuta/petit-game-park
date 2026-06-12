@@ -857,6 +857,44 @@ function quitGame(){
   show('scr-select');
 }
 /* ---- 結果画面 ---- */
+/* ゲーム別「つぎのいって」: 判定内訳から弱点を1つ提案する (必ず文字列を返す) */
+function gameHint(def,c,mx){
+  c=c||{};
+  if(def.id==='tea'){
+    if((c.over||0)>=2)return '0.1びょう はやく はなして あふれゼロ';
+    if(!(c.perfect>0))return 'キンいろ どまんなかで PERFECT';
+    if((c.few||0)>=2)return 'ラインぎりぎりまで ねばろう';
+    return 'PERFECT を もう1かい';
+  }
+  if(def.id==='lane'){
+    if((mx||0)<3)return 'つづけて 3コンボ';
+    if((c.wrong||0)>=2)return 'おだい いがいは スルーしよう';
+    if(!(c.perfect>0))return 'まんなかゾーンで PERFECT';
+    return 'ジャストPERFECT を ふやそう';
+  }
+  if(def.id==='spot'){
+    const e=c.early||0,l=c.late||0;
+    if(e+l>0)return e>=l?'すこし まって EARLYをGOODに':'すこし はやめに LATEをGOODに';
+    if((c.miss||0)>=3)return 'ひかりが かさなるまで まとう';
+    if(!(c.perfect>0))return 'どまんなかで PERFECT';
+    return 'PERFECT を もう1かい';
+  }
+  return 'PERFECT を 1かい';
+}
+/* 結果画面の目標文言。0点どうし/ベストタイ/あと0点を明示的に処理 */
+function goalText(def,score,best,isRec,c,mx,last){
+  const hint=gameHint(def,c,mx);
+  if(score===0&&best===0){
+    return {tea:'🍵 まずは1ぱい そそいでみよう！',
+            lane:'🍣 まずは1こ ゲットしてみよう！',
+            spot:'💡 まずは1かい あわせてみよう！'}[def.id]||'🎯 まずは1こ ゲットしよう！';
+  }
+  if(!isRec&&score===best&&score>0)return '🤝 ベストタイ！あと1てんで しんきろく！';
+  if(isRec)return `🎉 しんきろく！つぎは「${hint}」`;
+  if(best-score<=80)return `😆 おしい！あと${best-score}てん：${hint}`;
+  if(last>=0&&score>last)return `📈 まえより+${score-last}てん！つぎは「${hint}」`;
+  return `🎯 ${hint}`;
+}
 function showResult(extra){
   extra=extra||{};
   stopLoop();phase='idle';
@@ -875,16 +913,9 @@ function showResult(extra){
   $('resGameName').textContent=def.emoji+' '+def.title;
   $('resDaily').classList.toggle('hidden',!isDaily);
   $('resRecord').classList.toggle('hidden',!isRec);
-  // 小さな次の目標
-  let goal;
+  // 小さな次の目標 (ゲーム別)
   const newBest=Math.max(best,score);
-  if(isRec&&best>0)goal=`🎯 つぎは ${Math.ceil((score+50)/50)*50}てん を めざそう！`;
-  else if(isRec)goal=`🎯 つぎは ${Math.max(100,Math.ceil((score*1.2)/50)*50)}てん を めざそう！`;
-  else if(best-score<=80)goal=`😆 おしい！ベストまで あと${best-score}てん！`;
-  else if(last>=0&&score>last)goal=`📈 まえより +${score-last}てん アップ！`;
-  else if(!(c.perfect>0))goal='💡 PERFECT 1かいで 100てん＋コンボばいりつ！';
-  else goal=`🎯 ベストまで あと${best-score}てん！`;
-  $('resGoal').textContent=goal;
+  $('resGoal').textContent=goalText(curDef,score,best,isRec,c,maxCombo,last);
   // 統計
   const stats=$('resStats');stats.innerHTML='';
   const rows=[['⭐ PERFECT',c.perfect||0],['🌟 GREAT',c.great||0],['🙂 GOOD',c.good||0]];
