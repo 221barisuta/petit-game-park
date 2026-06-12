@@ -1,0 +1,8 @@
+name = "pgp-ranking"
+main = "worker.js"
+compatibility_date = "2026-05-01"
+
+# `npx wrangler kv namespace create RANK` の出力で id を差し替える
+[[kv_namespaces]]
+binding = "RANK"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"

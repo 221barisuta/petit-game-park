@@ -28,12 +28,16 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" type="image/png" href="icon-192.png">
 
-<!-- ============ ANALYTICS（差し込み口） ============
-     GA4 を使う場合: 下の2行のコメントを外して G-XXXXXXXXXX を自分の測定IDに。
-     Plausible の場合: <script defer data-domain="あなたのドメイン" src="https://plausible.io/js/script.js"></script>
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
-<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)};gtag('js',new Date());gtag('config','G-XXXXXXXXXX');</script>
--->
+<!-- ============ サイト設定（計測・ランキング） ============
+     ここだけ書き換えれば有効になる。未設定 (空文字) なら一切読み込まない。
+     analytics: {provider:'ga4', id:'G-XXXXXXXXXX'} または {provider:'plausible', id:'あなたのドメイン'}
+     rankingBase: ranking-worker をデプロイした URL (例 'https://pgp-ranking.xxx.workers.dev') -->
+<script>
+window.PGP_CONFIG={
+  analytics:{provider:'',id:''},
+  rankingBase:''
+};
+</script>
 
 <style>
 /* ============================================================
@@ -328,10 +332,43 @@ function track(ev,params){
     else if(window.plausible)window.plausible(ev,{props:params||{}});
   }catch(e){}
 }
-/* ランキングAPIフック (バックエンド接続時にここを実装。READMEを参照) */
+/* 計測: PGP_CONFIG.analytics が設定されている時だけタグを動的ロードする */
+function setupAnalytics(){
+  const c=(window.PGP_CONFIG||{}).analytics||{};
+  if(!c.provider||!c.id)return;
+  if(c.provider==='ga4'){
+    const s=document.createElement('script');s.async=true;
+    s.src='https://www.googletagmanager.com/gtag/js?id='+encodeURIComponent(c.id);
+    document.head.appendChild(s);
+    window.dataLayer=window.dataLayer||[];
+    window.gtag=function(){window.dataLayer.push(arguments)};
+    window.gtag('js',new Date());window.gtag('config',c.id);
+  }else if(c.provider==='plausible'){
+    const s=document.createElement('script');s.defer=true;
+    s.dataset.domain=c.id;s.src='https://plausible.io/js/script.js';
+    document.head.appendChild(s);
+  }
+}
+/* ランキングAPI: PGP_CONFIG.rankingBase 未設定なら no-op。
+   実装は同リポジトリの ranking-worker/ (Cloudflare Workers + KV) を参照 */
 window.PGP_RANKING={
-  async submitScore(gameId,score,opts){ /* 例: fetch('https://your-api/score',{method:'POST',...}) */ },
-  async fetchTop(gameId,opts){ return null; }
+  async submitScore(gameId,score,opts){
+    const base=(window.PGP_CONFIG||{}).rankingBase;
+    if(!base||!(score>0))return null;
+    opts=opts||{};
+    const res=await fetch(base.replace(/\/$/,'')+'/score',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({gameId,score,mode:opts.daily?'daily':'free',date:opts.date||todaySeed()})
+    });
+    return res.ok?res.json():null;
+  },
+  async fetchTop(gameId,opts){
+    const base=(window.PGP_CONFIG||{}).rankingBase;
+    if(!base)return null;
+    opts=opts||{};
+    const res=await fetch(`${base.replace(/\/$/,'')}/top?game=${encodeURIComponent(gameId)}&date=${opts.date||todaySeed()}&mode=${opts.mode||'daily'}`);
+    return res.ok?res.json():null;
+  }
 };
 
 function rr(g,x,y,w,h,r){
@@ -1145,6 +1182,7 @@ function spawnTitleEmojis(){
   }
 }
 function boot(){
+  setupAnalytics();
   buildCards();
   spawnTitleEmojis();
   $('muteBtn').textContent=AudioKit.muted?'🔇':'🔊';

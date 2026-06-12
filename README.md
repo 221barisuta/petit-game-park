@@ -45,29 +45,24 @@
 （シェア機能のフォールバックURLは `shareUrl()` 内にもあります）
 
 ### 2. GA4 / Plausible（計測）
-`index.html` の `<!-- ANALYTICS（差し込み口） -->` ブロックのコメントを外し、`G-XXXXXXXXXX` を自分の測定IDに。
+`index.html` 冒頭の `PGP_CONFIG.analytics` に設定するだけ。**未設定（空）なら計測タグは一切読み込まれません。**
+
+```js
+window.PGP_CONFIG = {
+  analytics: {provider: 'ga4', id: 'G-XXXXXXXXXX'},   // または {provider:'plausible', id:'あなたのドメイン'}
+  ...
+};
+```
 イベントは `track()` ラッパー経由で送信済み: `game_start` / `game_end` / `howto_shown` / `fever` / `share_click`
 （game・score・daily・record などのパラメータ付き。ゲーム別プレイ数やhowto離脱が見られます）
 
-### 3. オンラインランキング（フックのみ実装済み）
-`index.html` の `window.PGP_RANKING` がフック。現状は何もしない実装です。
+### 3. オンラインランキング（実装済み・URLを入れるだけ）
+バックエンドは同リポジトリの [`ranking-worker/`](ranking-worker/)（Cloudflare Workers + KV、
+`POST /score` と `GET /top` の2本）。デプロイ手順は [ranking-worker/README.md](ranking-worker/README.md)（3コマンド・5分）。
 
-```js
-window.PGP_RANKING = {
-  // 結果画面表示時に毎回呼ばれる
-  async submitScore(gameId, score, {daily, seed, date}) {
-    await fetch('https://your-api.example.com/score', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({gameId, score, daily, date})
-    });
-  },
-  async fetchTop(gameId, opts) { /* ランキング取得 */ }
-};
-```
-
-バックエンド候補: **Cloudflare Workers + KV**（dateキーで日替わりランキング）/ **Supabase**（scoresテーブル＋RLS）。
-デイリーは `date`（YYYYMMDD数値）と `daily:true` が渡るので、日別・累計の両方を集計できます。
+デプロイしたら `PGP_CONFIG.rankingBase` にURLを入れるだけで送信が始まります。
+未設定なら何も送りません。デイリーチャレンジの日付seedとキーが連動しており、
+「同じ問題を解いた人同士」のランキングになります（ぽちっとミニゲームパークと共用可）。
 
 ### 4. デイリーチャレンジの仕組み
 `todaySeed()`（YYYYMMDD）を `mulberry32` に渡してゲームへ `ctx.rng` として注入。
