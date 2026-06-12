@@ -211,6 +211,13 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 .srow{display:flex;justify-content:space-between;font-size:3.7cqw;font-weight:800;color:#564b73}
 .srow b{color:#39304f}
 #resBest{font-size:3.4cqw;font-weight:800;color:#fff;opacity:.9}
+#resRank{width:76cqw;background:rgba(43,32,80,.82);border-radius:5cqw;padding:2.4cqw 5cqw;
+  display:flex;flex-direction:column;gap:.8cqw}
+#resRank.hidden{display:none}
+#resRank .rttl{font-size:3.8cqw;font-weight:800;color:#ffd23f;text-align:center;margin-bottom:.6cqw}
+#resRank .rrow{display:flex;justify-content:space-between;font-size:3.6cqw;font-weight:800;color:#fff}
+#resRank .rrow.you{color:#7cf29c}
+#resRank .rrow .rn{opacity:.75;min-width:9cqw}
 #resUnlock{font-size:3.8cqw;font-weight:800;color:#7a5200;background:linear-gradient(180deg,#fff7d6,#ffe9a8);
   border:.6cqw solid #c98f00;border-radius:99px;padding:1.2cqw 4.6cqw;animation:recBounce .8s ease infinite}
 #resUnlock.hidden{display:none}
@@ -278,6 +285,7 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
     <div id="resRecord" class="hidden">🎉 しんきろく！ 🎉</div>
     <div id="resGoal"></div>
     <div id="resStats"></div>
+    <div id="resRank" class="hidden"></div>
     <div id="resUnlock" class="hidden"></div>
     <button id="btnRetryBig">▶ もういちど</button>
     <div id="resRow">
@@ -779,6 +787,9 @@ function startLoop(){
     if(phase==='play'){
       elapsed+=dt;
       feverT=Math.max(0,feverT-dt);
+      if(feverT>0&&Math.random()<0.35) // フィーバー中: 画面下から星が噴き上がる
+        coreParts.add({x:rand(10,W-10),y:H+12,vx:rand(-25,25),vy:-rand(170,300),
+          shape:'star',col:`hsl(${randi(0,360)},90%,65%)`,life:rand(.7,1.2),r:rand(4,8),vr:rand(-4,4)});
       game.update(dt);
       if(curDef.duration&&elapsed>=curDef.duration)timeUp();
     }
@@ -804,6 +815,11 @@ function drawCoreOverlay(g){
   if(feverT>0){
     const hue=(performance.now()/5)%360;
     g.save();
+    // 背景全体がうっすら虹色に脈動
+    g.globalAlpha=0.08+0.04*Math.sin(performance.now()/170);
+    g.fillStyle=`hsl(${hue},90%,60%)`;
+    g.fillRect(0,0,W,H);
+    g.globalAlpha=1;
     g.lineWidth=20;g.strokeStyle=`hsla(${hue},95%,70%,.3)`;
     rr(g,8,8,W-16,H-16,26);g.stroke();
     g.lineWidth=8;g.strokeStyle=`hsla(${hue},95%,62%,.9)`;
@@ -985,11 +1001,37 @@ function showResult(extra){
   else if(score>0)AudioKit.good();
   show('scr-result');
   game=null;
-  try{
-    const p=window.PGP_RANKING.submitScore(def.id,score,{daily:isDaily,seed,date:todaySeed()});
-    if(p&&p.catch)p.catch(()=>{});
-  }catch(e){}
+  // ランキング送信 → デイリーなら「きょうのトップ5」を表示 (rankingBase未設定ならno-op)
+  $('resRank').classList.add('hidden');
+  (async()=>{
+    try{
+      const sub=await window.PGP_RANKING.submitScore(def.id,score,{daily:isDaily,seed,date:todaySeed()});
+      if(!isDaily)return;
+      const top=await window.PGP_RANKING.fetchTop(def.id,{mode:'daily'});
+      renderRank(top,sub,score);
+    }catch(e){}
+  })();
   track('game_end',{game:def.id,score,daily:isDaily?1:0,record:isRec?1:0});
+}
+/* きょうのランキング表示 (デイリー結果画面)。エントリが無ければ何も出さない */
+function renderRank(top,sub,myScore){
+  if(!top||!top.ok||!Array.isArray(top.entries)||top.entries.length===0)return;
+  const box=$('resRank');box.innerHTML='';
+  const ttl=document.createElement('div');ttl.className='rttl';
+  ttl.textContent='🏆 きょうのランキング'+(sub&&sub.rank?`　あなたは ${sub.rank}い！`:'');
+  box.appendChild(ttl);
+  let marked=false;
+  top.entries.slice(0,5).forEach((e,i)=>{
+    const row=document.createElement('div');row.className='rrow';
+    const isMe=!marked&&sub&&sub.rank===i+1&&e.score===myScore;
+    if(isMe){row.classList.add('you');marked=true}
+    const a=document.createElement('span');a.className='rn';
+    a.textContent=(i+1)+'い';
+    const b=document.createElement('span');
+    b.textContent=(e.name?e.name+'　':'')+(isMe?'← あなた ':'')+e.score+'てん';
+    row.appendChild(a);row.appendChild(b);box.appendChild(row);
+  });
+  box.classList.remove('hidden');
 }
 function confetti(){
   const stage=$('stage');
@@ -1212,8 +1254,9 @@ function boot(){
     $('btnSndOn').addEventListener('click',()=>done(true));
     $('btnSndOff').addEventListener('click',()=>done(false));
   }
-  // PWA service worker
-  if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)){
+  // PWA service worker (localhostでは登録しない: 開発中のキャッシュ事故防止)
+  if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)
+     &&!['localhost','127.0.0.1'].includes(location.hostname)){
     navigator.serviceWorker.register('sw.js').catch(()=>{});
   }
   window.__PGP={
@@ -1657,7 +1700,7 @@ registerGame({
         g.fillStyle=skin.noren;
         for(let i=0;i<7;i++){rr(g,i*62-4,64,56,26,8);g.fill()}
         // おだいボード (常時・大きく)
-        const bw=330,bx=(W-bw)/2,by=100;
+        const bw=330,bx=(W-bw)/2,by=152; // コアのコンボ/FEVER表示帯(y96-150)を避ける
         const flash=odaiT<=3&&bannerT<=0&&Math.sin(performance.now()/110)>0;
         g.fillStyle='rgba(0,0,0,.12)';rr(g,bx+4,by+6,bw,100,16);g.fill();
         g.fillStyle=flash?'#c9924f':'#a9744f';rr(g,bx,by,bw,100,16);g.fill();
