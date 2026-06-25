@@ -127,6 +127,8 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 .gcard.daily .nm{font-size:4.1cqw}
 .gcard .ds{font-size:3.3cqw;font-weight:700;color:#7a7090}
 .gcard .bs{font-size:3.1cqw;font-weight:800;color:#ff7a00;background:#fff3e0;border-radius:99px;padding:.5cqw 2.6cqw;align-self:flex-start}
+.gcard .vs{font-size:3.1cqw;font-weight:800;color:#fff;background:linear-gradient(180deg,#7ab0ff,#4d8cff);
+  border-radius:99px;padding:.5cqw 2.8cqw;align-self:flex-start;box-shadow:0 .5cqw 0 rgba(40,70,150,.4)}
 .gcard .qbtn{position:absolute;top:2cqw;right:2.4cqw;width:7.4cqw;height:7.4cqw;border-radius:50%;
   font-size:4cqw;font-weight:800;color:#9a8fb8;background:#f1edfa;border:.5cqw solid #d8cfe8}
 .gcard.daily{background:linear-gradient(135deg,#fff7d6,#ffe9a8);border-color:#c98f00;
@@ -700,7 +702,7 @@ function startFever(){
 
 function makeCtx(def,rng,plays){
   return {
-    W,H,audio:AudioKit,duration:def.duration,
+    W,H,audio:AudioKit,duration:def.duration,type:def.type,
     rng,seed,daily:isDaily,
     rookie:plays<3,
     skinLevel:skinLevelFor(def.id),
@@ -727,6 +729,9 @@ function openGame(def,opts){
   const plays=playsOf(def.id);
   game=def.create(makeCtx(def,mulberry32(seed),plays));
   elapsed=0;phase='idle';lastSec=-1;lastHudScore=null;
+  const isVersus=def.type==='versus';
+  $('hudScore').style.display=isVersus?'none':'';   // versusはスコア概念なし
+  $('hudBest').style.display=isVersus?'none':'';
   $('hudScore').textContent='0';
   $('hudBest').textContent='BEST '+best;
   $('hudBest').classList.remove('beat');
@@ -757,6 +762,10 @@ function showHowto(def){
 }
 function startCountdown(quick){
   $('howto').classList.add('hidden');
+  if(curDef&&curDef.type==='versus'){ // versusは制限時間なし: カウントダウン省略で即プレイ
+    phase='play';lastTs=performance.now();
+    return;
+  }
   phase='count';
   const ov=$('countdown'),num=$('cdNum');
   ov.classList.remove('hidden');
@@ -1197,7 +1206,9 @@ function buildCards(){
     c.innerHTML=`<span class="ic">${def.emoji}</span>
       <span class="tx"><span class="nm">${def.title}</span>
       <span class="ds">${def.desc}</span>
-      <span class="bs" id="best-${def.id}">ベスト 0</span></span>
+      ${def.type==='versus'
+        ? '<span class="vs">👥 2人で たいせん</span>'
+        : `<span class="bs" id="best-${def.id}">ベスト 0</span>`}</span>
       <span class="qbtn" data-q="${def.id}">?</span>`;
     c.addEventListener('click',e=>{
       AudioKit.ensure();AudioKit.pop();
@@ -1262,8 +1273,10 @@ function boot(){
   window.__PGP={
     get game(){return game},get phase(){return phase},get def(){return curDef},
     get score(){return score},get combo(){return combo},get feverT(){return feverT},
-    GAMES,openGame,show
+    GAMES,openGame,show,checkWin,runTicTacToeTests
   };
+  // ?selftest を付けて開くと checkWin の自動テストをコンソールに出す
+  if(/[?&]selftest/.test(location.search))runTicTacToeTests();
 }
 
 // __CORE_SLOT_END__
@@ -2104,6 +2117,155 @@ registerGame({
       destroy(){A.proxStop()},
     };
     return self;
+  }
+});
+
+/* ============================================================
+   ゲームD: まるばつ たいせん (versus / ターン制・スコア無し)
+   ------------------------------------------------------------
+   勝敗判定は純関数 checkWin(board) に分離 (自動テスト対象)。
+   board: 長さ9の配列。各要素は '○' | '×' | ''(空)。
+   将来CPU化する場合は players に {type:'cpu'} を足し、
+   place() の手番交代後に getCpuMove(board, mark) を呼ぶだけでよい。
+   ============================================================ */
+function checkWin(board){
+  const L=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  for(const line of L){
+    const [a,b,c]=line;
+    if(board[a]&&board[a]===board[b]&&board[a]===board[c])
+      return {winner:board[a],line};
+  }
+  return {winner:null,line:null};
+}
+/* checkWin 自動テスト: 8勝ち筋×○×, 引き分け, 未決着, 空盤 = 19ケース。
+   結果は {pass,fail,log} を返しコンソールに出力。?selftest で自動実行。 */
+function runTicTacToeTests(){
+  const lines=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  const mk=s=>s.split('').map(ch=>ch==='o'?'○':ch==='x'?'×':'');
+  let pass=0,fail=0;const log=[];
+  for(const ln of lines)for(const mark of ['○','×']){
+    const b=Array(9).fill('');ln.forEach(i=>b[i]=mark);
+    const r=checkWin(b);
+    const ok=r.winner===mark&&r.line&&r.line.join()===ln.join();
+    ok?pass++:fail++;if(!ok)log.push('win '+mark+' '+ln+' -> '+JSON.stringify(r));
+  }
+  {const b=mk('oxooxxxoo');const r=checkWin(b);const ok=r.winner===null&&b.every(c=>c);ok?pass++:fail++;if(!ok)log.push('draw -> '+JSON.stringify(r));}
+  {const b=mk('ox    o  ');const r=checkWin(b);const ok=r.winner===null;ok?pass++:fail++;if(!ok)log.push('undecided -> '+JSON.stringify(r));}
+  {const r=checkWin(Array(9).fill(''));const ok=r.winner===null;ok?pass++:fail++;if(!ok)log.push('empty -> winner not null');}
+  console.log('[checkWin tests] pass='+pass+' / fail='+fail, log.length?log:'');
+  return {pass,fail,log};
+}
+registerGame({
+  id:'ox', emoji:'⭕', title:'まるばつ たいせん',
+  desc:'2人で あそぶ ○×ゲーム',
+  color:'#ffd6a5', type:'versus',   // duration は付けない (タイマー無し)
+  howto:[
+    ['👆','マスを タップして ○×を おく'],
+    ['🏆','タテ・ヨコ・ナナメで 3つ そろえたら かち！'],
+    ['🔄','きまったら がめんを タップで もういちど'],
+  ],
+  create(ctx){
+    const A=ctx.audio;
+    const COL={'○':'#ff5c8a','×':'#2a9df0'};
+    // 盤面レイアウト (W=420,H=740 基準)
+    const CELL=112,BOARD=CELL*3,BX=(W-BOARD)/2,BY=212;
+    // プレイヤー定義 (Ver2.0で type:'cpu' を足すだけでCPU対応できる)
+    const players=[{mark:'○',type:'human'},{mark:'×',type:'human'}];
+    let board=Array(9).fill('');
+    let turn=0,result=null,winLine=null,t=0;
+    const parts=new Particles();
+
+    function center(idx){
+      return {x:BX+(idx%3)*CELL+CELL/2, y:BY+Math.floor(idx/3)*CELL+CELL/2};
+    }
+    function cellAt(x,y){
+      if(x<BX||x>BX+BOARD||y<BY||y>BY+BOARD)return -1;
+      const cx=Math.floor((x-BX)/CELL),cy=Math.floor((y-BY)/CELL);
+      if(cx<0||cx>2||cy<0||cy>2)return -1;
+      return cy*3+cx;
+    }
+    function reset(){
+      board=Array(9).fill('');turn=0;result=null;winLine=null;
+      A.pop();
+    }
+    function place(cell){           // 着手を1箇所に集約 (手番交代もここ)
+      if(result||cell<0||board[cell])return;
+      board[cell]=players[turn].mark;
+      A.pop();vib(8);
+      const r=checkWin(board);
+      if(r.winner){
+        result={winner:r.winner};winLine=r.line;
+        banner(r.winner+'の かち！');A.fever();vib([30,50,30,50,30]);
+        for(const idx of r.line){const c=center(idx);parts.burst(c.x,c.y,10,{shape:'star',col:COL[r.winner],grav:160});}
+        confetti();
+      }else if(board.every(c=>c)){
+        result={draw:true};
+        banner('ひきわけ！');A.ok();vib([20,40,20]);
+      }else{
+        turn=1-turn;
+        // 将来CPU: if(players[turn].type==='cpu') place(getCpuMove(board,players[turn].mark));
+      }
+    }
+    function drawMark(g,mark,c){
+      g.save();g.lineCap='round';g.lineJoin='round';g.lineWidth=14;g.strokeStyle=COL[mark];
+      const r=CELL*0.3;
+      if(mark==='○'){g.beginPath();g.arc(c.x,c.y,r,0,TAU);g.stroke();}
+      else{g.beginPath();g.moveTo(c.x-r,c.y-r);g.lineTo(c.x+r,c.y+r);g.moveTo(c.x+r,c.y-r);g.lineTo(c.x-r,c.y+r);g.stroke();}
+      g.restore();
+    }
+
+    return {
+      onDown(x,y){
+        if(result){reset();return}   // 決着後タップでリセット
+        place(cellAt(x,y));
+      },
+      update(dt){t+=dt;parts.update(dt);},
+      draw(g){
+        g.fillStyle='#2b2550';g.fillRect(0,0,W,H);
+        outlinedText(g,'まるばつ たいせん',W/2,92,25,'#fff','#3a2a4a',7);
+        // 手番 / 結果 (大きく)
+        if(!result){
+          const m=players[turn].mark;
+          outlinedText(g,m+'の ばん',W/2,152,30,COL[m],'#fff',7);
+        }else if(result.draw){
+          outlinedText(g,'ひきわけ！',W/2,152,30,'#ffd23f','#5a3a10',7);
+        }else{
+          outlinedText(g,result.winner+'の かち！',W/2,152,32,COL[result.winner],'#fff',8);
+        }
+        // 盤パネル
+        g.save();g.fillStyle='#fffdf6';rr(g,BX-14,BY-14,BOARD+28,BOARD+28,22);g.fill();g.restore();
+        // グリッド線
+        g.save();g.strokeStyle='#3a2d56';g.lineWidth=6;g.lineCap='round';
+        for(let i=1;i<3;i++){
+          g.beginPath();g.moveTo(BX+i*CELL,BY+10);g.lineTo(BX+i*CELL,BY+BOARD-10);g.stroke();
+          g.beginPath();g.moveTo(BX+10,BY+i*CELL);g.lineTo(BX+BOARD-10,BY+i*CELL);g.stroke();
+        }
+        g.restore();
+        // マーク
+        for(let i=0;i<9;i++)if(board[i])drawMark(g,board[i],center(i));
+        // 勝ち筋ハイライト
+        if(winLine){
+          const a=center(winLine[0]),b=center(winLine[2]);
+          g.save();g.globalAlpha=0.5+0.25*Math.sin(t*6);
+          g.strokeStyle='#ffd23f';g.lineWidth=16;g.lineCap='round';
+          g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();g.restore();
+        }
+        parts.draw(g);
+        // フッター: 案内 / もういちど
+        if(result){
+          const cy=BY+BOARD+60;
+          g.save();g.fillStyle='#ff4d94';rr(g,W/2-98,cy-30,196,60,18);g.fill();g.restore();
+          outlinedText(g,'▶ もう いちど',W/2,cy,24,'#fff','#b92e6e',6);
+          outlinedText(g,'がめんを タップ',W/2,cy+50,15,'#cfc6e8','#2b2550',4);
+        }else{
+          outlinedText(g,'マスを タップして おこう',W/2,BY+BOARD+48,16,'#cfc6e8','#2b2550',4);
+        }
+      },
+      hudInfo(){
+        if(result)return result.draw?'ひきわけ':result.winner+'の かち';
+        return players[turn].mark+'の ばん';
+      },
+    };
   }
 });
 
