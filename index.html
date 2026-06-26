@@ -1273,10 +1273,10 @@ function boot(){
   window.__PGP={
     get game(){return game},get phase(){return phase},get def(){return curDef},
     get score(){return score},get combo(){return combo},get feverT(){return feverT},
-    GAMES,openGame,show,checkWin,runTicTacToeTests
+    GAMES,openGame,show,checkWin,runTicTacToeTests,checkGomoku,runGomokuTests
   };
-  // ?selftest を付けて開くと checkWin の自動テストをコンソールに出す
-  if(/[?&]selftest/.test(location.search))runTicTacToeTests();
+  // ?selftest を付けて開くと純ロジックの自動テストをコンソールに出す
+  if(/[?&]selftest/.test(location.search)){runTicTacToeTests();runGomokuTests();}
 }
 
 // __CORE_SLOT_END__
@@ -2267,6 +2267,208 @@ registerGame({
       hudInfo(){
         if(result)return result.draw?'ひきわけ':result.winner+'の かち';
         return players[turn].mark+'の ばん';
+      },
+    };
+  }
+});
+
+/* ============================================================
+   ゲームE: ごもくならべ (versus / ターン制・スコア無し)
+   ------------------------------------------------------------
+   勝敗判定は純関数 checkGomoku(board,lastIndex) に分離 (自動テスト対象)。
+   board: 長さ225 (15x15) の配列。各要素は 'black' | 'white' | null(空)。
+          → ox の checkWin と空セル表現 (null) を揃える方針。
+   将来CPU化する場合は players に {type:'cpu'} を足し、
+   place() の手番交代後に getGomokuCpuMove(board,mark) を呼ぶだけでよい。
+   ============================================================ */
+const GO_N=15; // 連珠規格 15x15
+/* lastIndex から4方向に同色連続を数え、5以上で勝ち。
+   line は勝ち連の全長を「負方向端→正方向端」の順で返す
+   (右上がり[1,-1]だけは数値降順。描画は端点利用なので順序非依存)。副作用なし。 */
+function checkGomoku(board,lastIndex){
+  if(lastIndex==null||lastIndex<0||lastIndex>=GO_N*GO_N||!board[lastIndex])return {winner:null,line:null};
+  const color=board[lastIndex];
+  const x=lastIndex%GO_N, y=Math.floor(lastIndex/GO_N);
+  const dirs=[[1,0],[0,1],[1,1],[1,-1]]; // 横・縦・右下がり・左下がり
+  for(const [dx,dy] of dirs){
+    const run=[lastIndex];
+    for(let k=1;k<GO_N;k++){ // 正方向
+      const nx=x+dx*k,ny=y+dy*k;
+      if(nx<0||nx>=GO_N||ny<0||ny>=GO_N||board[ny*GO_N+nx]!==color)break;
+      run.push(ny*GO_N+nx);
+    }
+    for(let k=1;k<GO_N;k++){ // 逆方向 (先頭へ積む = 負方向端から順)
+      const nx=x-dx*k,ny=y-dy*k;
+      if(nx<0||nx>=GO_N||ny<0||ny>=GO_N||board[ny*GO_N+nx]!==color)break;
+      run.unshift(ny*GO_N+nx);
+    }
+    if(run.length>=5)return {winner:color,line:run.slice()}; // コピー返し: 呼び出し側のmutationが波及しない
+  }
+  return {winner:null,line:null};
+}
+/* checkGomoku 自動テスト: 横/縦/両斜めの5連, 6連(長連), 端・角の誤検出なし, 未決着, コピー返し。 */
+function runGomokuTests(){
+  const N=GO_N, idx=(x,y)=>y*N+x, blank=()=>Array(N*N).fill(null);
+  const fill=(cells,color)=>{const b=blank();for(const i of cells)b[i]=color;return b;};
+  let pass=0,fail=0;const log=[];
+  const ck=(name,cond)=>{cond?pass++:fail++;if(!cond)log.push(name);};
+  // 横5連 (黒)
+  {const cells=[0,1,2,3,4].map(x=>idx(x,7));const b=fill(cells,'black');const r=checkGomoku(b,idx(2,7));
+   ck('h5',r.winner==='black'&&r.line.length===5&&r.line.join()===cells.join());}
+  // 縦5連 (白)
+  {const cells=[3,4,5,6,7].map(y=>idx(5,y));const b=fill(cells,'white');const r=checkGomoku(b,idx(5,5));
+   ck('v5',r.winner==='white'&&r.line.join()===cells.join());}
+  // 右下がり斜め5連
+  {const cells=[0,1,2,3,4].map(k=>idx(2+k,2+k));const b=fill(cells,'black');const r=checkGomoku(b,idx(4,4));
+   ck('d5',r.winner==='black'&&r.line.length===5);}
+  // 左下がり斜め5連
+  {const cells=[0,1,2,3,4].map(k=>idx(10-k,2+k));const b=fill(cells,'white');const r=checkGomoku(b,idx(8,4));
+   ck('ad5',r.winner==='white'&&r.line.length===5);}
+  // 6連(長連)も勝ち & 全長を返す
+  {const cells=[0,1,2,3,4,5].map(x=>idx(x,0));const b=fill(cells,'black');const r=checkGomoku(b,idx(3,0));
+   ck('long6',r.winner==='black'&&r.line.length===6);}
+  // 角での誤検出なし: 端で折り返さない (右端3 + 次行左端2 が繋がらない)
+  {const cells=[idx(13,0),idx(14,0),idx(0,1),idx(1,1),idx(2,1)];const b=fill(cells,'black');
+   const r=checkGomoku(b,idx(14,0));ck('wrap',r.winner===null);}
+  // 4連は未決着
+  {const cells=[0,1,2,3].map(x=>idx(x,5));const b=fill(cells,'black');const r=checkGomoku(b,idx(3,5));
+   ck('four',r.winner===null);}
+  // 異色が混ざると途切れる
+  {const b=blank();[0,1,2].forEach(x=>b[idx(x,9)]='black');b[idx(3,9)]='white';[4,5].forEach(x=>b[idx(x,9)]='black');
+   const r=checkGomoku(b,idx(2,9));ck('mixed',r.winner===null);}
+  // 空盤・空セル指定
+  {ck('empty',checkGomoku(blank(),idx(7,7)).winner===null);}
+  // コピー返し: 返り値lineを破壊しても再判定が壊れない
+  {const cells=[0,1,2,3,4].map(x=>idx(x,1));const b=fill(cells,'black');const r=checkGomoku(b,idx(0,1));
+   r.line.push(999);const r2=checkGomoku(b,idx(0,1));ck('slice-copy',r2.line.length===5);}
+  console.log('[checkGomoku tests] pass='+pass+' / fail='+fail, log.length?log:'');
+  return {pass,fail,log};
+}
+registerGame({
+  id:'gomoku', emoji:'⚫', title:'ごもくならべ',
+  desc:'2人で あそぶ 五目ならべ',
+  color:'#cdb892', type:'versus',   // duration は付けない (タイマー無し)
+  howto:[
+    ['👆','こうてんを タップして いしを おく'],
+    ['🏆','タテ・ヨコ・ナナメに 5つ ならべたら かち！'],
+    ['🔄','きまったら がめんを タップで もういちど'],
+  ],
+  create(ctx){
+    const A=ctx.audio;
+    const N=GO_N;
+    const STONE={black:'●',white:'○'};        // HUD/結果表示用
+    // 盤レイアウト: 14ギャップ。420幅に収める (W=420,H=740 基準)
+    const CELL=25, SPAN=CELL*(N-1), BX=Math.round((W-SPAN)/2), BY=210;
+    const HIT=CELL*0.5; // タップ許容半径 (最寄り交点スナップ)
+    // プレイヤー定義 (将来 type:'cpu' を足すだけでCPU対応できる)
+    const players=[{mark:'black',type:'human'},{mark:'white',type:'human'}];
+    let board=Array(N*N).fill(null); // 空セルは null 基準
+    let turn=0,result=null,winLine=null,last=-1,t=0;
+    const parts=new Particles();
+
+    function center(idx){
+      return {x:BX+(idx%N)*CELL, y:BY+Math.floor(idx/N)*CELL};
+    }
+    function cellAt(x,y){ // 最寄り交点へスナップ。許容外/盤外は -1
+      const cx=Math.round((x-BX)/CELL), cy=Math.round((y-BY)/CELL);
+      if(cx<0||cx>=N||cy<0||cy>=N)return -1;
+      const c={x:BX+cx*CELL,y:BY+cy*CELL};
+      if(Math.hypot(x-c.x,y-c.y)>HIT+4)return -1; // 密なので少し余裕を持たせる
+      return cy*N+cx;
+    }
+    function reset(){
+      board=Array(N*N).fill(null);turn=0;result=null;winLine=null;last=-1;
+      parts.list=[];t=0; // 勝利演出の粒子を新盤面に持ち越さない (pochittoレビュー反映)
+      A.pop();
+    }
+    function place(cell){            // 着手を1箇所に集約 (手番交代もここ)
+      if(result||cell<0||cell>=N*N||board[cell])return; // cell>=N*N: 将来CPUの不正indexで配列を拡張させない
+      board[cell]=players[turn].mark;last=cell;
+      A.pop();vib(8);
+      const r=checkGomoku(board,cell);
+      if(r.winner){
+        result={winner:r.winner};winLine=r.line;
+        banner((r.winner==='black'?'●':'○')+'の かち！');A.fever();vib([30,50,30,50,30]);
+        for(const idx of r.line){const c=center(idx);parts.burst(c.x,c.y,8,{shape:'star',col:'#ffd23f',grav:160});}
+        confetti();
+      }else if(board.every(c=>c)){
+        result={draw:true};
+        banner('ひきわけ！');A.ok();vib([20,40,20]);
+      }else{
+        turn=1-turn;
+        // 将来CPU: if(players[turn].type==='cpu') place(getGomokuCpuMove(board,players[turn].mark));
+      }
+    }
+    function drawStone(g,mark,c,r){
+      g.save();
+      g.beginPath();g.arc(c.x,c.y,r,0,TAU);
+      if(mark==='black'){g.fillStyle='#2b2440';g.fill();}
+      else{g.fillStyle='#fbf8ef';g.fill();g.lineWidth=2;g.strokeStyle='#b7ad93';g.stroke();}
+      g.restore();
+    }
+
+    return {
+      onDown(x,y){
+        if(result){reset();return}   // 決着後タップでリセット
+        place(cellAt(x,y));
+      },
+      update(dt){t+=dt;parts.update(dt);},
+      draw(g){
+        g.fillStyle='#2b2550';g.fillRect(0,0,W,H);
+        outlinedText(g,'ごもくならべ',W/2,92,25,'#fff','#3a2a4a',7);
+        // 手番 / 結果
+        if(!result){
+          const m=players[turn].mark;
+          outlinedText(g,(m==='black'?'●':'○')+'の ばん',W/2,150,28,m==='black'?'#1c1630':'#fff','#cdb892',7);
+        }else if(result.draw){
+          outlinedText(g,'ひきわけ！',W/2,150,30,'#ffd23f','#5a3a10',7);
+        }else{
+          outlinedText(g,(result.winner==='black'?'●':'○')+'の かち！',W/2,150,32,'#ffd23f','#5a3a10',8);
+        }
+        // 盤パネル (碁盤色)
+        const pad=18;
+        g.save();g.fillStyle='#e6cf9c';rr(g,BX-pad,BY-pad,SPAN+pad*2,SPAN+pad*2,16);g.fill();g.restore();
+        // 碁盤目グリッド
+        g.save();g.strokeStyle='#7a5a2a';g.lineWidth=1.4;
+        for(let i=0;i<N;i++){
+          g.beginPath();g.moveTo(BX+i*CELL,BY);g.lineTo(BX+i*CELL,BY+SPAN);g.stroke();
+          g.beginPath();g.moveTo(BX,BY+i*CELL);g.lineTo(BX+SPAN,BY+i*CELL);g.stroke();
+        }
+        // 星 (天元 + 隅の点)
+        g.fillStyle='#7a5a2a';
+        for(const [sx,sy] of [[3,3],[11,3],[3,11],[11,11],[7,7]]){
+          g.beginPath();g.arc(BX+sx*CELL,BY+sy*CELL,3,0,TAU);g.fill();
+        }
+        g.restore();
+        // 石
+        const sr=CELL*0.46;
+        for(let i=0;i<board.length;i++)if(board[i])drawStone(g,board[i],center(i),sr);
+        // 直前手マーカー (Should): 小さな赤点
+        if(last>=0&&!winLine){
+          const c=center(last);
+          g.save();g.fillStyle='#ff4d94';g.beginPath();g.arc(c.x,c.y,3.2,0,TAU);g.fill();g.restore();
+        }
+        // 勝ち筋ハイライト (連の端から端)
+        if(winLine&&winLine.length){
+          const a=center(winLine[0]),b=center(winLine[winLine.length-1]);
+          g.save();g.globalAlpha=0.45+0.3*Math.sin(t*6);
+          g.strokeStyle='#ff4d94';g.lineWidth=10;g.lineCap='round';
+          g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();g.restore();
+        }
+        parts.draw(g);
+        // フッター
+        if(result){
+          const cy=BY+SPAN+62;
+          g.save();g.fillStyle='#ff4d94';rr(g,W/2-98,cy-30,196,60,18);g.fill();g.restore();
+          outlinedText(g,'▶ もう いちど',W/2,cy,24,'#fff','#b92e6e',6);
+          outlinedText(g,'がめんを タップ',W/2,cy+50,15,'#cfc6e8','#2b2550',4);
+        }else{
+          outlinedText(g,'こうてんを タップして おこう',W/2,BY+SPAN+50,16,'#cfc6e8','#2b2550',4);
+        }
+      },
+      hudInfo(){
+        if(result)return result.draw?'ひきわけ':STONE[result.winner]+'の かち';
+        return STONE[players[turn].mark]+'の ばん';
       },
     };
   }
