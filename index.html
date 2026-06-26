@@ -2124,7 +2124,7 @@ registerGame({
    ゲームD: まるばつ たいせん (versus / ターン制・スコア無し)
    ------------------------------------------------------------
    勝敗判定は純関数 checkWin(board) に分離 (自動テスト対象)。
-   board: 長さ9の配列。各要素は '○' | '×' | ''(空)。
+   board: 長さ9の配列。各要素は '○' | '×' | null(空)。
    将来CPU化する場合は players に {type:'cpu'} を足し、
    place() の手番交代後に getCpuMove(board, mark) を呼ぶだけでよい。
    ============================================================ */
@@ -2133,7 +2133,7 @@ function checkWin(board){
   for(const line of L){
     const [a,b,c]=line;
     if(board[a]&&board[a]===board[b]&&board[a]===board[c])
-      return {winner:board[a],line};
+      return {winner:board[a],line:line.slice()}; // コピー返し: 呼び出し側のmutationが内部定数Lに波及しない
   }
   return {winner:null,line:null};
 }
@@ -2141,17 +2141,20 @@ function checkWin(board){
    結果は {pass,fail,log} を返しコンソールに出力。?selftest で自動実行。 */
 function runTicTacToeTests(){
   const lines=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
-  const mk=s=>s.split('').map(ch=>ch==='o'?'○':ch==='x'?'×':'');
+  const mk=s=>s.split('').map(ch=>ch==='o'?'○':ch==='x'?'×':null); // 空セルは null 基準
   let pass=0,fail=0;const log=[];
   for(const ln of lines)for(const mark of ['○','×']){
-    const b=Array(9).fill('');ln.forEach(i=>b[i]=mark);
+    const b=Array(9).fill(null);ln.forEach(i=>b[i]=mark);
     const r=checkWin(b);
     const ok=r.winner===mark&&r.line&&r.line.join()===ln.join();
     ok?pass++:fail++;if(!ok)log.push('win '+mark+' '+ln+' -> '+JSON.stringify(r));
   }
   {const b=mk('oxooxxxoo');const r=checkWin(b);const ok=r.winner===null&&b.every(c=>c);ok?pass++:fail++;if(!ok)log.push('draw -> '+JSON.stringify(r));}
   {const b=mk('ox    o  ');const r=checkWin(b);const ok=r.winner===null;ok?pass++:fail++;if(!ok)log.push('undecided -> '+JSON.stringify(r));}
-  {const r=checkWin(Array(9).fill(''));const ok=r.winner===null;ok?pass++:fail++;if(!ok)log.push('empty -> winner not null');}
+  {const r=checkWin(Array(9).fill(null));const ok=r.winner===null;ok?pass++:fail++;if(!ok)log.push('empty -> winner not null');}
+  // line.slice() コピー返し検証: 返り値を破壊しても再判定が壊れない
+  {const b=Array(9).fill(null);[0,1,2].forEach(i=>b[i]='○');const r=checkWin(b);r.line.push(99);const r2=checkWin(b);
+   const ok=r2.line.length===3&&r2.line.join()==='0,1,2';ok?pass++:fail++;if(!ok)log.push('slice-copy -> '+JSON.stringify(r2));}
   console.log('[checkWin tests] pass='+pass+' / fail='+fail, log.length?log:'');
   return {pass,fail,log};
 }
@@ -2171,7 +2174,7 @@ registerGame({
     const CELL=112,BOARD=CELL*3,BX=(W-BOARD)/2,BY=212;
     // プレイヤー定義 (Ver2.0で type:'cpu' を足すだけでCPU対応できる)
     const players=[{mark:'○',type:'human'},{mark:'×',type:'human'}];
-    let board=Array(9).fill('');
+    let board=Array(9).fill(null); // 空セルは null 基準
     let turn=0,result=null,winLine=null,t=0;
     const parts=new Particles();
 
@@ -2185,7 +2188,7 @@ registerGame({
       return cy*3+cx;
     }
     function reset(){
-      board=Array(9).fill('');turn=0;result=null;winLine=null;
+      board=Array(9).fill(null);turn=0;result=null;winLine=null;
       A.pop();
     }
     function place(cell){           // 着手を1箇所に集約 (手番交代もここ)
