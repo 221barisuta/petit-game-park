@@ -2283,9 +2283,10 @@ registerGame({
    ============================================================ */
 const GO_N=15; // 連珠規格 15x15
 /* lastIndex から4方向に同色連続を数え、5以上で勝ち。
-   line には勝ち連の座標 (5連以上ならその全長) を昇順で返す。副作用なし。 */
+   line は勝ち連の全長を「負方向端→正方向端」の順で返す
+   (右上がり[1,-1]だけは数値降順。描画は端点利用なので順序非依存)。副作用なし。 */
 function checkGomoku(board,lastIndex){
-  if(lastIndex==null||lastIndex<0||!board[lastIndex])return {winner:null,line:null};
+  if(lastIndex==null||lastIndex<0||lastIndex>=GO_N*GO_N||!board[lastIndex])return {winner:null,line:null};
   const color=board[lastIndex];
   const x=lastIndex%GO_N, y=Math.floor(lastIndex/GO_N);
   const dirs=[[1,0],[0,1],[1,1],[1,-1]]; // 横・縦・右下がり・左下がり
@@ -2296,7 +2297,7 @@ function checkGomoku(board,lastIndex){
       if(nx<0||nx>=GO_N||ny<0||ny>=GO_N||board[ny*GO_N+nx]!==color)break;
       run.push(ny*GO_N+nx);
     }
-    for(let k=1;k<GO_N;k++){ // 逆方向 (先頭へ積む = 昇順維持)
+    for(let k=1;k<GO_N;k++){ // 逆方向 (先頭へ積む = 負方向端から順)
       const nx=x-dx*k,ny=y-dy*k;
       if(nx<0||nx>=GO_N||ny<0||ny>=GO_N||board[ny*GO_N+nx]!==color)break;
       run.unshift(ny*GO_N+nx);
@@ -2381,7 +2382,7 @@ registerGame({
       A.pop();
     }
     function place(cell){            // 着手を1箇所に集約 (手番交代もここ)
-      if(result||cell<0||board[cell])return;
+      if(result||cell<0||cell>=N*N||board[cell])return; // cell>=N*N: 将来CPUの不正indexで配列を拡張させない
       board[cell]=players[turn].mark;last=cell;
       A.pop();vib(8);
       const r=checkGomoku(board,cell);
