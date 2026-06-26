@@ -114,6 +114,17 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 #scr-select{background:linear-gradient(170deg,#8ec5fc,#e0c3fc);justify-content:center;gap:2.8cqw;padding:5cqw 0}
 #scr-select h2{font-size:6.4cqw;font-weight:800;color:#fff;-webkit-text-stroke:1.2cqw #4a3d7a;paint-order:stroke fill;
   text-shadow:0 1cqw 0 rgba(74,61,122,.4)}
+#menuTabs{display:flex;gap:2.4cqw;width:86cqw;margin:0 auto}
+.mtab{flex:1;font-size:3.3cqw;font-weight:800;color:#6a5a9a;background:rgba(255,255,255,.55);
+  border:1cqw solid rgba(74,61,122,.35);border-radius:5cqw;padding:2.4cqw .5cqw;white-space:nowrap;
+  display:flex;align-items:center;justify-content:center;gap:1.2cqw;
+  box-shadow:0 1cqw 0 rgba(58,45,86,.2);transition:transform .12s}
+.mtab:active{transform:translateY(.5cqw) scale(.99)}
+.mtab .tcount{font-size:2.9cqw;font-weight:800;color:#fff;background:rgba(122,108,170,.7);
+  border-radius:99px;padding:.2cqw 1.8cqw;min-width:4.6cqw}
+.mtab.active{color:#fff;background:linear-gradient(180deg,#7c6cf0,#5a3dd8);border-color:#3a2d56;
+  box-shadow:0 1.2cqw 0 rgba(40,30,90,.5)}
+.mtab.active .tcount{background:rgba(255,255,255,.3)}
 #cardList{display:flex;flex-direction:column;gap:2.8cqw;width:100%;align-items:center}
 .gcard{position:relative;width:86cqw;background:#fff;border:1cqw solid #3a2d56;border-radius:6cqw;padding:3cqw 4cqw;
   display:flex;align-items:center;gap:3.6cqw;text-align:left;
@@ -253,6 +264,10 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 
   <section id="scr-select" class="screen">
     <h2>ゲームを えらぼう！</h2>
+    <div id="menuTabs">
+      <button class="mtab" data-tab="solo">🎯 ひとりであそぶ <span class="tcount" id="tcount-solo"></span></button>
+      <button class="mtab" data-tab="versus">⚔️ たいせん <span class="tcount" id="tcount-versus"></span></button>
+    </div>
     <div id="cardList"></div>
     <button class="text-btn" id="btnBackTitle">← タイトルへ</button>
   </section>
@@ -605,6 +620,12 @@ const easeOutBack=t=>{const c=1.70158;return 1+(c+1)*Math.pow(t-1,3)+c*Math.pow(
 
 const GAMES=[];
 function registerGame(def){GAMES.push(def)}
+// メニュー分類: versus=たいせん / それ以外=ひとり (新規ゲームも type で自動振り分け)
+const soloGames=()=>GAMES.filter(g=>g.type!=='versus');
+const versusGames=()=>GAMES.filter(g=>g.type==='versus');
+// デイリー抽選は「ひとり(非versus)」プールのみから選ぶ (versusはスコア競争にならないため除外)
+const dailyDef=()=>{const s=soloGames();return s[todaySeed()%s.length]};
+let menuTab=store.get('pgp2_menutab','solo')==='versus'?'versus':'solo'; // アクティブタブ (localStorage復元)
 
 /* ---- 段階判定テーブル (全ゲーム共通) ----
    success:true の判定だけがコンボ+スコア。失敗系は減点なし(コンボ解除のみ) */
@@ -1181,25 +1202,32 @@ function refreshBests(){
   }
   const d=$('best-daily');
   if(d){
-    const ds=todaySeed(),ddef=GAMES[ds%GAMES.length];
+    const ds=todaySeed(),ddef=dailyDef();
     d.textContent='きょうのベスト '+getInt(`pgp2_dbest_${ds}_${ddef.id}`,0);
   }
   $('titleRank').textContent='🏅 '+titleFor(getInt('pgp2_plays_total',0))+'（'+getInt('pgp2_plays_total',0)+'プレイ）';
 }
 function buildCards(){
   const list=$('cardList');list.innerHTML='';
-  // デイリーチャレンジカード
-  const ds=todaySeed(),ddef=GAMES[ds%GAMES.length];
-  const dc=document.createElement('button');
-  dc.className='gcard daily';
-  dc.innerHTML=`<span class="badge">📅 きょうのチャレンジ</span>
-    <span class="ic">${ddef.emoji}</span>
-    <span class="tx"><span class="nm">${todayLabel()}は「${ddef.title}」</span>
-    <span class="ds">きょうは みんな おなじもんだい！</span>
-    <span class="bs" id="best-daily">きょうのベスト 0</span></span>`;
-  dc.addEventListener('click',()=>{AudioKit.ensure();AudioKit.pop();openGame(ddef,{daily:true})});
-  list.appendChild(dc);
-  for(const def of GAMES){
+  const versus=menuTab==='versus';
+  // タブのアクティブ表示・ゲーム数バッジ
+  document.querySelectorAll('#menuTabs .mtab').forEach(b=>b.classList.toggle('active',b.dataset.tab===menuTab));
+  $('tcount-solo').textContent=soloGames().length;
+  $('tcount-versus').textContent=versusGames().length;
+  // デイリーチャレンジカード (ひとりタブのみ。抽選も soloGames から)
+  if(!versus){
+    const ddef=dailyDef();
+    const dc=document.createElement('button');
+    dc.className='gcard daily';
+    dc.innerHTML=`<span class="badge">📅 きょうのチャレンジ</span>
+      <span class="ic">${ddef.emoji}</span>
+      <span class="tx"><span class="nm">${todayLabel()}は「${ddef.title}」</span>
+      <span class="ds">きょうは みんな おなじもんだい！</span>
+      <span class="bs" id="best-daily">きょうのベスト 0</span></span>`;
+    dc.addEventListener('click',()=>{AudioKit.ensure();AudioKit.pop();openGame(ddef,{daily:true})});
+    list.appendChild(dc);
+  }
+  for(const def of (versus?versusGames():soloGames())){
     const c=document.createElement('button');
     c.className='gcard';
     c.style.setProperty('--c',def.color);
@@ -1241,6 +1269,13 @@ function boot(){
   $('muteBtn').textContent=AudioKit.muted?'🔇':'🔊';
   $('btnToSelect').addEventListener('click',()=>{AudioKit.ensure();AudioKit.pop();refreshBests();show('scr-select')});
   $('btnBackTitle').addEventListener('click',()=>{AudioKit.pop();refreshBests();show('scr-title')});
+  document.querySelectorAll('#menuTabs .mtab').forEach(b=>{
+    b.addEventListener('click',()=>{
+      AudioKit.ensure();AudioKit.pop();
+      menuTab=b.dataset.tab;store.set('pgp2_menutab',menuTab);
+      buildCards();
+    });
+  });
   $('btnQuit').addEventListener('click',()=>{AudioKit.pop();quitGame()});
   $('btnHowtoStart').addEventListener('click',()=>{AudioKit.pop();startCountdown(false)});
   $('btnRetryBig').addEventListener('click',()=>{AudioKit.pop();openGame(curDef,{daily:isDaily,retry:true})});
