@@ -35,7 +35,8 @@
 <script>
 window.PGP_CONFIG={
   analytics:{provider:'',id:''},
-  rankingBase:''
+  rankingBase:'',
+  partyHost:'' // 五目並べオンライン対戦のPartyKitデプロイURL(例 'petit-gomoku.USER.partykit.dev')。空ならオンラインは準備中
 };
 </script>
 
@@ -201,6 +202,41 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 @keyframes bannerPop{0%{transform:scale(.2) rotate(-8deg);opacity:0}25%{transform:scale(1.1) rotate(2deg);opacity:1}
   45%{transform:scale(1)}80%{transform:scale(1);opacity:1}100%{transform:scale(1.15);opacity:0}}
 
+/* ---- オンライン対戦 UI ---- */
+#onlineSetup{z-index:12}
+#onlineCard{width:84cqw;background:#fffdf6;border:1cqw solid #3a2d56;border-radius:7cqw;padding:5.5cqw 5cqw;
+  display:flex;flex-direction:column;align-items:center;gap:3cqw;
+  box-shadow:0 2cqw 0 rgba(0,0,0,.25);animation:popIn .38s cubic-bezier(.34,1.56,.64,1)}
+#onlineCard .ol-title{font-size:5.2cqw;font-weight:800;color:#39304f}
+#onlineCard .ol-field{display:flex;align-items:center;gap:2cqw;width:100%}
+#onlineCard .ol-lbl{font-size:3.4cqw;font-weight:800;color:#6a5f86;flex:none;width:18cqw}
+#onlineCard input{flex:1;min-width:0;font-family:inherit;font-size:4cqw;font-weight:700;color:#39304f;
+  background:#f1edfa;border:.6cqw solid #d8cfe8;border-radius:3cqw;padding:2.2cqw 3cqw}
+#onlineCard input::placeholder{color:#b3a9cc}
+#olCode{text-transform:uppercase;letter-spacing:.6cqw}
+#onlineCard .ol-icon{flex:none;width:11cqw;height:11cqw;border-radius:3cqw;font-size:5cqw;background:#f1edfa;border:.6cqw solid #d8cfe8}
+#onlineCard .ol-act{width:100%;font-size:4.4cqw;font-weight:800;color:#fff;border-radius:4cqw;padding:3.2cqw;
+  box-shadow:0 1.4cqw 0 rgba(0,0,0,.22)}
+#onlineCard .ol-act:active{transform:translateY(1cqw);box-shadow:0 .4cqw 0 rgba(0,0,0,.22)}
+#olCreate{background:linear-gradient(180deg,#54c878,#39b061)}
+#onlineCard .ol-field #olJoin{width:24cqw;flex:none;padding:2.6cqw 0;background:linear-gradient(180deg,#7ab0ff,#4d8cff)}
+#onlineCard .ol-or{font-size:3.2cqw;font-weight:800;color:#a99fc4}
+#onlineCard .ol-msg{font-size:3.2cqw;font-weight:700;color:#c0392b;min-height:4cqw;text-align:center;line-height:1.4}
+#onlineCard .ol-back{font-size:3.6cqw;font-weight:800;color:#6a5f86;background:none;padding:1cqw 3cqw}
+/* 対局中の情報バー (canvasの上に重ねる。✕ボタンを避けて左パディング) */
+#onlineBar{position:absolute;top:0;left:0;right:0;z-index:4;pointer-events:none;
+  padding:2.2cqw 3cqw 2cqw 13cqw;display:flex;flex-direction:column;gap:.5cqw;
+  background:linear-gradient(180deg,rgba(20,15,42,.82),rgba(20,15,42,0))}
+#onlineBar.hidden{display:none}
+#onlineBar .ol-line{display:flex;align-items:center;gap:2cqw;font-size:3.1cqw;font-weight:700;color:#e8e2ff}
+#onlineBar .ol-room b{font-size:3.6cqw;color:#ffd23f;letter-spacing:.5cqw}
+#onlineBar .ol-mini{pointer-events:auto;width:7.4cqw;height:7.4cqw;border-radius:2.2cqw;font-size:3.6cqw;
+  background:rgba(255,255,255,.14);color:#fff;border:.4cqw solid rgba(255,255,255,.25)}
+#onlineBar .ol-status{font-weight:800;color:#ffd23f}
+#onlineBar .ol-seatline{gap:3cqw;font-weight:800}
+#onlineBar #olBlack{color:#fff}#onlineBar #olWhite{color:#cfe0ff}#onlineBar #olSpec{color:#bcb3d6;font-weight:700}
+#onlineBar .me{text-decoration:underline;text-underline-offset:.6cqw}
+
 /* ---- サウンド確認ダイアログ ---- */
 #soundAsk{z-index:60}
 #sndCard{width:78cqw;background:#fffdf6;border:1cqw solid #3a2d56;border-radius:7cqw;padding:6cqw 5cqw;
@@ -298,6 +334,35 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
     </div>
     <div id="countdown" class="overlay hidden"><span id="cdNum"></span></div>
     <div id="banner" class="overlay hidden"><span id="bannerText"></span></div>
+    <!-- オンライン対戦: 入室UI (部屋作成/参加/名前) -->
+    <div id="onlineSetup" class="overlay hidden">
+      <div id="onlineCard">
+        <div class="ol-title">🌐 オンライン たいせん</div>
+        <div class="ol-field"><span class="ol-lbl">なまえ</span>
+          <input id="olName" type="text" maxlength="12" autocomplete="off" spellcheck="false">
+          <button id="olDice" class="ol-icon" title="なまえを ふりなおす">🎲</button>
+        </div>
+        <button id="olCreate" class="ol-act ol-create">🏠 へやを つくる</button>
+        <div class="ol-or">― または ―</div>
+        <div class="ol-field"><span class="ol-lbl">あいことば</span>
+          <input id="olCode" type="text" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ABC123">
+          <button id="olJoin" class="ol-act ol-join">はいる</button>
+        </div>
+        <div id="olSetupMsg" class="ol-msg"></div>
+        <button id="olBack" class="ol-back">← もどる</button>
+      </div>
+    </div>
+    <!-- オンライン対戦: 対局中の情報バー (部屋コード/接続状態/席名/観戦数) -->
+    <div id="onlineBar" class="hidden">
+      <div class="ol-line"><span class="ol-room">あいことば <b id="olRoomCode">—</b></span>
+        <button id="olCopy" class="ol-mini" title="コードを コピー">📋</button>
+        <button id="olCopyLink" class="ol-mini" title="リンクを コピー">🔗</button>
+      </div>
+      <div class="ol-line"><span id="olStatus" class="ol-status">せつぞくちゅう…</span></div>
+      <div class="ol-line ol-seatline">
+        <span id="olBlack">●—</span><span id="olWhite">○—</span><span id="olSpec">👀0</span>
+      </div>
+    </div>
   </section>
 
   <section id="scr-result" class="screen">
@@ -1315,10 +1380,15 @@ function boot(){
      &&!['localhost','127.0.0.1'].includes(location.hostname)){
     navigator.serviceWorker.register('sw.js').catch(()=>{});
   }
+  setupOnlineUI();
+  // ?room=CODE で開いたら五目並べのオンライン対戦へ自動参加
+  {const rp=new URLSearchParams(location.search).get('room');
+   if(rp&&GomokuNet.available()){const def=GAMES.find(g=>g.id==='gomoku');
+     if(def){pendingOnlineRoom=rp.toUpperCase();openGame(def,{});}}}
   window.__PGP={
     get game(){return game},get phase(){return phase},get def(){return curDef},
     get score(){return score},get combo(){return combo},get feverT(){return feverT},
-    GAMES,openGame,show,checkWin,runTicTacToeTests,checkGomoku,runGomokuTests,getGomokuHint,runGomokuHintTests,getGomokuCpuMove,runGomokuCpuTests
+    GAMES,openGame,show,checkWin,runTicTacToeTests,checkGomoku,runGomokuTests,getGomokuHint,runGomokuHintTests,getGomokuCpuMove,runGomokuCpuTests,GomokuNet
   };
   // ?selftest を付けて開くと純ロジックの自動テストをコンソールに出す
   if(/[?&]selftest/.test(location.search)){runTicTacToeTests();runGomokuTests();runGomokuHintTests();runGomokuCpuTests();}
@@ -2583,6 +2653,99 @@ function runGomokuCpuTests(){
   console.log('[getGomokuCpuMove tests] pass='+pass+' / fail='+fail, log.length?log:'');
   return {pass,fail,log};
 }
+/* ============================================================
+   GomokuNet: 五目並べ オンライン対戦のネットワーク層 (PartyKit/WebSocket)
+   - PGP_CONFIG.partyHost 未設定なら available()=false でグレースフル無効化
+   - サーバーが権威。クライアントは state を受信してミラー描画するだけ
+   - 席トークン/名前を localStorage 保存し再接続で同席復帰
+   ============================================================ */
+const GomokuNet=(()=>{
+  const NAME_KEY='pgp2_name';
+  const seatKey=code=>'pgp2_gomoku_seat_'+code;
+  const ADJ=['あかい','あおい','きいろい','みどりの','しろい','むらさきの','ちゃいろい','オレンジの','ピンクの','きんいろの'];
+  const ANI=['キツネ','クマ','ウサギ','ネコ','イヌ','パンダ','ペンギン','ライオン','トラ','ゾウ','カエル','フクロウ','リス','イルカ','コアラ','ハリネズミ'];
+  const ri=n=>Math.floor(Math.random()*n);
+  const randName=()=>ADJ[ri(ADJ.length)]+ANI[ri(ANI.length)];
+  function getName(){let n=store.get(NAME_KEY,'');if(!n){n=randName();store.set(NAME_KEY,n);}return n;}
+  function setName(n){const v=String(n||'').replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,12);store.set(NAME_KEY,v||randName());}
+  const state={ws:null,code:'',status:'idle',seat:null,game:null,error:'',onChange:null,_left:false,_retry:0};
+  const host=()=>String((window.PGP_CONFIG||{}).partyHost||'').trim();
+  const available=()=>!!host();
+  const emit=()=>{if(state.onChange)state.onChange();};
+  function genCode(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='';for(let i=0;i<6;i++)s+=c[ri(c.length)];return s;}
+  function connect(code){
+    disconnect();
+    state.code=code;state.status='connecting';state.seat=null;state.game=null;state.error='';state._left=false;emit();
+    const raw=host().replace(/\/$/,'');
+    // 明示プロトコルはそのまま / localhost・IP・ポート付き(=partykit dev)は ws / それ以外(本番)は wss
+    const base=/^wss?:\/\//.test(raw)?raw
+      :((/(localhost|127\.0\.0\.1|0\.0\.0\.0|^192\.168\.|:\d+$)/.test(raw)?'ws://':'wss://')+raw);
+    let ws;
+    try{ws=new WebSocket(`${base}/parties/main/${encodeURIComponent(code.toLowerCase())}`);}
+    catch(e){state.status='error';state.error='せつぞく できません';emit();return;}
+    state.ws=ws;
+    ws.onopen=()=>{ws.send(JSON.stringify({type:'hello',name:getName(),token:store.get(seatKey(code),'')||''}));};
+    ws.onmessage=ev=>{let m;try{m=JSON.parse(ev.data);}catch{return;}
+      if(m.type==='assigned'){state.seat=m.seat;if(m.token)store.set(seatKey(code),m.token);emit();}
+      else if(m.type==='state'){state.game=m;
+        state.status=m.result?'ended':((m.seats.black&&m.seats.white)?'playing':'waiting');emit();}
+      else if(m.type==='error'){state.error=m.msg||'';emit();}
+    };
+    ws.onclose=()=>{state.ws=null;if(state.status==='idle'||state._left)return;
+      state.status='disconnected';emit();
+      clearTimeout(state._retry);state._retry=setTimeout(()=>{if(state.code&&!state._left)connect(state.code);},1500);};
+    ws.onerror=()=>{if(state.status==='connecting'){state.status='error';state.error='つうしん エラー';emit();}};
+  }
+  function disconnect(){clearTimeout(state._retry);if(state.ws){try{state.ws.onclose=null;state.ws.close();}catch(e){}state.ws=null;}}
+  function leave(){state._left=true;disconnect();state.status='idle';state.code='';state.seat=null;state.game=null;emit();}
+  const send=o=>{if(state.ws&&state.ws.readyState===1)state.ws.send(JSON.stringify(o));};
+  return {state,available,host,getName,setName,randName,genCode,connect,disconnect,leave,seatKey,
+    move:i=>send({type:'move',index:i}),
+    rename:n=>{setName(n);send({type:'rename',name:getName()});},
+    rematch:(on=true)=>send({type:'rematch',on})};
+})();
+let pendingOnlineRoom=''; // ?room=CODE 自動参加用 (boot→gomoku create で消費)
+function roomLink(code){return location.origin+location.pathname+'?room='+encodeURIComponent(code);}
+function setRoomUrl(code){try{history.replaceState(null,'',code?roomLink(code):location.origin+location.pathname);}catch(e){}}
+function copyText(t){try{navigator.clipboard.writeText(t);}catch(e){}}
+function flashBtn(el,txt){const o=el.textContent;el.textContent=txt;setTimeout(()=>{el.textContent=o;},900);}
+/* オンライン情報バー(DOM)を現在のサーバー状態で更新 */
+function renderOnlineBar(){
+  const s=GomokuNet.state;if(s.status==='idle')return;
+  const g=s.game,me=s.seat;
+  $('olRoomCode').textContent=s.code||'—';
+  const setSeat=(el,mark,sym)=>{const o=g&&g.seats[mark];
+    $(el).textContent=sym+(o?o.name+(o.connected?'':'⚠'):'まち…');$(el).classList.toggle('me',me===mark);};
+  setSeat('olBlack','black','●');setSeat('olWhite','white','○');
+  $('olSpec').textContent='👀'+(g?g.spectators:0);
+  let st='せつぞくちゅう…';
+  if(s.status==='waiting')st=me==='spectator'?'たいきょくを まっています':'あいてを まっています';
+  else if(s.status==='playing')st=(g&&g.turn===me)?'あなたの ばん':(me==='spectator'?'かんせんちゅう':'あいての ばん');
+  else if(s.status==='ended'&&g&&g.result){st=g.result.draw?'ひきわけ':
+    (g.result.winner===me?'あなたの かち！':(me==='spectator'?(g.result.winner==='black'?'●の かち':'○の かち'):'あいての かち'));
+    if((me==='black'||me==='white')&&g.rematch&&g.rematch[me])st+=' / もう一局まち';}
+  else if(s.status==='disconnected')st='せつだん…さいせつぞくちゅう';
+  else if(s.status==='error')st=s.error||'エラー';
+  $('olStatus').textContent=st;
+}
+function hideOnlineUI(){$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');}
+/* boot から1回だけ呼ぶ: オンライン入室UIのDOMハンドラを束ねる */
+function setupOnlineUI(){
+  GomokuNet.state.onChange=renderOnlineBar;
+  const commitName=()=>{GomokuNet.setName($('olName').value);$('olName').value=GomokuNet.getName();};
+  const start=code=>{commitName();GomokuNet.connect(code);setRoomUrl(code);
+    $('onlineSetup').classList.add('hidden');$('onlineBar').classList.remove('hidden');renderOnlineBar();};
+  $('olDice').addEventListener('click',()=>{AudioKit.pop();$('olName').value=GomokuNet.randName();});
+  $('olName').addEventListener('change',commitName);
+  $('olCreate').addEventListener('click',()=>{AudioKit.ensure();AudioKit.pop();start(GomokuNet.genCode());});
+  $('olJoin').addEventListener('click',()=>{AudioKit.ensure();AudioKit.pop();
+    const code=($('olCode').value||'').trim().toUpperCase();
+    if(!/^[A-Z0-9]{4,6}$/.test(code)){$('olSetupMsg').textContent='あいことばを ただしく いれてね';return;}
+    start(code);});
+  $('olBack').addEventListener('click',()=>{AudioKit.pop();GomokuNet.leave();hideOnlineUI();if(game&&game.onlineBack)game.onlineBack();});
+  $('olCopy').addEventListener('click',()=>{AudioKit.pop();copyText(GomokuNet.state.code);flashBtn($('olCopy'),'✓');});
+  $('olCopyLink').addEventListener('click',()=>{AudioKit.pop();copyText(roomLink(GomokuNet.state.code));flashBtn($('olCopyLink'),'✓');});
+}
 registerGame({
   id:'gomoku', emoji:'⚫', title:'ごもくならべ',
   desc:'2人で あそぶ 五目ならべ',
@@ -2615,6 +2778,7 @@ registerGame({
     let board=Array(N*N).fill(null); // 空セルは null 基準
     let turn=0,result=null,winLine=null,last=-1,t=0;
     let history=[],hint=-1,hintT=0,undoLock=false,cpuTimer=0; // 履歴 / ヒント / 連打防止 / CPU思考ディレイ
+    let onlineSeenNo=-1,onlineFxDone=false; // オンライン: 対局番号の変化検出 / 結果演出を1回だけ
     const parts=new Particles();
 
     function applyCfg(){ // cfg → players
@@ -2705,10 +2869,11 @@ registerGame({
     // ── セットアップ画面: クリック領域を一元生成 (draw と onDown で共用) ──
     function buildSetup(){
       const b=[];const add=(x,y,w,h,label,kind,val,active)=>b.push({x,y,w,h,label,kind,val,active:!!active});
-      add(50,162,320,50,'👥 ふたりで たいせん','mode','pvp',cfg.mode==='pvp');
-      add(50,219,320,50,'🤖 CPUと たいせん','mode','pvc',cfg.mode==='pvc');
-      add(50,276,320,50,'🤖🤖 CPUどうし','mode','cvc',cfg.mode==='cvc');
-      let y=350;
+      add(50,156,320,48,'👥 ふたりで たいせん','mode','pvp',cfg.mode==='pvp');
+      add(50,208,320,48,'🤖 CPUと たいせん','mode','pvc',cfg.mode==='pvc');
+      add(50,260,320,48,'🤖🤖 CPUどうし','mode','cvc',cfg.mode==='cvc');
+      add(50,312,320,48,GomokuNet.available()?'🌐 オンライン たいせん':'🌐 オンライン (じゅんびちゅう)','online',0,false);
+      let y=368;
       if(cfg.mode==='pvc'){
         add(50,y+18,150,44,'あなた せんて','first',1,cfg.humanFirst);
         add(220,y+18,150,44,'あなた こうて','first',0,!cfg.humanFirst);y+=78;
@@ -2729,6 +2894,7 @@ registerGame({
         else if(it.kind==='levelL')cfg.levelL=it.val;
         else if(it.kind==='levelR')cfg.levelR=it.val;
         else if(it.kind==='hint'){hintOn=!hintOn;store.set('pgp2_gomoku_hint',hintOn?'1':'0');}
+        else if(it.kind==='online'){GomokuNet.available()?enterOnline():A.bad();}
         else if(it.kind==='start')startGame();
         return;
       }
@@ -2738,19 +2904,82 @@ registerGame({
       outlinedText(g,'ごもくならべ',W/2,86,28,'#fff','#3a2a4a',7);
       outlinedText(g,'あいてを えらぶ',W/2,132,19,'#cfc6e8','#2b2550',5);
       if(cfg.mode==='pvc'){
-        outlinedText(g,'てばん',W/2,346,15,'#cfc6e8','#2b2550',4);
-        outlinedText(g,'CPUの つよさ',W/2,424,15,'#cfc6e8','#2b2550',4);
+        outlinedText(g,'てばん',W/2,364,15,'#cfc6e8','#2b2550',4);
+        outlinedText(g,'CPUの つよさ',W/2,442,15,'#cfc6e8','#2b2550',4);
       }else if(cfg.mode==='cvc'){
-        outlinedText(g,'● くろCPU の つよさ',W/2,346,15,'#cfc6e8','#2b2550',4);
-        outlinedText(g,'○ しろCPU の つよさ',W/2,424,15,'#cfc6e8','#2b2550',4);
+        outlinedText(g,'● くろCPU の つよさ',W/2,364,15,'#cfc6e8','#2b2550',4);
+        outlinedText(g,'○ しろCPU の つよさ',W/2,442,15,'#cfc6e8','#2b2550',4);
       }
-      for(const it of buildSetup())
-        drawBtn(g,it,it.label,it.kind==='start'?'#39c06a':(it.active?'#ff7a00':'#4a4170'),false,it.kind==='start'?22:16);
+      for(const it of buildSetup()){
+        const col=it.kind==='start'?'#39c06a':it.kind==='online'?(GomokuNet.available()?'#4d8cff':'#6b6480')
+          :(it.active?'#ff7a00':'#4a4170');
+        drawBtn(g,it,it.label,col,false,it.kind==='start'?22:it.kind==='online'?17:16);
+      }
     }
+    // ── オンライン対戦 (GomokuNetのサーバー権威stateをミラーして描画。盤上はcanvas/情報はDOMバー) ──
+    function enterOnline(){
+      if(!GomokuNet.available())return;
+      screen='online';result=null;winLine=null;parts.list=[];hint=-1;hintT=0;onlineSeenNo=-1;onlineFxDone=false;
+      if(pendingOnlineRoom){const code=pendingOnlineRoom;pendingOnlineRoom='';   // ?room= 自動参加
+        GomokuNet.connect(code);setRoomUrl(code);$('onlineBar').classList.remove('hidden');renderOnlineBar();}
+      else{$('olName').value=GomokuNet.getName();$('olCode').value='';$('olSetupMsg').textContent='';
+        $('onlineSetup').classList.remove('hidden');}                            // 入室UI(DOM)を出す
+    }
+    function leaveOnline(){
+      GomokuNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');
+      setRoomUrl('');screen='setup';A.pop();
+    }
+    function fireResultFx(res){ // 勝敗演出 (place()と同等。1対局1回だけ)
+      if(res.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
+      else{banner((res.winner==='black'?'●':'○')+'の かち！');A.fever();vib([30,50,30,50,30]);
+        if(winLine)for(const i of winLine){const c=center(i);parts.burst(c.x,c.y,8,{shape:'star',col:'#ffd23f',grav:160});}
+        confetti();}
+    }
+    function mirrorOnline(){ // サーバーstate→ローカル描画変数へ反映
+      const ng=GomokuNet.state.game;if(!ng)return;
+      if(onlineSeenNo!==ng.gameNo){onlineSeenNo=ng.gameNo;parts.list=[];hint=-1;hintT=0;onlineFxDone=false;} // 新対局(初回/もう一局)
+      for(let i=0;i<N*N;i++)board[i]=ng.board[i]||null;
+      turn=ng.turn==='black'?0:1;last=ng.last;
+      if(ng.result){winLine=ng.result.line||null;result=ng.result.draw?{draw:true}:{winner:ng.result.winner};
+        if(!onlineFxDone){onlineFxDone=true;fireResultFx(result);}}
+      else{result=null;winLine=null;}
+    }
+    function showHintOnline(){ // 自席・自手番のみローカル計算でヒント (純関数・無害)
+      const s=GomokuNet.state,ng=s.game;
+      if(!ng||ng.result||(s.seat!=='black'&&s.seat!=='white')||ng.turn!==s.seat){A.bad();return;}
+      const idx=getGomokuHint(board,s.seat);
+      if(idx>=0&&board[idx]===null){hint=idx;hintT=3.2;A.coin();}else A.bad();
+    }
+    function drawOnlineButtons(g){
+      const s=GomokuNet.state,ng=s.game;
+      const seated=(s.seat==='black'||s.seat==='white');
+      const myTurn=seated&&ng&&!ng.result&&ng.turn===s.seat;
+      if(ng&&ng.result){
+        drawBtn(g,btnL,'🔄 もう一局','#ff4d94',!seated);
+        drawBtn(g,btnR,'↩ まった','#7a6cc0',true);
+      }else{
+        drawBtn(g,btnL,'↩ まった','#7a6cc0',true);   // オンラインは待った無効
+        drawBtn(g,btnR,'💡 ヒント','#3a9bdc',!myTurn);
+      }
+      drawBtn(g,setBtn,'🚪 たいきょ','#5a5278',false,15);
+    }
+    function onOnlineTap(x,y){
+      if(hitBtn(setBtn,x,y)){leaveOnline();return;}
+      const s=GomokuNet.state,ng=s.game;if(!ng)return;
+      const seated=(s.seat==='black'||s.seat==='white');
+      if(ng.result){ if(hitBtn(btnL,x,y)){seated?(GomokuNet.rematch(true),A.pop()):A.bad();} return; }
+      if(hitBtn(btnR,x,y)){showHintOnline();return;}
+      if(hitBtn(btnL,x,y)){A.bad();return;}          // 待った無効
+      if(seated&&ng.turn===s.seat){const c=cellAt(x,y); // 盤タップ→自席自手番ならmove送信(サーバー検証)
+        if(c>=0&&ng.board[c]===null){GomokuNet.move(c);A.pop();}else if(c>=0)A.bad();}
+      else if(cellAt(x,y)>=0)A.bad();
+    }
+    if(pendingOnlineRoom)enterOnline(); // ?room= で開かれた場合は即オンラインへ
 
     return {
       onDown(x,y){
         if(screen==='setup'){onSetupTap(x,y);return}
+        if(screen==='online'){onOnlineTap(x,y);return}
         // 2段目ボタンは決着前後どちらでも有効
         if(hitBtn(togBtn,x,y)){
           if(cfg.mode==='cvc'){A.bad();return}
@@ -2769,6 +2998,7 @@ registerGame({
       },
       update(dt){
         t+=dt;parts.update(dt);
+        if(screen==='online'){mirrorOnline();if(hintT>0){hintT-=dt;if(hintT<=0){hintT=0;hint=-1;}}return;}
         if(screen!=='play')return;
         if(hintOn)hint=hintApplicable()?getGomokuHint(board,players[turn].mark):-1; // 常時ヒント
         else if(hintT>0){hintT-=dt;if(hintT<=0){hintT=0;hint=-1;}}                  // オンデマンドの減衰
@@ -2779,13 +3009,16 @@ registerGame({
       },
       draw(g){
         if(screen==='setup'){drawSetup(g);return}
+        const online=screen==='online';
         g.fillStyle='#2b2550';g.fillRect(0,0,W,H);
-        outlinedText(g,'ごもくならべ',W/2,84,24,'#fff','#3a2a4a',7);
+        if(!online)outlinedText(g,'ごもくならべ',W/2,84,24,'#fff','#3a2a4a',7); // オンラインは上部DOMバーが情報表示
         // 手番 / 結果
         if(!result){
-          const m=players[turn].mark;
-          outlinedText(g,(m==='black'?'●':'○')+'の ばん',W/2,140,27,m==='black'?'#1c1630':'#fff','#cdb892',7);
-          if(players[turn].type==='cpu')outlinedText(g,'🤖 かんがえちゅう…',W/2,172,15,'#ffd23f','#5a3a10',4);
+          if(!online){
+            const m=players[turn].mark;
+            outlinedText(g,(m==='black'?'●':'○')+'の ばん',W/2,140,27,m==='black'?'#1c1630':'#fff','#cdb892',7);
+            if(players[turn].type==='cpu')outlinedText(g,'🤖 かんがえちゅう…',W/2,172,15,'#ffd23f','#5a3a10',4);
+          }
         }else if(result.draw){
           outlinedText(g,'ひきわけ！',W/2,150,30,'#ffd23f','#5a3a10',7);
         }else{
@@ -2829,24 +3062,31 @@ registerGame({
           g.restore();
         }
         parts.draw(g);
-        // 1段目ボタン (プレイ時=[まった][ヒント] / 決着時=[もういちど][まった])
-        const hintDisabled=hintOn||cfg.mode==='cvc'||players[turn].type==='cpu'; // 常時ON/CPU手番では💡無効
-        if(result){
-          drawBtn(g,btnL,'▶ もう いちど','#ff4d94',false);
-          drawBtn(g,btnR,'↩ まった','#7a6cc0',!undoable());
-        }else{
-          drawBtn(g,btnL,'↩ まった','#7a6cc0',!undoable());
-          drawBtn(g,btnR,'💡 ヒント','#3a9bdc',hintDisabled);
+        if(online){ drawOnlineButtons(g); }
+        else{
+          // 1段目ボタン (プレイ時=[まった][ヒント] / 決着時=[もういちど][まった])
+          const hintDisabled=hintOn||cfg.mode==='cvc'||players[turn].type==='cpu'; // 常時ON/CPU手番では💡無効
+          if(result){
+            drawBtn(g,btnL,'▶ もう いちど','#ff4d94',false);
+            drawBtn(g,btnR,'↩ まった','#7a6cc0',!undoable());
+          }else{
+            drawBtn(g,btnL,'↩ まった','#7a6cc0',!undoable());
+            drawBtn(g,btnR,'💡 ヒント','#3a9bdc',hintDisabled);
+          }
+          // 2段目ボタン (ヒント常時トグル / せってい)
+          drawBtn(g,togBtn,'ヒント つねに '+(hintOn?'ON':'OFF'),hintOn?'#39c06a':'#5a5278',cfg.mode==='cvc',15);
+          drawBtn(g,setBtn,'⚙ せってい','#5a5278',false,15);
         }
-        // 2段目ボタン (ヒント常時トグル / せってい)
-        drawBtn(g,togBtn,'ヒント つねに '+(hintOn?'ON':'OFF'),hintOn?'#39c06a':'#5a5278',cfg.mode==='cvc',15);
-        drawBtn(g,setBtn,'⚙ せってい','#5a5278',false,15);
       },
       hudInfo(){
         if(screen==='setup')return 'モードを えらぶ';
+        if(screen==='online'){const st=GomokuNet.state.status;
+          return st==='playing'?'たいきょくちゅう':st==='waiting'?'あいて まち':st==='ended'?'けっちゃく':'オンライン';}
         if(result)return result.draw?'ひきわけ':STONE[result.winner]+'の かち';
         return STONE[players[turn].mark]+'の ばん'+(players[turn].type==='cpu'?' (CPU)':'');
       },
+      onlineBack(){screen='setup';setRoomUrl('');},      // 入室UIの「もどる」から
+      destroy(){GomokuNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');setRoomUrl('');}, // ✕退出時クリーンアップ
     };
   }
 });
