@@ -140,8 +140,12 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 .gcard .bs{font-size:3.1cqw;font-weight:800;color:#ff7a00;background:#fff3e0;border-radius:99px;padding:.5cqw 2.6cqw;align-self:flex-start}
 .gcard .vs{font-size:3.1cqw;font-weight:800;color:#fff;background:linear-gradient(180deg,#7ab0ff,#4d8cff);
   border-radius:99px;padding:.5cqw 2.8cqw;align-self:flex-start;box-shadow:0 .5cqw 0 rgba(40,70,150,.4)}
-.gcard .qbtn{position:absolute;top:2cqw;right:2.4cqw;width:7.4cqw;height:7.4cqw;border-radius:50%;
-  font-size:4cqw;font-weight:800;color:#9a8fb8;background:#f1edfa;border:.5cqw solid #d8cfe8}
+.gcard .qbtn{position:absolute;top:1.6cqw;right:2cqw;width:9.4cqw;height:9.4cqw;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:4.4cqw;font-weight:800;color:#9a8fb8;background:#f1edfa;border:.5cqw solid #d8cfe8;
+  box-shadow:0 .4cqw 0 rgba(58,45,86,.18)}
+.gcard .qbtn::after{content:'';position:absolute;inset:-3.2cqw} /* タップ領域を拡大(スマホ誤タップ対策) */
+.gcard .qbtn:active{transform:scale(.9)}
 .gcard.daily{background:linear-gradient(135deg,#fff7d6,#ffe9a8);border-color:#c98f00;
   box-shadow:0 1.5cqw 0 rgba(150,100,0,.5), 0 0 4cqw rgba(255,210,60,.55)}
 .gcard.daily .nm{color:#7a5200}
@@ -1238,9 +1242,15 @@ function buildCards(){
         ? '<span class="vs">👥 2人で たいせん</span>'
         : `<span class="bs" id="best-${def.id}">ベスト 0</span>`}</span>
       <span class="qbtn" data-q="${def.id}">?</span>`;
-    c.addEventListener('click',e=>{
+    // 「？」は専用ハンドラで howto を明示起動 (stopPropagation でカード遷移と分離)
+    const q=c.querySelector('.qbtn');
+    if(q)q.addEventListener('click',e=>{
+      e.stopPropagation();
       AudioKit.ensure();AudioKit.pop();
-      if(e.target.dataset&&e.target.dataset.q){openGame(def,{forceHowto:true});return}
+      openGame(def,{forceHowto:true});
+    });
+    c.addEventListener('click',()=>{
+      AudioKit.ensure();AudioKit.pop();
       openGame(def,{});
     });
     list.appendChild(c);
@@ -1308,10 +1318,10 @@ function boot(){
   window.__PGP={
     get game(){return game},get phase(){return phase},get def(){return curDef},
     get score(){return score},get combo(){return combo},get feverT(){return feverT},
-    GAMES,openGame,show,checkWin,runTicTacToeTests,checkGomoku,runGomokuTests
+    GAMES,openGame,show,checkWin,runTicTacToeTests,checkGomoku,runGomokuTests,getGomokuHint,runGomokuHintTests
   };
   // ?selftest を付けて開くと純ロジックの自動テストをコンソールに出す
-  if(/[?&]selftest/.test(location.search)){runTicTacToeTests();runGomokuTests();}
+  if(/[?&]selftest/.test(location.search)){runTicTacToeTests();runGomokuTests();runGomokuHintTests();}
 }
 
 // __CORE_SLOT_END__
@@ -2379,6 +2389,115 @@ function runGomokuTests(){
   console.log('[checkGomoku tests] pass='+pass+' / fail='+fail, log.length?log:'');
   return {pass,fail,log};
 }
+/* ============================================================
+   getGomokuHint(board, mark) -> index   (純関数・副作用なし)
+   ------------------------------------------------------------
+   現手番 mark の「良手」を1つ返す。優先度:
+   ① 自分が5を完成できる点
+   ② 相手が5を作る(四=あと1で5)のを止める点
+   ③ 自分の四を作れる点
+   ④ 相手の活三(両端開き三)を作らせない点
+   ⑤ 既存石の近傍で中央寄りの空き (フォールバック)
+   候補が無ければ -1。将来の getGomokuCpuMove(board,mark) のたたき台として
+   そのまま流用できる構造 (同じ評価関数を読みに使う)。
+   ============================================================ */
+// 空点 idx に mark を置いたと仮定し、dir方向の連長と開放端数を返す (idx自身は読まない=空点シミュレート可)
+function gomokuRunAt(board,idx,mark,dx,dy){
+  const N=GO_N, x0=idx%N, y0=Math.floor(idx/N);
+  let fwd=0, fx=x0+dx, fy=y0+dy;
+  while(fx>=0&&fx<N&&fy>=0&&fy<N&&board[fy*N+fx]===mark){fwd++;fx+=dx;fy+=dy;}
+  const fOpen=(fx>=0&&fx<N&&fy>=0&&fy<N&&board[fy*N+fx]===null);
+  let bwd=0, bx=x0-dx, by=y0-dy;
+  while(bx>=0&&bx<N&&by>=0&&by<N&&board[by*N+bx]===mark){bwd++;bx-=dx;by-=dy;}
+  const bOpen=(bx>=0&&bx<N&&by>=0&&by<N&&board[by*N+bx]===null);
+  return {len:1+fwd+bwd, open:(fOpen?1:0)+(bOpen?1:0)};
+}
+const GO_DIRS=[[1,0],[0,1],[1,1],[1,-1]];
+// 空点cにmarkを置いた時の最大連長 (5以上で勝ち/勝ち阻止点)
+function gomokuMaxLen(board,c,mark){
+  let m=0;for(const [dx,dy] of GO_DIRS){const r=gomokuRunAt(board,c,mark,dx,dy);if(r.len>m)m=r.len;}return m;
+}
+// 空点cにmarkを置くと「四(あと1で5・開放端あり)」を作るか
+function gomokuMakesFour(board,c,mark){
+  for(const [dx,dy] of GO_DIRS){const r=gomokuRunAt(board,c,mark,dx,dy);if(r.len>=5)return true;if(r.len===4&&r.open>=1)return true;}return false;
+}
+// 盤上の mark の「活三(連長3・両端空き)」を探し、止める空点(開いた端の1つ)を返す。無ければ -1
+function gomokuBlockOpenThree(board,mark){
+  const N=GO_N;
+  for(let i=0;i<board.length;i++){
+    if(board[i]!==mark)continue;
+    const x=i%N,y=Math.floor(i/N);
+    for(const [dx,dy] of GO_DIRS){
+      const px=x-dx,py=y-dy;
+      if(px>=0&&px<N&&py>=0&&py<N&&board[py*N+px]===mark)continue; // 連の先頭のみ評価(重複除去)
+      let len=1,cx=x+dx,cy=y+dy;
+      while(cx>=0&&cx<N&&cy>=0&&cy<N&&board[cy*N+cx]===mark){len++;cx+=dx;cy+=dy;}
+      if(len!==3)continue;
+      const beforeOpen=(px>=0&&px<N&&py>=0&&py<N&&board[py*N+px]===null);
+      const afterOpen =(cx>=0&&cx<N&&cy>=0&&cy<N&&board[cy*N+cx]===null);
+      if(beforeOpen&&afterOpen)return cy*N+cx; // 活三 → 後方の開いた端で止める
+    }
+  }
+  return -1;
+}
+// 候補=既存石の周囲2マスの空点 (昇順・決定的)。空盤なら天元のみ
+function gomokuCandidates(board){
+  const N=GO_N, set=new Set();let any=false;
+  for(let i=0;i<board.length;i++){
+    if(!board[i])continue;any=true;
+    const x=i%N,y=Math.floor(i/N);
+    for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
+      const nx=x+dx,ny=y+dy;
+      if(nx<0||nx>=N||ny<0||ny>=N)continue;
+      const j=ny*N+nx;if(board[j]===null)set.add(j);
+    }
+  }
+  if(!any)return [Math.floor(N*N/2)]; // 天元 (7,7)
+  return [...set].sort((a,b)=>a-b);
+}
+function getGomokuHint(board,mark){
+  const opp=mark==='black'?'white':'black';
+  const cands=gomokuCandidates(board);
+  if(!cands.length)return -1;
+  for(const c of cands)if(gomokuMaxLen(board,c,mark)>=5)return c;   // ① 自分5
+  for(const c of cands)if(gomokuMaxLen(board,c,opp)>=5)return c;    // ② 相手5阻止
+  for(const c of cands)if(gomokuMakesFour(board,c,mark))return c;   // ③ 自分四
+  {const blk=gomokuBlockOpenThree(board,opp);if(blk>=0)return blk;} // ④ 相手活三阻止
+  // ⑤ フォールバック: 候補のうち中央(7,7)に最も近い空点
+  const N=GO_N;let best=cands[0],bd=1e9;
+  for(const c of cands){const x=c%N,y=Math.floor(c/N);const d=(x-7)*(x-7)+(y-7)*(y-7);if(d<bd){bd=d;best=c;}}
+  return best;
+}
+/* getGomokuHint 自動テスト: ①〜⑤の各優先度 + 空盤 + 終盤で例外なし。 */
+function runGomokuHintTests(){
+  const N=GO_N, idx=(x,y)=>y*N+x, blank=()=>Array(N*N).fill(null);
+  let pass=0,fail=0;const log=[];
+  const ck=(name,cond)=>{cond?pass++:fail++;if(!cond)log.push(name);};
+  // ① 自分が5を完成: 黒が横4連(2..5,行7) → 完成点は (1,7) か (6,7)
+  {const b=blank();[2,3,4,5].forEach(x=>b[idx(x,7)]='black');const h=getGomokuHint(b,'black');
+   ck('win5',h===idx(1,7)||h===idx(6,7));}
+  // ② 相手の5を阻止: 白が横4連 → 黒手番は白の完成点を返す
+  {const b=blank();[2,3,4,5].forEach(x=>b[idx(x,7)]='white');const h=getGomokuHint(b,'black');
+   ck('block5',h===idx(1,7)||h===idx(6,7));}
+  // ③ 自分の四作り: 黒が横3連(両端開き) → 黒は四になる端を返す (自分四 > 相手活三なし)
+  {const b=blank();[5,6,7].forEach(x=>b[idx(x,7)]='black');const h=getGomokuHint(b,'black');
+   const ok=h===idx(4,7)||h===idx(8,7);ck('makefour',ok&&gomokuMakesFour(b,h,'black'));}
+  // ④ 相手活三阻止: 白が横3連(両端開き)、黒は孤立1石 → 黒は白活三の開いた端で止める
+  {const b=blank();[5,6,7].forEach(x=>b[idx(x,7)]='white');
+   b[idx(0,0)]='black'; // 黒は孤立1石(四も活三も作れない)
+   const h=getGomokuHint(b,'black');
+   ck('blockthree',h===idx(4,7)||h===idx(8,7));}
+  // ⑤ フォールバック: 中央付近に黒1石のみ → 近傍の空点(例外なく>=0)
+  {const b=blank();b[idx(7,7)]='black';const h=getGomokuHint(b,'black');
+   ck('fallback',h>=0&&b[h]===null);}
+  // 空盤 → 天元
+  {ck('empty',getGomokuHint(blank(),'black')===idx(7,7));}
+  // 終盤(ほぼ埋まり)で例外なく空点を返す
+  {const b=blank();for(let i=0;i<b.length;i++)b[i]=(i%2?'black':'white');b[idx(7,7)]=null;
+   const h=getGomokuHint(b,'black');ck('endgame',h===idx(7,7));}
+  console.log('[getGomokuHint tests] pass='+pass+' / fail='+fail, log.length?log:'');
+  return {pass,fail,log};
+}
 registerGame({
   id:'gomoku', emoji:'⚫', title:'ごもくならべ',
   desc:'2人で あそぶ 五目ならべ',
@@ -2395,10 +2514,15 @@ registerGame({
     // 盤レイアウト: 14ギャップ。420幅に収める (W=420,H=740 基準)
     const CELL=25, SPAN=CELL*(N-1), BX=Math.round((W-SPAN)/2), BY=210;
     const HIT=CELL*0.5; // タップ許容半径 (最寄り交点スナップ)
+    // 盤下のボタン2枠 (プレイ時=[まった][ヒント] / 決着時=[もういちど][まった])
+    const FBY=BY+SPAN+22; // ボタン行 上端 (=582)
+    const btnL={x:59,y:FBY,w:146,h:46}, btnR={x:215,y:FBY,w:146,h:46};
+    const hitBtn=(b,x,y)=>x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h;
     // プレイヤー定義 (将来 type:'cpu' を足すだけでCPU対応できる)
     const players=[{mark:'black',type:'human'},{mark:'white',type:'human'}];
     let board=Array(N*N).fill(null); // 空セルは null 基準
     let turn=0,result=null,winLine=null,last=-1,t=0;
+    let history=[],canUndo=false,hint=-1,hintT=0; // 待った履歴 / 直前1手のみ戻せるフラグ / ヒント表示
     const parts=new Particles();
 
     function center(idx){
@@ -2413,12 +2537,30 @@ registerGame({
     }
     function reset(){
       board=Array(N*N).fill(null);turn=0;result=null;winLine=null;last=-1;
+      history=[];canUndo=false;hint=-1;hintT=0; // 履歴・ヒントもクリア
       parts.list=[];t=0; // 勝利演出の粒子を新盤面に持ち越さない (pochittoレビュー反映)
       A.pop();
+    }
+    function undo(){                 // 待った: 直前1手を取り消す (決着後の勝ち手も戻せる)
+      if(!canUndo||!history.length){A.bad();return} // 履歴空 / 連打(直前1手のみ)は無効
+      const idx=history.pop();
+      board[idx]=null;
+      result=null;winLine=null;parts.list=[]; // 決着解除 + 勝利演出クリア
+      turn=history.length%2;                    // 手番を戻す (黒=players[0]=偶数手番)
+      last=history.length?history[history.length-1]:-1;
+      canUndo=false;hint=-1;hintT=0;            // 連続待った防止
+      A.pop();vib(8);
+    }
+    function showHint(){             // ヒント: 良手を1つ点滅表示 (自動着手しない)
+      if(result)return;
+      const idx=getGomokuHint(board,players[turn].mark);
+      if(idx>=0&&board[idx]===null){hint=idx;hintT=3.2;A.coin();}
+      else A.bad();
     }
     function place(cell){            // 着手を1箇所に集約 (手番交代もここ)
       if(result||cell<0||cell>=N*N||board[cell])return; // cell>=N*N: 将来CPUの不正indexで配列を拡張させない
       board[cell]=players[turn].mark;last=cell;
+      history.push(cell);canUndo=true;hint=-1;hintT=0; // 履歴に積む / 着手で待った解禁・ヒント消去
       A.pop();vib(8);
       const r=checkGomoku(board,cell);
       if(r.winner){
@@ -2444,10 +2586,17 @@ registerGame({
 
     return {
       onDown(x,y){
-        if(result){reset();return}   // 決着後タップでリセット
-        place(cellAt(x,y));
+        if(!result){
+          if(hitBtn(btnL,x,y)){undo();return}      // まった
+          if(hitBtn(btnR,x,y)){showHint();return}  // ヒント
+          place(cellAt(x,y));
+        }else{
+          if(hitBtn(btnL,x,y)){reset();return}     // もう いちど
+          if(hitBtn(btnR,x,y)){undo();return}      // 勝ち手を待った (誤タップ救済)
+          reset();                                  // それ以外のタップでもリセット (従来挙動)
+        }
       },
-      update(dt){t+=dt;parts.update(dt);},
+      update(dt){t+=dt;parts.update(dt);if(hintT>0){hintT-=dt;if(hintT<=0){hintT=0;hint=-1;}}},
       draw(g){
         g.fillStyle='#2b2550';g.fillRect(0,0,W,H);
         outlinedText(g,'ごもくならべ',W/2,92,25,'#fff','#3a2a4a',7);
@@ -2490,15 +2639,29 @@ registerGame({
           g.strokeStyle='#ff4d94';g.lineWidth=10;g.lineCap='round';
           g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();g.restore();
         }
+        // ヒント点滅リング (石・直前手マーカーと別色のシアン)
+        if(hint>=0&&hintT>0){
+          const c=center(hint);
+          g.save();g.globalAlpha=0.5+0.5*Math.sin(t*9);
+          g.strokeStyle='#21e6c1';g.lineWidth=4;g.beginPath();g.arc(c.x,c.y,CELL*0.55,0,TAU);g.stroke();
+          g.restore();
+        }
         parts.draw(g);
-        // フッター
+        // 盤下ボタン (プレイ時=[まった][ヒント] / 決着時=[もういちど][まった])
+        const drawBtn=(b,label,col,disabled)=>{
+          g.save();g.fillStyle=disabled?'#6b6480':col;rr(g,b.x,b.y,b.w,b.h,14);g.fill();
+          if(!disabled){g.fillStyle='rgba(255,255,255,.22)';rr(g,b.x+8,b.y+6,b.w-16,10,5);g.fill();}
+          g.restore();
+          outlinedText(g,label,b.x+b.w/2,b.y+b.h/2+1,19,'#fff','rgba(0,0,0,.4)',5,disabled?0.55:1);
+        };
         if(result){
-          const cy=BY+SPAN+62;
-          g.save();g.fillStyle='#ff4d94';rr(g,W/2-98,cy-30,196,60,18);g.fill();g.restore();
-          outlinedText(g,'▶ もう いちど',W/2,cy,24,'#fff','#b92e6e',6);
-          outlinedText(g,'がめんを タップ',W/2,cy+50,15,'#cfc6e8','#2b2550',4);
+          drawBtn(btnL,'▶ もう いちど','#ff4d94',false);
+          drawBtn(btnR,'↩ まった','#7a6cc0',!history.length); // 勝ち手の取消
+          outlinedText(g,'がめんを タップでも もういちど',W/2,FBY+72,14,'#cfc6e8','#2b2550',4);
         }else{
-          outlinedText(g,'こうてんを タップして おこう',W/2,BY+SPAN+50,16,'#cfc6e8','#2b2550',4);
+          drawBtn(btnL,'↩ まった','#7a6cc0',!(canUndo&&history.length)); // 直前1手のみ
+          drawBtn(btnR,'💡 ヒント','#3a9bdc',false);
+          outlinedText(g,'こうてんを タップして おこう',W/2,FBY+72,14,'#cfc6e8','#2b2550',4);
         }
       },
       hudInfo(){
