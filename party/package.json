@@ -1,0 +1,6 @@
+{
+  "name": "petit-gomoku",
+  "private": true,
+  "type": "module",
+  "description": "PartyKit server for petit-game-park gomoku online multiplayer"
+}
