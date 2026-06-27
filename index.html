@@ -1318,10 +1318,10 @@ function boot(){
   window.__PGP={
     get game(){return game},get phase(){return phase},get def(){return curDef},
     get score(){return score},get combo(){return combo},get feverT(){return feverT},
-    GAMES,openGame,show,checkWin,runTicTacToeTests,checkGomoku,runGomokuTests,getGomokuHint,runGomokuHintTests
+    GAMES,openGame,show,checkWin,runTicTacToeTests,checkGomoku,runGomokuTests,getGomokuHint,runGomokuHintTests,getGomokuCpuMove,runGomokuCpuTests
   };
   // ?selftest を付けて開くと純ロジックの自動テストをコンソールに出す
-  if(/[?&]selftest/.test(location.search)){runTicTacToeTests();runGomokuTests();runGomokuHintTests();}
+  if(/[?&]selftest/.test(location.search)){runTicTacToeTests();runGomokuTests();runGomokuHintTests();runGomokuCpuTests();}
 }
 
 // __CORE_SLOT_END__
@@ -2498,6 +2498,91 @@ function runGomokuHintTests(){
   console.log('[getGomokuHint tests] pass='+pass+' / fail='+fail, log.length?log:'');
   return {pass,fail,log};
 }
+/* ============================================================
+   getGomokuCpuMove(board, mark, level) -> index   (純関数・副作用なし)
+   ------------------------------------------------------------
+   CPU思考。getGomokuHint と同じ評価部品を流用して段階化する。
+   level: 1=よわい / 2=ふつう / 3=つよい
+     1: 即詰み(自分5/相手5)だけ反応。あとは既存石近傍からランダム(中央寄り)。
+     2: getGomokuHint の総合ヒューリスティックをそのまま使う貪欲AI。
+     3: 双方向脅威(三三・四三)の創出/阻止を加点し、1手先読み(相手最善応手を減点)。
+   同点手はランダムタイブレーク。候補が無ければ -1。
+   ※ board は一時的に書き換えるが、関数終了時に必ず元へ戻す(実質副作用なし)。
+   ============================================================ */
+// 空点cにmarkを置いたときの攻撃スコア(連長×開放端 + 双方向脅威ボーナス)
+function gomokuPlaceScore(board,c,mark){
+  let total=0,threats=0;
+  for(const [dx,dy] of GO_DIRS){
+    const r=gomokuRunAt(board,c,mark,dx,dy);
+    let s;
+    if(r.len>=5)s=1000000;                                   // 5=勝ち
+    else if(r.len===4)s=(r.open>=1?50000:0);                 // 四(開放端あり)
+    else if(r.len===3)s=(r.open===2?4000:r.open===1?150:0);  // 活三 / 片開き三
+    else if(r.len===2)s=(r.open===2?120:r.open===1?12:0);
+    else s=(r.open===2?6:r.open===1?2:0);
+    if((r.len===3&&r.open===2)||(r.len>=4&&r.open>=1))threats++; // 活三以上=脅威
+    total+=s;
+  }
+  if(threats>=2)total+=30000; // 1手で二つ以上の脅威=三三/四三など(決まり手)
+  return total;
+}
+function getGomokuCpuMove(board,mark,level){
+  const opp=mark==='black'?'white':'black';
+  const cands=gomokuCandidates(board);
+  if(!cands.length)return -1;
+  const pick=arr=>arr[Math.floor(Math.random()*arr.length)]; // 同点ランダムタイブレーク
+  // 全レベル共通: 自分が5を作れる手は取る → 相手の5は止める(即詰み反応)
+  const wins=cands.filter(c=>gomokuMaxLen(board,c,mark)>=5); if(wins.length)return pick(wins);
+  const blocks=cands.filter(c=>gomokuMaxLen(board,c,opp)>=5); if(blocks.length)return pick(blocks);
+  if(level<=1){ // よわい: 即詰み以外は中央寄りの軽い重みでランダム
+    const N=GO_N;let pool=[];
+    for(const c of cands){const x=c%N,y=Math.floor(c/N);
+      const w=Math.max(1,6-Math.round(Math.hypot(x-7,y-7)));pool.push(...Array(w).fill(c));}
+    return pick(pool.length?pool:cands);
+  }
+  if(level===2)return getGomokuHint(board,mark); // ふつう: 貪欲ヒューリスティック
+  // つよい: 攻撃 + 守備(相手の好点を潰す) + 1手先読み
+  let best=[],bestScore=-Infinity;
+  for(const c of cands){
+    let s=gomokuPlaceScore(board,c,mark)+gomokuPlaceScore(board,c,opp)*0.85; // 自分の手 + 相手の好点を奪う価値
+    board[c]=mark;                       // 仮置きして相手の最善応手を見る(1手先読み)
+    let oppBest=0;
+    for(const d of gomokuCandidates(board)){const os=gomokuPlaceScore(board,d,opp);if(os>oppBest)oppBest=os;}
+    board[c]=null;                        // 必ず元へ戻す(副作用なし)
+    s-=oppBest*0.9;                        // 相手に強い返しを許す手は減点
+    if(s>bestScore){bestScore=s;best=[c];}else if(s===bestScore)best.push(c);
+  }
+  return pick(best);
+}
+/* getGomokuCpuMove 自動テスト: 各レベルの即詰み反応 + つよいの双方向脅威の創出/阻止 + よわいの候補範囲。 */
+function runGomokuCpuTests(){
+  const N=GO_N, idx=(x,y)=>y*N+x, blank=()=>Array(N*N).fill(null);
+  let pass=0,fail=0;const log=[];
+  const ck=(name,cond)=>{cond?pass++:fail++;if(!cond)log.push(name);};
+  const inSet=(h,...s)=>s.includes(h);
+  // 全レベル: 自分の4連→完成点を取る / 相手の4連→止める
+  for(const lv of [1,2,3]){
+    {const b=blank();[2,3,4,5].forEach(x=>b[idx(x,7)]='black');const h=getGomokuCpuMove(b,'black',lv);
+     ck('win-l'+lv,inSet(h,idx(1,7),idx(6,7)));}
+    {const b=blank();[2,3,4,5].forEach(x=>b[idx(x,7)]='white');const h=getGomokuCpuMove(b,'black',lv);
+     ck('block-l'+lv,inSet(h,idx(1,7),idx(6,7)));}
+  }
+  // つよい: 1手で二つの活三(双方向脅威)を作れる点(7,7)を選ぶ
+  {const b=blank();[[5,7],[6,7],[7,5],[7,6]].forEach(([x,y])=>b[idx(x,y)]='black');
+   const h=getGomokuCpuMove(b,'black',3);ck('double-make',h===idx(7,7));}
+  // つよい: 相手が双方向脅威を作る点(7,7)を阻止する(黒は孤立石のみ)
+  {const b=blank();[[5,7],[6,7],[7,5],[7,6]].forEach(([x,y])=>b[idx(x,y)]='white');b[idx(0,0)]='black';
+   const h=getGomokuCpuMove(b,'black',3);ck('double-block',h===idx(7,7));}
+  // よわい: 即詰みなし→候補(既存石近傍)の範囲内を返す
+  {const b=blank();b[idx(7,7)]='black';const cand=gomokuCandidates(b);
+   let ok=true;for(let i=0;i<30;i++){const h=getGomokuCpuMove(b,'black',1);if(!cand.includes(h)){ok=false;break;}}
+   ck('weak-range',ok);}
+  // 副作用なし: 呼び出し後に board が不変であること(つよいは仮置きする)
+  {const b=blank();[[5,7],[6,7]].forEach(([x,y])=>b[idx(x,y)]='black');const snap=b.slice();
+   getGomokuCpuMove(b,'black',3);ck('no-side-effect',b.every((v,i)=>v===snap[i]));}
+  console.log('[getGomokuCpuMove tests] pass='+pass+' / fail='+fail, log.length?log:'');
+  return {pass,fail,log};
+}
 registerGame({
   id:'gomoku', emoji:'⚫', title:'ごもくならべ',
   desc:'2人で あそぶ 五目ならべ',
@@ -2511,20 +2596,34 @@ registerGame({
     const A=ctx.audio;
     const N=GO_N;
     const STONE={black:'●',white:'○'};        // HUD/結果表示用
+    const LV=['よわい','ふつう','つよい'];     // level 1/2/3 の表示名
     // 盤レイアウト: 14ギャップ。420幅に収める (W=420,H=740 基準)
     const CELL=25, SPAN=CELL*(N-1), BX=Math.round((W-SPAN)/2), BY=210;
     const HIT=CELL*0.5; // タップ許容半径 (最寄り交点スナップ)
-    // 盤下のボタン2枠 (プレイ時=[まった][ヒント] / 決着時=[もういちど][まった])
-    const FBY=BY+SPAN+22; // ボタン行 上端 (=582)
+    // 盤下のボタン (1段目=[まった][ヒント] / 2段目=[ヒント常時トグル][せってい])
+    const FBY=BY+SPAN+22; // ボタン1段目 上端 (=582)
     const btnL={x:59,y:FBY,w:146,h:46}, btnR={x:215,y:FBY,w:146,h:46};
+    const togBtn={x:59,y:FBY+56,w:146,h:38}, setBtn={x:215,y:FBY+56,w:146,h:38}; // 2段目(=638)
     const hitBtn=(b,x,y)=>x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h;
-    // プレイヤー定義 (将来 type:'cpu' を足すだけでCPU対応できる)
-    const players=[{mark:'black',type:'human'},{mark:'white',type:'human'}];
+
+    // モード/設定 (リセット・もういちどは同じ設定で再開。せっていで変更可)
+    let screen='setup';                                    // 'setup' | 'play'
+    let cfg={mode:'pvp',humanFirst:true,levelL:2,levelR:2}; // levelL=黒CPU(pvcのCPU強さ兼用) / levelR=白CPU(cvc用)
+    let hintOn=store.get('pgp2_gomoku_hint','0')==='1';    // ヒント常時表示トグル(永続)
+    let players=[{mark:'black',type:'human'},{mark:'white',type:'human'}];
+
     let board=Array(N*N).fill(null); // 空セルは null 基準
     let turn=0,result=null,winLine=null,last=-1,t=0;
-    let history=[],canUndo=false,hint=-1,hintT=0; // 待った履歴 / 直前1手のみ戻せるフラグ / ヒント表示
+    let history=[],hint=-1,hintT=0,undoLock=false,cpuTimer=0; // 履歴 / ヒント / 連打防止 / CPU思考ディレイ
     const parts=new Particles();
 
+    function applyCfg(){ // cfg → players
+      if(cfg.mode==='cvc')players=[{mark:'black',type:'cpu',level:cfg.levelL},{mark:'white',type:'cpu',level:cfg.levelR}];
+      else if(cfg.mode==='pvc')players=cfg.humanFirst
+        ?[{mark:'black',type:'human'},{mark:'white',type:'cpu',level:cfg.levelL}]
+        :[{mark:'black',type:'cpu',level:cfg.levelL},{mark:'white',type:'human'}];
+      else players=[{mark:'black',type:'human'},{mark:'white',type:'human'}];
+    }
     function center(idx){
       return {x:BX+(idx%N)*CELL, y:BY+Math.floor(idx/N)*CELL};
     }
@@ -2535,45 +2634,55 @@ registerGame({
       if(Math.hypot(x-c.x,y-c.y)>HIT+4)return -1; // 密なので少し余裕を持たせる
       return cy*N+cx;
     }
-    function reset(){
+    function clearBoard(){
       board=Array(N*N).fill(null);turn=0;result=null;winLine=null;last=-1;
-      history=[];canUndo=false;hint=-1;hintT=0; // 履歴・ヒントもクリア
-      parts.list=[];t=0; // 勝利演出の粒子を新盤面に持ち越さない (pochittoレビュー反映)
-      A.pop();
+      history=[];hint=-1;hintT=0;undoLock=false;cpuTimer=0;
+      parts.list=[];t=0; // 勝利演出の粒子を新盤面に持ち越さない
     }
-    function undo(){                 // 待った: 直前1手を取り消す (決着後の勝ち手も戻せる)
-      if(!canUndo||!history.length){A.bad();return} // 履歴空 / 連打(直前1手のみ)は無効
-      const idx=history.pop();
-      board[idx]=null;
+    function scheduleCpu(){ // 現手番がCPUなら思考ディレイ(約300〜700ms)を仕込む
+      cpuTimer=(!result&&players[turn].type==='cpu')?0.3+Math.random()*0.4:0;
+    }
+    function startGame(){ applyCfg();clearBoard();screen='play';A.pop();scheduleCpu(); }
+    function reset(){ clearBoard();A.pop();scheduleCpu(); } // 同じ設定で再開
+    function toSetup(){ screen='setup';result=null;winLine=null;parts.list=[];cpuTimer=0;A.pop(); }
+    // 待った可否: cvc不可 / 直後の連打不可 / pvcは人間の手があるときのみ
+    function undoable(){
+      if(cfg.mode==='cvc'||undoLock||!history.length)return false;
+      if(cfg.mode==='pvp')return true;
+      if(result)return history.some((_,k)=>players[k%2].type==='human'); // 人間の手が1つ以上
+      return players[turn].type==='human';
+    }
+    function undo(){ // 待った: pvp=直前1手 / pvc=人間の手番まで(CPU応手も一緒に)戻す
+      if(!undoable()){A.bad();return}
+      do{ board[history.pop()]=null; } // pvcは手番が人間に戻るまで巻き戻す
+      while(cfg.mode==='pvc'&&history.length&&players[history.length%2].type==='cpu');
       result=null;winLine=null;parts.list=[]; // 決着解除 + 勝利演出クリア
       turn=history.length%2;                    // 手番を戻す (黒=players[0]=偶数手番)
       last=history.length?history[history.length-1]:-1;
-      canUndo=false;hint=-1;hintT=0;            // 連続待った防止
-      A.pop();vib(8);
+      hint=-1;hintT=0;undoLock=true;cpuTimer=0; // 連続待った防止
+      A.pop();vib(8);scheduleCpu();
     }
-    function showHint(){             // ヒント: 良手を1つ点滅表示 (自動着手しない)
-      if(result)return;
+    function showHint(){ // 💡オンデマンド: 良手を1つ点滅表示 (常時ONや人間以外の手番では無効)
+      if(result||hintOn||cfg.mode==='cvc'||players[turn].type!=='human'){A.bad();return}
       const idx=getGomokuHint(board,players[turn].mark);
-      if(idx>=0&&board[idx]===null){hint=idx;hintT=3.2;A.coin();}
-      else A.bad();
+      if(idx>=0&&board[idx]===null){hint=idx;hintT=3.2;A.coin();}else A.bad();
     }
-    function place(cell){            // 着手を1箇所に集約 (手番交代もここ)
-      if(result||cell<0||cell>=N*N||board[cell])return; // cell>=N*N: 将来CPUの不正indexで配列を拡張させない
+    function place(cell){ // 着手を1箇所に集約 (手番交代もここ)
+      if(result||cell<0||cell>=N*N||board[cell])return; // cell>=N*N: CPUの不正indexで配列を拡張させない
       board[cell]=players[turn].mark;last=cell;
-      history.push(cell);canUndo=true;hint=-1;hintT=0; // 履歴に積む / 着手で待った解禁・ヒント消去
+      history.push(cell);hint=-1;hintT=0;undoLock=false; // 履歴に積む / 着手で待った解禁・ヒント消去
       A.pop();vib(8);
       const r=checkGomoku(board,cell);
       if(r.winner){
-        result={winner:r.winner};winLine=r.line;
+        result={winner:r.winner};winLine=r.line;cpuTimer=0;
         banner((r.winner==='black'?'●':'○')+'の かち！');A.fever();vib([30,50,30,50,30]);
         for(const idx of r.line){const c=center(idx);parts.burst(c.x,c.y,8,{shape:'star',col:'#ffd23f',grav:160});}
         confetti();
       }else if(board.every(c=>c)){
-        result={draw:true};
+        result={draw:true};cpuTimer=0;
         banner('ひきわけ！');A.ok();vib([20,40,20]);
       }else{
-        turn=1-turn;
-        // 将来CPU: if(players[turn].type==='cpu') place(getGomokuCpuMove(board,players[turn].mark));
+        turn=1-turn;scheduleCpu(); // 次がCPUなら思考ディレイ開始 (cvcは連鎖、pvcは人間なら0)
       }
     }
     function drawStone(g,mark,c,r){
@@ -2583,27 +2692,100 @@ registerGame({
       else{g.fillStyle='#fbf8ef';g.fill();g.lineWidth=2;g.strokeStyle='#b7ad93';g.stroke();}
       g.restore();
     }
+    function hintApplicable(){ // いま手番側にヒントを出してよいか (人間の手番のみ・cvc不可)
+      return screen==='play'&&!result&&cfg.mode!=='cvc'&&players[turn].type==='human';
+    }
+    // 共通のボタン描画
+    function drawBtn(g,b,label,col,disabled,size){
+      g.save();g.fillStyle=disabled?'#6b6480':col;rr(g,b.x,b.y,b.w,b.h,14);g.fill();
+      if(!disabled){g.fillStyle='rgba(255,255,255,.22)';rr(g,b.x+8,b.y+5,b.w-16,9,5);g.fill();}
+      g.restore();
+      outlinedText(g,label,b.x+b.w/2,b.y+b.h/2+1,size||18,'#fff','rgba(0,0,0,.4)',5,disabled?0.55:1);
+    }
+    // ── セットアップ画面: クリック領域を一元生成 (draw と onDown で共用) ──
+    function buildSetup(){
+      const b=[];const add=(x,y,w,h,label,kind,val,active)=>b.push({x,y,w,h,label,kind,val,active:!!active});
+      add(50,162,320,50,'👥 ふたりで たいせん','mode','pvp',cfg.mode==='pvp');
+      add(50,219,320,50,'🤖 CPUと たいせん','mode','pvc',cfg.mode==='pvc');
+      add(50,276,320,50,'🤖🤖 CPUどうし','mode','cvc',cfg.mode==='cvc');
+      let y=350;
+      if(cfg.mode==='pvc'){
+        add(50,y+18,150,44,'あなた せんて','first',1,cfg.humanFirst);
+        add(220,y+18,150,44,'あなた こうて','first',0,!cfg.humanFirst);y+=78;
+        for(let i=0;i<3;i++)add(50+i*108,y+18,100,44,LV[i],'levelL',i+1,cfg.levelL===i+1);y+=78;
+      }else if(cfg.mode==='cvc'){
+        for(let i=0;i<3;i++)add(50+i*108,y+18,100,44,LV[i],'levelL',i+1,cfg.levelL===i+1);y+=78;
+        for(let i=0;i<3;i++)add(50+i*108,y+18,100,44,LV[i],'levelR',i+1,cfg.levelR===i+1);y+=78;
+      }
+      add(110,y+18,200,44,'ヒント つねに: '+(hintOn?'ON':'OFF'),'hint',0,hintOn);y+=78;
+      add(80,y+22,260,56,'▶ はじめる','start',0,false);
+      return b;
+    }
+    function onSetupTap(x,y){
+      for(const it of buildSetup())if(hitBtn(it,x,y)){
+        A.pop();
+        if(it.kind==='mode')cfg.mode=it.val;
+        else if(it.kind==='first')cfg.humanFirst=!!it.val;
+        else if(it.kind==='levelL')cfg.levelL=it.val;
+        else if(it.kind==='levelR')cfg.levelR=it.val;
+        else if(it.kind==='hint'){hintOn=!hintOn;store.set('pgp2_gomoku_hint',hintOn?'1':'0');}
+        else if(it.kind==='start')startGame();
+        return;
+      }
+    }
+    function drawSetup(g){
+      g.fillStyle='#2b2550';g.fillRect(0,0,W,H);
+      outlinedText(g,'ごもくならべ',W/2,86,28,'#fff','#3a2a4a',7);
+      outlinedText(g,'あいてを えらぶ',W/2,132,19,'#cfc6e8','#2b2550',5);
+      if(cfg.mode==='pvc'){
+        outlinedText(g,'てばん',W/2,346,15,'#cfc6e8','#2b2550',4);
+        outlinedText(g,'CPUの つよさ',W/2,424,15,'#cfc6e8','#2b2550',4);
+      }else if(cfg.mode==='cvc'){
+        outlinedText(g,'● くろCPU の つよさ',W/2,346,15,'#cfc6e8','#2b2550',4);
+        outlinedText(g,'○ しろCPU の つよさ',W/2,424,15,'#cfc6e8','#2b2550',4);
+      }
+      for(const it of buildSetup())
+        drawBtn(g,it,it.label,it.kind==='start'?'#39c06a':(it.active?'#ff7a00':'#4a4170'),false,it.kind==='start'?22:16);
+    }
 
     return {
       onDown(x,y){
+        if(screen==='setup'){onSetupTap(x,y);return}
+        // 2段目ボタンは決着前後どちらでも有効
+        if(hitBtn(togBtn,x,y)){
+          if(cfg.mode==='cvc'){A.bad();return}
+          hintOn=!hintOn;store.set('pgp2_gomoku_hint',hintOn?'1':'0');if(!hintOn){hint=-1;hintT=0;}A.pop();return;
+        }
+        if(hitBtn(setBtn,x,y)){toSetup();return}
         if(!result){
           if(hitBtn(btnL,x,y)){undo();return}      // まった
-          if(hitBtn(btnR,x,y)){showHint();return}  // ヒント
-          place(cellAt(x,y));
+          if(hitBtn(btnR,x,y)){showHint();return}  // 💡 ヒント
+          if(players[turn].type==='human')place(cellAt(x,y)); // 人間の手番だけ着手可
         }else{
           if(hitBtn(btnL,x,y)){reset();return}     // もう いちど
           if(hitBtn(btnR,x,y)){undo();return}      // 勝ち手を待った (誤タップ救済)
           reset();                                  // それ以外のタップでもリセット (従来挙動)
         }
       },
-      update(dt){t+=dt;parts.update(dt);if(hintT>0){hintT-=dt;if(hintT<=0){hintT=0;hint=-1;}}},
+      update(dt){
+        t+=dt;parts.update(dt);
+        if(screen!=='play')return;
+        if(hintOn)hint=hintApplicable()?getGomokuHint(board,players[turn].mark):-1; // 常時ヒント
+        else if(hintT>0){hintT-=dt;if(hintT<=0){hintT=0;hint=-1;}}                  // オンデマンドの減衰
+        if(!result&&players[turn].type==='cpu'&&cpuTimer>0){ // CPU思考ディレイ→着手
+          cpuTimer-=dt;
+          if(cpuTimer<=0){const mv=getGomokuCpuMove(board,players[turn].mark,players[turn].level||2);if(mv>=0)place(mv);}
+        }
+      },
       draw(g){
+        if(screen==='setup'){drawSetup(g);return}
         g.fillStyle='#2b2550';g.fillRect(0,0,W,H);
-        outlinedText(g,'ごもくならべ',W/2,92,25,'#fff','#3a2a4a',7);
+        outlinedText(g,'ごもくならべ',W/2,84,24,'#fff','#3a2a4a',7);
         // 手番 / 結果
         if(!result){
           const m=players[turn].mark;
-          outlinedText(g,(m==='black'?'●':'○')+'の ばん',W/2,150,28,m==='black'?'#1c1630':'#fff','#cdb892',7);
+          outlinedText(g,(m==='black'?'●':'○')+'の ばん',W/2,140,27,m==='black'?'#1c1630':'#fff','#cdb892',7);
+          if(players[turn].type==='cpu')outlinedText(g,'🤖 かんがえちゅう…',W/2,172,15,'#ffd23f','#5a3a10',4);
         }else if(result.draw){
           outlinedText(g,'ひきわけ！',W/2,150,30,'#ffd23f','#5a3a10',7);
         }else{
@@ -2639,34 +2821,31 @@ registerGame({
           g.strokeStyle='#ff4d94';g.lineWidth=10;g.lineCap='round';
           g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();g.restore();
         }
-        // ヒント点滅リング (石・直前手マーカーと別色のシアン)
-        if(hint>=0&&hintT>0){
+        // ヒントリング (常時ON=継続 / オンデマンド=hintT減衰)。石と別色のシアン
+        if(hint>=0&&(hintOn||hintT>0)){
           const c=center(hint);
           g.save();g.globalAlpha=0.5+0.5*Math.sin(t*9);
           g.strokeStyle='#21e6c1';g.lineWidth=4;g.beginPath();g.arc(c.x,c.y,CELL*0.55,0,TAU);g.stroke();
           g.restore();
         }
         parts.draw(g);
-        // 盤下ボタン (プレイ時=[まった][ヒント] / 決着時=[もういちど][まった])
-        const drawBtn=(b,label,col,disabled)=>{
-          g.save();g.fillStyle=disabled?'#6b6480':col;rr(g,b.x,b.y,b.w,b.h,14);g.fill();
-          if(!disabled){g.fillStyle='rgba(255,255,255,.22)';rr(g,b.x+8,b.y+6,b.w-16,10,5);g.fill();}
-          g.restore();
-          outlinedText(g,label,b.x+b.w/2,b.y+b.h/2+1,19,'#fff','rgba(0,0,0,.4)',5,disabled?0.55:1);
-        };
+        // 1段目ボタン (プレイ時=[まった][ヒント] / 決着時=[もういちど][まった])
+        const hintDisabled=hintOn||cfg.mode==='cvc'||players[turn].type==='cpu'; // 常時ON/CPU手番では💡無効
         if(result){
-          drawBtn(btnL,'▶ もう いちど','#ff4d94',false);
-          drawBtn(btnR,'↩ まった','#7a6cc0',!history.length); // 勝ち手の取消
-          outlinedText(g,'がめんを タップでも もういちど',W/2,FBY+72,14,'#cfc6e8','#2b2550',4);
+          drawBtn(g,btnL,'▶ もう いちど','#ff4d94',false);
+          drawBtn(g,btnR,'↩ まった','#7a6cc0',!undoable());
         }else{
-          drawBtn(btnL,'↩ まった','#7a6cc0',!(canUndo&&history.length)); // 直前1手のみ
-          drawBtn(btnR,'💡 ヒント','#3a9bdc',false);
-          outlinedText(g,'こうてんを タップして おこう',W/2,FBY+72,14,'#cfc6e8','#2b2550',4);
+          drawBtn(g,btnL,'↩ まった','#7a6cc0',!undoable());
+          drawBtn(g,btnR,'💡 ヒント','#3a9bdc',hintDisabled);
         }
+        // 2段目ボタン (ヒント常時トグル / せってい)
+        drawBtn(g,togBtn,'ヒント つねに '+(hintOn?'ON':'OFF'),hintOn?'#39c06a':'#5a5278',cfg.mode==='cvc',15);
+        drawBtn(g,setBtn,'⚙ せってい','#5a5278',false,15);
       },
       hudInfo(){
+        if(screen==='setup')return 'モードを えらぶ';
         if(result)return result.draw?'ひきわけ':STONE[result.winner]+'の かち';
-        return STONE[players[turn].mark]+'の ばん';
+        return STONE[players[turn].mark]+'の ばん'+(players[turn].type==='cpu'?' (CPU)':'');
       },
     };
   }
