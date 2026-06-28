@@ -1,0 +1,18 @@
+# 五目並べ オンライン対戦 — Cloudflare Workers + Durable Objects (partyserver)
+# 自分の Cloudflare アカウントへ無料デプロイ:  cd party && npx wrangler deploy
+# ローカル開発:                                 cd party && npx wrangler dev
+name = "petit-gomoku"
+main = "index.js"
+compatibility_date = "2025-06-01"
+
+# Durable Object: 部屋=1インスタンス。
+# バインディング名 "Main" は partyserver で kebab 化され party "main" に対応
+# → クライアントの接続パス /parties/main/<code> をそのまま維持できる。
+[[durable_objects.bindings]]
+name = "Main"
+class_name = "Gomoku"
+
+# SQLite-backed Durable Object (無料枠で利用可)。WebSocket Hibernation と DO Alarm(席解放) が動く。
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Gomoku"]

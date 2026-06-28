@@ -13,6 +13,7 @@ import { GO_N, checkGomoku } from './gomoku-core.js';
 
 const SIZE = GO_N * GO_N; // 225
 const MARKS = ['black', 'white'];
+const GRACE_MS = 30000; // 席解放の猶予: 切断後この時間 再接続が無ければ席を解放
 
 function sanitizeName(v) {
   // 改行・制御文字を除去し、前後空白トリム、12文字制限。空なら 'ゲスト'
@@ -44,13 +45,68 @@ export default class GomokuServer {
     await this.room.storage.put('game', this.game);
   }
 
+  now() { return Date.now(); } // テストで時刻を注入できるよう関数化
+
   // ── 接続/切断 ───────────────────────────────────────────
   onConnect(conn) {
     // hello を受けて座席割当する。接続直後に現在状態だけ送る (観戦者にも盤面が見える)
     conn.send(JSON.stringify(this.stateMsg()));
   }
-  onClose() { this.broadcastState(); } // 切断 → 接続状態(connected)が変わるので再配信
+  async onClose(conn) {
+    // 席プレイヤーが切断 → 切断時刻を記録し解放アラームを仕掛ける (猶予内に再接続が無ければ onAlarm で解放)
+    const st = conn && conn.state;
+    if (st && (st.seat === 'black' || st.seat === 'white') && st.token) {
+      const seat = this.game.seats[st.seat];
+      if (seat && seat.token === st.token && !this.liveTokens(conn.id).has(st.token)) {
+        seat.disc = this.now();
+        await this.save();
+        await this.scheduleAlarm();
+      }
+    }
+    this.broadcastState(); // 接続状態(connected)が変わるので再配信
+  }
   onError() { this.broadcastState(); }
+
+  // 着席トークンのうち「ライブ接続が存在する」ものの集合 (excludeId の接続は除外)
+  liveTokens(excludeId) {
+    const set = new Set();
+    for (const c of this.room.getConnections()) {
+      if (excludeId && c.id === excludeId) continue;
+      const cs = c.state;
+      if (cs && (cs.seat === 'black' || cs.seat === 'white') && cs.token) set.add(cs.token);
+    }
+    return set;
+  }
+  // 切断中の席のうち最も早い解放期限にアラームを設定 (無ければ解除)。冪等
+  async scheduleAlarm() {
+    const g = this.game, live = this.liveTokens();
+    let next = Infinity;
+    for (const mark of MARKS) {
+      const s = g.seats[mark];
+      if (s && s.disc != null && !live.has(s.token)) next = Math.min(next, s.disc + GRACE_MS);
+    }
+    if (next === Infinity) await this.room.storage.deleteAlarm();
+    else await this.room.storage.setAlarm(next);
+  }
+  // アラーム発火: 猶予超過した切断席を解放する (現状を見て判定する冪等な作り)
+  async onAlarm() {
+    const g = this.game, now = this.now(), live = this.liveTokens();
+    let released = false, midGameReset = false;
+    for (const mark of MARKS) {
+      const s = g.seats[mark];
+      if (s && s.disc != null && !live.has(s.token) && now - s.disc >= GRACE_MS) {
+        g.seats[mark] = null; released = true;
+        if (!g.result && g.board.some(c => c)) midGameReset = true; // 対局途中の解放 → 盤リセット
+      }
+    }
+    if (released && midGameReset) { // fresh盤で残存席+新規がクリーンに開始できるように
+      g.board = new Array(SIZE).fill(null); g.turn = 'black'; g.last = -1; g.result = null;
+      g.rematch = { black: false, white: false }; g.gameNo++;
+    }
+    await this.save();
+    await this.scheduleAlarm();        // 残りの切断席へ再設定 / 無ければ解除 (空振りでも破綻しない)
+    if (released) this.broadcastState();
+  }
 
   async onMessage(raw, conn) {
     let m;
@@ -69,10 +125,11 @@ export default class GomokuServer {
         const open = MARKS.find(c => !g.seats[c]);
         if (open) {
           seat = open;
-          g.seats[open] = { token: crypto.randomUUID(), name };
+          g.seats[open] = { token: crypto.randomUUID(), name, disc: null };
         }
       } else {
         g.seats[seat].name = name; // 復帰時に名前を更新
+        g.seats[seat].disc = null; // 同席復帰 → 席を解放しない
       }
       // conn に座席を紐付け (hibernation を越えて保持)
       conn.setState({ seat, token: seat === 'spectator' ? '' : g.seats[seat].token, name });
@@ -83,6 +140,7 @@ export default class GomokuServer {
         name,
       }));
       await this.save();
+      await this.scheduleAlarm(); // 復帰で解放対象が無くなればアラーム解除
       this.broadcastState();
       return;
     }
@@ -148,16 +206,15 @@ export default class GomokuServer {
 
   // 現在ライブ接続から「席の接続状態」と「観戦者数」を集計
   presence() {
-    const liveTokens = new Set();
+    const live = this.liveTokens();
     let spectators = 0;
     for (const c of this.room.getConnections()) {
       const cs = c.state;
-      if (cs && (cs.seat === 'black' || cs.seat === 'white') && cs.token) liveTokens.add(cs.token);
-      else spectators++;
+      if (!(cs && (cs.seat === 'black' || cs.seat === 'white') && cs.token)) spectators++;
     }
     const seat = c => {
       const s = this.game.seats[c];
-      return s ? { name: s.name, connected: liveTokens.has(s.token) } : null;
+      return s ? { name: s.name, connected: live.has(s.token) } : null;
     };
     return { black: seat('black'), white: seat('white'), spectators };
   }
