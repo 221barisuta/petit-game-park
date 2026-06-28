@@ -3091,6 +3091,268 @@ registerGame({
   }
 });
 
+/* ============================================================
+   ゲームF: もぐらたたき (タップ / 25秒)
+   3×3の穴からモグラが出現。出ているうちにタップで成功。
+   爆弾モグラを叩くとコンボリセット。空振りはノーペナルティ。
+   ── 純関数 (テスト対象) ────────────────────────────────
+   moleLayout()        : 9穴の中心座標とヒット半径 {holes:[{x,y}],r}
+   hitHole(x,y,layout) : タップ座標 → 穴index または null
+   ============================================================ */
+function moleLayout(){
+  const cols=[88,210,332], rows=[330,452,574]; // W=420基準・HUD/コンボ表示と非干渉
+  const holes=[];
+  for(const y of rows)for(const x of cols)holes.push({x,y});
+  return {holes, r:52}; // 穴間隔122 > 2*52 なので判定は一意
+}
+function hitHole(x,y,layout){
+  let best=null, bd=Infinity;
+  for(let i=0;i<layout.holes.length;i++){
+    const h=layout.holes[i];
+    const d=Math.hypot(x-h.x, y-h.y);
+    if(d<=layout.r && d<bd){bd=d; best=i;}
+  }
+  return best;
+}
+function runMoleTests(){
+  const L=moleLayout();
+  let pass=0,fail=0;const log=[];
+  const ck=(cond,msg)=>{cond?pass++:fail++;if(!cond)log.push(msg)};
+  // 穴数=9
+  ck(L.holes.length===9,'holes!=9 ('+L.holes.length+')');
+  // 各穴の中心は自分のindexを返す
+  L.holes.forEach((h,i)=>ck(hitHole(h.x,h.y,L)===i,'center '+i+' -> '+hitHole(h.x,h.y,L)));
+  // 半径ぎりぎり内側は当たる / 外側はnull
+  {const h=L.holes[4];
+   ck(hitHole(h.x+L.r-1,h.y,L)===4,'inside r-1 -> '+hitHole(h.x+L.r-1,h.y,L));
+   ck(hitHole(h.x+L.r+5,h.y,L)===null,'outside r+5 -> '+hitHole(h.x+L.r+5,h.y,L));}
+  // 隣り合う穴の中点はどちらにも入らない (距離61>52)
+  {const a=L.holes[0],b=L.holes[1],mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
+   ck(hitHole(mx,my,L)===null,'midpoint 0-1 -> '+hitHole(mx,my,L));}
+  // 画面の隅(穴なし)はnull
+  ck(hitHole(5,5,L)===null,'corner -> '+hitHole(5,5,L));
+  console.log('[mole tests] pass='+pass+' / fail='+fail, log.length?log:'');
+  return {pass,fail,log};
+}
+registerGame({
+  id:'mole', emoji:'🦫', title:'もぐらたたき',
+  desc:'でてきた モグラを タップ！ばくだんは たたくな',
+  color:'#bfe3a8', duration:25,
+  howto:[
+    ['🦫','あなから でてきた モグラを タップ！'],
+    ['🔥','つづけて たたくと ばいりつ＆フィーバー！'],
+    ['💣','ばくだんモグラを たたくと コンボが きえる'],
+    ['🙆','なにもない ところを たたいても へいき'],
+    ['👆','スピードが はやいほど たかいてんすう！'],
+  ],
+  create(ctx){
+    const A=ctx.audio, RNG=ctx.rng;
+    const L=moleLayout();
+    const N=L.holes.length;
+    const slots=new Array(N).fill(null); // 各穴: {kind,rise,t,dur,state,hitT} | null
+    let t=0, spawnTimer=0.4, shakeT=0;
+    const flo=new Floaties(), parts=new Particles();
+
+    const prog=()=>clamp(t/(ctx.duration||25),0,1);
+    const spawnInterval=()=>lerp(0.95,0.55,prog());
+    const upDur=()=>lerp(1.05,0.72,prog());
+
+    function trySpawn(){
+      const empty=[];
+      for(let i=0;i<N;i++)if(!slots[i])empty.push(i);
+      if(!empty.length)return;
+      // 後半は たまに2体同時
+      const count=(prog()>0.55 && RNG()<0.35 && empty.length>=2)?2:1;
+      for(let n=0;n<count;n++){
+        if(!empty.length)break;
+        const idx=empty.splice(Math.floor(RNG()*empty.length),1)[0];
+        const bombChance=lerp(0.10,0.20,prog());
+        const kind=RNG()<bombChance?'bomb':'mole';
+        slots[idx]={kind,rise:0,t:0,dur:upDur()*(0.85+RNG()*0.3),state:'up',hitT:0};
+        A.tone({f:kind==='bomb'?180:300,f2:kind==='bomb'?120:540,dur:.06,vol:.05});
+      }
+    }
+
+    function drawHole(g,hx,hy){
+      g.fillStyle='rgba(0,0,0,.18)';
+      g.beginPath();g.ellipse(hx,hy+6,50,20,0,0,TAU);g.fill();
+      g.fillStyle='#3a2415'; // あなの ふち
+      g.beginPath();g.ellipse(hx,hy,46,22,0,0,TAU);g.fill();
+      g.fillStyle='#22150c'; // あなの なか
+      g.beginPath();g.ellipse(hx,hy,39,17,0,0,TAU);g.fill();
+    }
+    function drawFrontRim(g,hx,hy){
+      // てまえの つちの ふち (モグラの あしもとを かくす)
+      g.fillStyle='#6e4326';
+      g.beginPath();g.ellipse(hx,hy,46,22,0,0,Math.PI,false);g.fill();
+      g.strokeStyle='#8a5a36';g.lineWidth=4;
+      g.beginPath();g.ellipse(hx,hy,46,22,0,0.12*Math.PI,0.88*Math.PI,false);g.stroke();
+    }
+    function drawMole(g,cx,cy,sq){
+      // cy = あしもと(りむ)位置。sq=つぶれ(0..1)
+      const sy=1-sq*0.45, sx=1+sq*0.30;
+      g.save();g.translate(cx,cy);g.scale(sx,sy);
+      // からだ
+      g.fillStyle='#8a6a4a';
+      g.beginPath();g.ellipse(0,-30,30,34,0,0,TAU);g.fill();
+      g.strokeStyle='#5e4631';g.lineWidth=3;g.stroke();
+      // みみ
+      g.fillStyle='#7a5c3f';
+      g.beginPath();g.arc(-22,-52,7,0,TAU);g.fill();
+      g.beginPath();g.arc(22,-52,7,0,TAU);g.fill();
+      // おなか
+      g.fillStyle='#e6d3b3';
+      g.beginPath();g.ellipse(0,-22,18,21,0,0,TAU);g.fill();
+      // はな
+      g.fillStyle='#d98a9a';
+      g.beginPath();g.ellipse(0,-26,8,6,0,0,TAU);g.fill();
+      // て
+      g.fillStyle='#7a5c3f';
+      g.beginPath();g.ellipse(-24,-18,8,10,0,0,TAU);g.fill();
+      g.beginPath();g.ellipse(24,-18,8,10,0,0,TAU);g.fill();
+      // め
+      g.fillStyle='#2e2118';
+      if(sq>0.2){ // たたかれて ><
+        g.strokeStyle='#2e2118';g.lineWidth=3;g.lineCap='round';
+        g.beginPath();g.moveTo(-16,-44);g.lineTo(-8,-40);g.moveTo(-16,-40);g.lineTo(-8,-44);
+        g.moveTo(8,-44);g.lineTo(16,-40);g.moveTo(8,-40);g.lineTo(16,-44);g.stroke();
+      }else{
+        g.beginPath();g.arc(-10,-42,3.4,0,TAU);g.fill();
+        g.beginPath();g.arc(10,-42,3.4,0,TAU);g.fill();
+        g.fillStyle='rgba(255,255,255,.85)';
+        g.beginPath();g.arc(-9,-43,1.2,0,TAU);g.fill();
+        g.beginPath();g.arc(11,-43,1.2,0,TAU);g.fill();
+      }
+      g.restore();
+    }
+    function drawBomb(g,cx,cy){
+      g.save();g.translate(cx,cy);
+      // あかい けいこく リング
+      const gl=0.4+0.3*Math.sin(performance.now()/120);
+      g.fillStyle=`rgba(255,60,60,${gl*0.4})`;
+      g.beginPath();g.ellipse(0,-30,38,40,0,0,TAU);g.fill();
+      // ばくだん 本体
+      g.fillStyle='#33373d';
+      g.beginPath();g.arc(0,-28,28,0,TAU);g.fill();
+      g.strokeStyle='#15171a';g.lineWidth=3;g.stroke();
+      g.fillStyle='rgba(255,255,255,.25)';
+      g.beginPath();g.ellipse(-9,-38,8,6,-0.5,0,TAU);g.fill();
+      // どうかせん
+      g.strokeStyle='#9a7b4a';g.lineWidth=4;g.lineCap='round';
+      g.beginPath();g.moveTo(8,-52);g.quadraticCurveTo(20,-62,16,-72);g.stroke();
+      // ひばな
+      drawStar(g,16,-74,5+Math.sin(performance.now()/60)*1.5,performance.now()/200,'#ffd23f');
+      // おこり め
+      g.fillStyle='#ffe08a';
+      g.beginPath();g.arc(-9,-30,5,0,TAU);g.fill();
+      g.beginPath();g.arc(9,-30,5,0,TAU);g.fill();
+      g.fillStyle='#15171a';
+      g.beginPath();g.arc(-8,-29,2.4,0,TAU);g.fill();
+      g.beginPath();g.arc(10,-29,2.4,0,TAU);g.fill();
+      g.restore();
+    }
+
+    const self={
+      update(dt){
+        t+=dt;
+        shakeT=Math.max(0,shakeT-dt);
+        spawnTimer-=dt;
+        if(spawnTimer<=0){trySpawn();spawnTimer=spawnInterval()*(0.8+RNG()*0.4);}
+        for(let i=0;i<N;i++){
+          const s=slots[i];if(!s)continue;
+          s.t+=dt;
+          if(s.state==='up'){
+            s.rise=Math.min(1,s.rise+dt/0.12);
+            if(s.t>=s.dur)s.state='down';
+          }else if(s.state==='down'){
+            s.rise-=dt/0.14;
+            if(s.rise<=0)slots[i]=null;
+          }else if(s.state==='hit'){
+            s.hitT+=dt;
+            s.rise-=dt/0.10;
+            if(s.rise<=0||s.hitT>0.2)slots[i]=null;
+          }
+        }
+        flo.update(dt);parts.update(dt);
+      },
+      draw(g){
+        g.save();
+        if(shakeT>0)g.translate(rand(-4,4),rand(-4,4));
+        // そら
+        const bg=g.createLinearGradient(0,0,0,H);
+        bg.addColorStop(0,'#bdeaff');bg.addColorStop(.45,'#def4e6');bg.addColorStop(1,'#cdeebf');
+        g.fillStyle=bg;g.fillRect(-8,-8,W+16,H+16);
+        // くも
+        g.fillStyle='rgba(255,255,255,.85)';
+        for(const c of [[80,120,26],[300,90,30],[210,180,22]]){
+          g.beginPath();g.arc(c[0],c[1],c[2],0,TAU);
+          g.arc(c[0]+c[2],c[1]+4,c[2]*0.8,0,TAU);
+          g.arc(c[0]-c[2],c[1]+4,c[2]*0.7,0,TAU);g.fill();
+        }
+        // じめん
+        const GY=252;
+        const gg=g.createLinearGradient(0,GY,0,H);
+        gg.addColorStop(0,'#9bd66e');gg.addColorStop(1,'#6fb84a');
+        g.fillStyle=gg;g.fillRect(-8,GY,W+16,H-GY+8);
+        g.fillStyle='rgba(255,255,255,.12)';g.fillRect(-8,GY,W+16,8);
+        // くさ
+        g.strokeStyle='rgba(60,130,50,.5)';g.lineWidth=2;g.lineCap='round';
+        for(let i=0;i<26;i++){
+          const gx=(i*61+20)%(W+10), gyy=GY+18+((i*97)%(H-GY-30));
+          g.beginPath();g.moveTo(gx,gyy);g.lineTo(gx-3,gyy-7);g.moveTo(gx,gyy);g.lineTo(gx+3,gyy-7);g.stroke();
+        }
+        // あな + モグラ
+        for(let i=0;i<N;i++){
+          const h=L.holes[i], s=slots[i];
+          drawHole(g,h.x,h.y);
+          if(s && s.rise>0.01){
+            const lift=easeOutBack(clamp(s.rise,0,1))*52; // せり上がり
+            const sq=s.state==='hit'?clamp(s.hitT/0.18,0,1):0;
+            g.save();
+            // りむ より うえだけ みせる (あなから でる表現)
+            g.beginPath();g.rect(h.x-48,0,96,h.y-2);g.clip();
+            if(s.kind==='bomb')drawBomb(g,h.x,h.y-lift);
+            else drawMole(g,h.x,h.y-lift,sq);
+            g.restore();
+          }
+          drawFrontRim(g,h.x,h.y);
+        }
+        parts.draw(g);flo.draw(g);
+        if(t<4)
+          outlinedText(g,'でてきた モグラを タップ！',W/2,210,19,'#fff','#4a7a2e',5);
+        g.restore();
+      },
+      onDown(x,y){
+        const idx=hitHole(x,y,L);
+        if(idx==null)return;            // 空振り: ノーペナルティ
+        const s=slots[idx];
+        if(!s||s.state!=='up')return;   // あなが 空 or ひっこみ中: 無効
+        const h=L.holes[idx];
+        if(s.kind==='bomb'){
+          ctx.judge('wrong',h.x,h.y-34);   // コンボリセット+bad音 (減点なし=既存仕様)
+          shakeT=0.4;
+          for(let k=0;k<14;k++)parts.add({x:h.x,y:h.y-30,vx:rand(-170,170),vy:rand(-220,40),
+            grav:430,life:rand(.4,.85),r:rand(3,6),col:pick(['#555a61','#8a9098','#c0392b','#2e2118'])});
+          flo.add('ドカン！',h.x,h.y-64,'#ff6b6b',20);
+          slots[idx]=null;
+        }else{
+          const rem=1-clamp(s.t/s.dur,0,1);                  // 残り割合: 早押しほど大
+          const kind=rem>0.65?'perfect':rem>0.3?'great':'good';
+          ctx.judge(kind,h.x,h.y-44);                        // 加点+コンボ+フィーバー連動
+          s.state='hit';s.hitT=0;
+        }
+      },
+      finish(){return {}},
+    };
+    return self;
+  }
+});
+// 純ロジックの自動テスト公開 (?selftest で実行・core boot は不変更)
+if(typeof window!=='undefined'){
+  window.runMoleTests=runMoleTests;
+  if(/[?&]selftest/.test(location.search))runMoleTests();
+}
+
 // ▼ 新しいミニゲームは registerGame({...}) をここに追加 ▼
 
 /* ============================================================
