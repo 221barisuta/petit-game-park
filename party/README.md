@@ -1,52 +1,68 @@
-# petit-gomoku — 五目並べ オンライン対戦サーバー (PartyKit)
+# petit-gomoku — 五目並べ オンライン対戦サーバー (Cloudflare Workers + Durable Objects / partyserver)
 
 五目並べの **部屋作成＆共有方式オンライン2人対戦**のバックエンド。
-部屋 = 1つの Party（Cloudflare Durable Object）。サーバーが盤面を**権威的に保持・検証**する。
-ログイン不要。通信はターン制で極小なので Cloudflare 無料枠で実質 $0。
+部屋 = 1つの Durable Object。サーバーが盤面を**権威的に保持・検証**する。
+ログイン不要。ターン制で通信量が極小なので **Cloudflare 無料枠で実質 $0**。
+
+> マネージド版 `partykit.dev` のインフラ障害を受け、**自分の Cloudflare アカウントへ wrangler で直接デプロイ**する
+> [partyserver](https://github.com/cloudflare/partyserver) 構成へ移行（既存 `ranking-worker/` と同じ運用）。ロジックは不変。
 
 ## 構成
 | ファイル | 役割 |
 |---|---|
-| `server.js` | PartyKit Server 本体（座席割当・着手検証・勝敗確定・再接続・観戦・もう一局） |
+| `index.js` | Worker エントリ。`routePartykitRequest` でルーティングし、`Gomoku extends Server`(partyserver) が `server.js` のロジックを委譲実行 |
+| `server.js` | ゲーム権威ロジック本体（座席割当・着手検証・勝敗確定・再接続・**席解放アラーム(30秒)**・観戦・もう一局先後入替）。framework非依存 |
 | `gomoku-core.js` | `GO_N` と `checkGomoku` の**単一ソース**。`index.html` と verbatim 一致させる |
 | `parity.test.mjs` | `index.html` の `checkGomoku` と `gomoku-core.js` が同一出力か検証（divergence厳禁） |
-| `server.test.mjs` | サーバー権威ロジックの単体テスト（モック room/conn） |
-| `../partykit.json` | PartyKit 設定（`main: party/server.js`、project名 `petit-gomoku`） |
+| `server.test.mjs` | サーバー権威ロジックの単体テスト（モック room/conn・席解放含む） |
+| `wrangler.toml` | Workers/DO 設定（DOバインディング `Main`→party `main`、SQLite-backed DO、migration） |
 
 ## メッセージ仕様（WebSocket / JSON）
 - client→server: `hello{token?,name}` / `move{index}` / `rename{name}` / `rematch{on}`
 - server→client: `assigned{seat,token}` / `state{board,turn,last,result,seats,spectators,gameNo,rematch}` / `error{msg}`
 - 座席: 1人目=黒(先手) / 2人目=白(後手) / 3人目以降=観戦。`hello.token` が既存席と一致すれば同席復帰。
+- 接続パス: `wss://<host>/parties/main/<部屋コード>`（DOバインディング `Main` が kebab 化されて party `main` に対応）。
+
+## セットアップ（依存インストール）
+```sh
+cd party
+npm install            # partyserver + wrangler (devDependencies)
+```
 
 ## ローカル開発
 ```sh
-# リポジトリルートで
-npx partykit dev            # http://127.0.0.1:1999 で起動 (ws://127.0.0.1:1999)
+cd party
+npx wrangler dev       # 既定 http://127.0.0.1:8787 で起動 (ws://127.0.0.1:8787)
 ```
-`index.html` の `PGP_CONFIG.partyHost` を `127.0.0.1:1999` にすると、クライアントは自動で `ws://` 接続する（localhost/IP/ポート付きは ws、本番ドメインは wss を使う判定）。
+`index.html` の `PGP_CONFIG.partyHost` を `127.0.0.1:8787` にすると、クライアントは自動で `ws://` 接続する
+（localhost/IP/ポート付きは ws、本番ドメインは wss を使う判定）。
 2タブ（または2ブラウザ）で開いて「部屋をつくる」→ もう一方で「あいことば」入力 or `?room=CODE` リンクで参加。
+切断して30秒放置すると席が解放され、新規参加者が着席できる（DO Alarm）。
 
 ## テスト（デプロイ前に実行）
 ```sh
 node party/parity.test.mjs     # checkGomoku クライアント/サーバー一致
-node party/server.test.mjs     # サーバー権威ロジック（座席・検証・勝敗・再接続・rematch）
-# 実ランタイムE2E（任意）: npx partykit dev を起動した状態で ws クライアントから疎通確認
+node party/server.test.mjs     # サーバー権威ロジック（座席・検証・勝敗・再接続・rematch・席解放）
+# 実ランタイムE2E（任意）: npx wrangler dev を起動した状態で ws クライアントから疎通確認
 ```
 
-## デプロイ（★ユーザー操作が必要）
-PartyKit/Cloudflare アカウント連携とデプロイは**人手**で行う（エージェントはコードと手順まで）。
+## デプロイ（★ユーザー操作が必要 — Cloudflare アカウント）
 ```sh
-npx partykit deploy            # 初回は CLI でブラウザログインを求められる（Cloudflare/GitHub等）
+cd party
+npx wrangler login      # 初回のみ。ブラウザで Cloudflare 認証
+npx wrangler deploy     # *.workers.dev に無料デプロイ。発行URLが表示される
 ```
-1. デプロイ成功で発行される URL（例: `petit-gomoku.<ユーザー名>.partykit.dev`）を控える。
-2. `index.html` の `window.PGP_CONFIG.partyHost` にそのホスト名を設定（プロトコルなしでよい）。
+1. 発行URL（例: `https://petit-gomoku.<サブドメイン>.workers.dev`）の**ホスト名**を控える。
+2. `index.html` の `window.PGP_CONFIG.partyHost` に設定（プロトコルなしでよい。クライアントが `wss://` を補う）。
    ```js
-   partyHost:'petit-gomoku.YOURNAME.partykit.dev'
+   partyHost:'petit-gomoku.YOURSUBDOMAIN.workers.dev'
    ```
-3. `sw.js` の `CACHE_VERSION` を上げて（index.html を変更したため）、サイトを公開（GitHub Pages 等）。
-4. `partyHost` が空のままなら、オンライン対戦ボタンは「準備中」表示で無効化され、ローカル対戦・他ゲームは無傷で動作する。
+3. `index.html` を変更したら `sw.js` の `CACHE_VERSION` を上げてサイトを公開（GitHub Pages 等）。
+   ※ 本移行ではクライアントの接続パスは互換維持のため index.html は無変更（ホスト設定だけ）。
+4. `partyHost` が空のままなら、オンライン対戦ボタンは「準備中」で無効化され、ローカル対戦・他ゲームは無傷。
 
 ## 運用メモ
-- 状態は Durable Object の storage と各接続の `conn.state` に永続（WebSocket Hibernation 対応）。
-- MVP では席は DO 生存中ずっと保持（再接続猶予）。長時間放置部屋の自動掃除（storage.deleteAll + alarm）は将来の改善余地。
+- 状態は DO storage（`game`）と各接続の `conn.state` に永続（WebSocket Hibernation 有効: `static options={hibernate:true}`）。
+- 席解放: 席プレイヤー切断後 30秒（`GRACE_MS`）再接続が無ければ席解放。DO Alarm で実装（ハイバネーションを越える）。対局途中の解放は盤リセット。
 - 観戦者の昇格（席が空いたら観戦→対局）は MVP では行わない。
+- `ranking-worker/` とは別 Worker。互いに非干渉。

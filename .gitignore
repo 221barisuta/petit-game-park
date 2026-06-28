@@ -1,5 +1,6 @@
 .claude/
 .DS_Store
 ranking-worker/.wrangler/
+party/.wrangler/
 node_modules/
 .partykit/

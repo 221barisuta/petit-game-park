@@ -2,5 +2,9 @@
   "name": "petit-gomoku",
   "private": true,
   "type": "module",
-  "description": "PartyKit server for petit-game-park gomoku online multiplayer"
+  "description": "PartyKit server for petit-game-park gomoku online multiplayer",
+  "devDependencies": {
+    "partyserver": "^0.5.8",
+    "wrangler": "^4.86.0"
+  }
 }
