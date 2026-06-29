@@ -2755,17 +2755,20 @@ function renderOnlineBar(){
   if(series.length&&g){
     const myPid=(me==='black'||me==='white')&&g.seats[me]?g.seats[me].pid:null;
     const pidName={};if(g.seats.black)pidName[g.seats.black.pid]=g.seats.black.name;if(g.seats.white)pidName[g.seats.white.pid]=g.seats.white.name;
-    let win=0,lose=0,draw=0;const rows=[];
+    let win=0,lose=0,draw=0;
+    seriesList.textContent=''; // クリア。名前(ユーザー入力)を含むので DOM+textContent で生成しXSSを防ぐ
     series.forEach((e,k)=>{
       let cls,label;
       if(e.winner===null){draw++;cls='draw';label='ひきわけ';}
       else if(myPid&&e.winner===myPid){win++;cls='win';label='あなたの かち';}
       else if(myPid){lose++;cls='lose';label='あいての かち';}
       else{cls='draw';label=(pidName[e.winner]||'？')+' の かち';} // 観戦は名前で
-      rows.push('<div>'+(k+1)+'局目: <span class="'+cls+'">'+label+'</span></div>');
+      const row=document.createElement('div');
+      row.appendChild(document.createTextNode((k+1)+'局目: '));
+      const sp=document.createElement('span');sp.className=cls;sp.textContent=label;
+      row.appendChild(sp);seriesList.appendChild(row);
     });
     seriesBtn.textContent=myPid?('つうさん あなた '+win+' - '+lose+' あいて'+(draw?'（ひきわけ '+draw+'）':'')):('せいせき '+series.length+'局');
-    seriesList.innerHTML=rows.join('');
     seriesBtn.classList.remove('hidden');
   }else{seriesBtn.classList.add('hidden');seriesList.classList.add('hidden');}
 }

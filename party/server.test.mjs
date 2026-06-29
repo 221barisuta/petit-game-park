@@ -151,6 +151,7 @@ async function freshSrv() {
   srv.now = () => 31000; await srv.onAlarm();
   ck('midgame:seat-freed', srv.game.seats.white === null);
   ck('midgame:board-reset', srv.game.board.every(c => c === null) && srv.game.turn === 'black' && srv.game.result === null && srv.game.last === -1);
+  ck('midgame:moves-cleared', srv.game.moves.length === 0); // #2: 途中解放リセットで moves も必ずクリア
   ck('midgame:gameNo++', srv.game.gameNo === before + 1);
   ck('midgame:black-kept', srv.game.seats.black !== null);
   const N = new Conn('N'); connect(N); await hello(N, '新');
@@ -213,6 +214,30 @@ async function freshSrv() {
   for (const [cc, i] of seq2) await move(cc, i);
   ck('series:g2-winner-pid-stable', srv.game.series.length === 2 && srv.game.series[1].winner === pidW);
   ck('series:in-state', B.lastOf('state').series.length === 2);
+}
+
+// ── #1 旧形式storage(moves/series/pid 無し)の正規化: onStartで補完し例外なく動く ──
+{ const room = new Room();
+  const b = new Array(GO_N * GO_N).fill(null); b[idx(7, 7)] = 'black';
+  // 本機能デプロイ前から残る旧形式 game を storage に直接投入 (黒が1手打った進行中)
+  await room.storage.put('game', {
+    board: b, turn: 'white', last: idx(7, 7), result: null,
+    seats: { black: { token: 'tb', name: '旧くろ' }, white: { token: 'tw', name: '旧しろ' } },
+    rematch: { black: false, white: false }, gameNo: 3,
+  });
+  const srv = new GomokuServer(room); await srv.onStart();
+  ck('legacy:moves-seeded', srv.game.moves.length === 1 && srv.game.moves[0] === idx(7, 7));
+  ck('legacy:series-init', Array.isArray(srv.game.series) && srv.game.series.length === 0);
+  ck('legacy:pid-added', !!srv.game.seats.black.pid && !!srv.game.seats.white.pid && srv.game.seats.black.pid !== srv.game.seats.white.pid);
+  const B = new Conn('lb'); room.conns.add(B); srv.onConnect(B);
+  await srv.onMessage(JSON.stringify({ type: 'hello', name: 'くろ', token: 'tb' }), B);
+  ck('legacy:reconnect-black', B.lastOf('assigned').seat === 'black');
+  // seedされた直前手(黒)を黒が待った → 例外なく成立 (旧storageでも g.moves が機能する)
+  await srv.onMessage(JSON.stringify({ type: 'undo' }), B);
+  ck('legacy:seeded-undo-ok', srv.game.board[idx(7, 7)] === null && srv.game.last === -1 && srv.game.moves.length === 0 && srv.game.turn === 'black');
+  // 続けて新規着手も g.moves.push が例外を出さない
+  await srv.onMessage(JSON.stringify({ type: 'move', index: idx(5, 5) }), B);
+  ck('legacy:move-after-ok', srv.game.board[idx(5, 5)] === 'black' && srv.game.moves.length === 1);
 }
 
 console.log('[server logic] pass=' + pass + ' / fail=' + fail, log.length ? log : '');

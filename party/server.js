@@ -7,8 +7,11 @@
    - WebSocket Hibernation 対応 (状態は storage と conn.state に永続)
 
    メッセージ (JSON):
-     client→server: hello{token?,name} / move{index} / rename{name} / rematch{on}
-     server→client: assigned{seat,token} / state{...} / error{msg} */
+     client→server: hello{token?,name} / move{index} / undo / rename{name} / rematch{on}
+     server→client: assigned{seat,token} / state{...,series,seats[].pid} / toast{msg} / error{msg}
+   - undo(待った): 直前手の本人だけ・相手応手前だけ取消可。成立時 相手へ toast
+   - series: [{game,winner: pid|null}] をstateで配信。pid=公開のプレイヤー識別(色は毎局入替のため)
+   - 再戦: 先後入替後、席が変わった接続へ新しい assigned を再送 (clientのseat更新) */
 import { GO_N, checkGomoku } from './gomoku-core.js';
 
 const SIZE = GO_N * GO_N; // 225
@@ -46,7 +49,13 @@ export default class GomokuServer {
   }
 
   async onStart() {
-    this.game = (await this.room.storage.get('game')) || freshGame();
+    const g = (await this.room.storage.get('game')) || freshGame();
+    // 旧形式storage(本機能デプロイ前から残る部屋)の正規化: 新フィールドを補完して例外を防ぐ
+    if (!Array.isArray(g.moves)) g.moves = (g.last != null && g.last >= 0) ? [g.last] : []; // 進行中なら直前手をseed(待った可能に)
+    if (!Array.isArray(g.series)) g.series = [];
+    if (!g.rematch) g.rematch = { black: false, white: false };
+    for (const c of MARKS) if (g.seats[c] && !g.seats[c].pid) g.seats[c].pid = crypto.randomUUID().slice(0, 8);
+    this.game = g;
   }
   async save() {
     await this.room.storage.put('game', this.game);
@@ -106,8 +115,8 @@ export default class GomokuServer {
         if (!g.result && g.board.some(c => c)) midGameReset = true; // 対局途中の解放 → 盤リセット
       }
     }
-    if (released && midGameReset) { // fresh盤で残存席+新規がクリーンに開始できるように
-      g.board = new Array(SIZE).fill(null); g.turn = 'black'; g.last = -1; g.result = null;
+    if (released && midGameReset) { // fresh盤で残存席+新規がクリーンに開始できるように (moves も必ずクリア)
+      resetBoard(g);
       g.rematch = { black: false, white: false }; g.gameNo++;
     }
     await this.save();
