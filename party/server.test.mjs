@@ -95,6 +95,9 @@ ck('rematch:reset', r.result === null && r.board.every(c => c === null) && r.las
 ck('rematch:gameNo', r.gameNo === 2);
 ck('rematch:swap-seats', tokB === undefined ? false : true); // トークンは保持
 ck('rematch:conn-seat-swapped', b2.state.seat === 'white' && w.state.seat === 'black'); // 先後入替が接続にも反映
+// #3: 入替後に各接続へ新しい assigned が再送される (これが無いと client の seat が古いまま=手番ズレ)
+ck('rematch:reassigned-b2', b2.lastOf('assigned').seat === 'white' && b2.lastOf('assigned').token === tokB);
+ck('rematch:reassigned-w', w.lastOf('assigned').seat === 'black' && w.lastOf('assigned').token === tokW);
 
 // ── 席解放タイムアウト (onClose で切断記録 → onAlarm で解放。時刻は srv.now で注入) ──
 async function freshSrv() {
@@ -102,7 +105,9 @@ async function freshSrv() {
   return { room, srv,
     connect: c => { room.conns.add(c); srv.onConnect(c); },
     hello: (c, n, t) => srv.onMessage(JSON.stringify({ type: 'hello', name: n, token: t }), c),
-    move: (c, i) => srv.onMessage(JSON.stringify({ type: 'move', index: i }), c) };
+    move: (c, i) => srv.onMessage(JSON.stringify({ type: 'move', index: i }), c),
+    undo: c => srv.onMessage(JSON.stringify({ type: 'undo' }), c),
+    rematch: c => srv.onMessage(JSON.stringify({ type: 'rematch', on: true }), c) };
 }
 // ① 30秒経過で席解放 → 空席に新規着席できる / 猶予内の onAlarm 空振りでは解放しない
 { const { room, srv, connect, hello } = await freshSrv();
@@ -146,6 +151,7 @@ async function freshSrv() {
   srv.now = () => 31000; await srv.onAlarm();
   ck('midgame:seat-freed', srv.game.seats.white === null);
   ck('midgame:board-reset', srv.game.board.every(c => c === null) && srv.game.turn === 'black' && srv.game.result === null && srv.game.last === -1);
+  ck('midgame:moves-cleared', srv.game.moves.length === 0); // #2: 途中解放リセットで moves も必ずクリア
   ck('midgame:gameNo++', srv.game.gameNo === before + 1);
   ck('midgame:black-kept', srv.game.seats.black !== null);
   const N = new Conn('N'); connect(N); await hello(N, '新');
@@ -164,6 +170,74 @@ async function freshSrv() {
   srv.now = () => 31000; await srv.onAlarm();
   ck('decided:seat-freed', srv.game.seats.white === null);
   ck('decided:no-reset', srv.game.result && srv.game.result.winner === 'black' && srv.game.gameNo === gn);
+}
+
+// ── #4 待った (undo): 直前手の本人だけ・相手応手前だけ・直前1手のみ・相手へ通知 ──
+{ const { room, srv, connect, hello, move, undo } = await freshSrv();
+  const B = new Conn('B'); connect(B); await hello(B, 'くろ');
+  const W = new Conn('W'); connect(W); await hello(W, 'しろ');
+  await move(B, idx(7, 7));            // 黒が打つ → 手番は白、直前手は黒
+  // 相手(白=手番側)の待ったは無効
+  await undo(W);
+  ck('undo:opponent-rejected', W.lastOf('error') && srv.game.board[idx(7, 7)] === 'black');
+  // 直前手の本人(黒)の待ったは成立 → 石が消え手番が黒へ戻る
+  await undo(B);
+  ck('undo:self-ok-removed', srv.game.board[idx(7, 7)] === null && srv.game.last === -1 && srv.game.turn === 'black');
+  ck('undo:opponent-toast', W.lastOf('toast') && /まった/.test(W.lastOf('toast').msg));
+  // 連続待った(もう直前手が無い)は不可
+  const errsBefore = B.sent.filter(m => m.type === 'error').length;
+  await undo(B);
+  ck('undo:no-prev-rejected', B.sent.filter(m => m.type === 'error').length === errsBefore + 1);
+  // 相手が打った後は待った不可: 黒(7,7)→白(8,8)、ここで黒のundoは「直前手が白」で不可
+  await move(B, idx(7, 7)); await move(W, idx(8, 8));
+  const e2 = B.sent.filter(m => m.type === 'error').length;
+  await undo(B);
+  ck('undo:after-opp-move-rejected', B.sent.filter(m => m.type === 'error').length === e2 + 1 && srv.game.board[idx(8, 8)] === 'white');
+}
+
+// ── #8 シリーズ: 決着ごとに勝者pidを記録、再戦(先後入替)を跨いでも安定 ──
+{ const { room, srv, connect, hello, move, rematch } = await freshSrv();
+  const B = new Conn('B'); connect(B); await hello(B, 'くろ');
+  const W = new Conn('W'); connect(W); await hello(W, 'しろ');
+  const pidB = srv.game.seats.black.pid, pidW = srv.game.seats.white.pid;
+  ck('series:pids-distinct', pidB && pidW && pidB !== pidW);
+  ck('series:pid-in-state', B.lastOf('state').seats.black.pid === pidB); // pidはstateで配信
+  // 1局目: 黒(0..4,5)で勝ち
+  const win = c => { const seq = [[B, idx(0, 5)], [W, idx(0, 0)], [B, idx(1, 5)], [W, idx(2, 0)], [B, idx(2, 5)], [W, idx(4, 0)], [B, idx(3, 5)], [W, idx(6, 0)], [B, idx(4, 5)]]; return seq; };
+  for (const [cc, i] of win()) await move(cc, i);
+  ck('series:g1-winner', srv.game.series.length === 1 && srv.game.series[0].winner === pidB);
+  // 再戦 → 先後入替 (B=白, W=黒)。pidは保持
+  await rematch(B); await rematch(W);
+  ck('series:rematch-swap', srv.game.seats.white.pid === pidB && srv.game.seats.black.pid === pidW);
+  // 2局目: いまの黒(=元W,pidW)が勝つ
+  const seq2 = [[W, idx(0, 5)], [B, idx(0, 0)], [W, idx(1, 5)], [B, idx(2, 0)], [W, idx(2, 5)], [B, idx(4, 0)], [W, idx(3, 5)], [B, idx(6, 0)], [W, idx(4, 5)]];
+  for (const [cc, i] of seq2) await move(cc, i);
+  ck('series:g2-winner-pid-stable', srv.game.series.length === 2 && srv.game.series[1].winner === pidW);
+  ck('series:in-state', B.lastOf('state').series.length === 2);
+}
+
+// ── #1 旧形式storage(moves/series/pid 無し)の正規化: onStartで補完し例外なく動く ──
+{ const room = new Room();
+  const b = new Array(GO_N * GO_N).fill(null); b[idx(7, 7)] = 'black';
+  // 本機能デプロイ前から残る旧形式 game を storage に直接投入 (黒が1手打った進行中)
+  await room.storage.put('game', {
+    board: b, turn: 'white', last: idx(7, 7), result: null,
+    seats: { black: { token: 'tb', name: '旧くろ' }, white: { token: 'tw', name: '旧しろ' } },
+    rematch: { black: false, white: false }, gameNo: 3,
+  });
+  const srv = new GomokuServer(room); await srv.onStart();
+  ck('legacy:moves-seeded', srv.game.moves.length === 1 && srv.game.moves[0] === idx(7, 7));
+  ck('legacy:series-init', Array.isArray(srv.game.series) && srv.game.series.length === 0);
+  ck('legacy:pid-added', !!srv.game.seats.black.pid && !!srv.game.seats.white.pid && srv.game.seats.black.pid !== srv.game.seats.white.pid);
+  const B = new Conn('lb'); room.conns.add(B); srv.onConnect(B);
+  await srv.onMessage(JSON.stringify({ type: 'hello', name: 'くろ', token: 'tb' }), B);
+  ck('legacy:reconnect-black', B.lastOf('assigned').seat === 'black');
+  // seedされた直前手(黒)を黒が待った → 例外なく成立 (旧storageでも g.moves が機能する)
+  await srv.onMessage(JSON.stringify({ type: 'undo' }), B);
+  ck('legacy:seeded-undo-ok', srv.game.board[idx(7, 7)] === null && srv.game.last === -1 && srv.game.moves.length === 0 && srv.game.turn === 'black');
+  // 続けて新規着手も g.moves.push が例外を出さない
+  await srv.onMessage(JSON.stringify({ type: 'move', index: idx(5, 5) }), B);
+  ck('legacy:move-after-ok', srv.game.board[idx(5, 5)] === 'black' && srv.game.moves.length === 1);
 }
 
 console.log('[server logic] pass=' + pass + ' / fail=' + fail, log.length ? log : '');

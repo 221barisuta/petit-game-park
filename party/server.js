@@ -7,8 +7,11 @@
    - WebSocket Hibernation 対応 (状態は storage と conn.state に永続)
 
    メッセージ (JSON):
-     client→server: hello{token?,name} / move{index} / rename{name} / rematch{on}
-     server→client: assigned{seat,token} / state{...} / error{msg} */
+     client→server: hello{token?,name} / move{index} / undo / rename{name} / rematch{on}
+     server→client: assigned{seat,token} / state{...,series,seats[].pid} / toast{msg} / error{msg}
+   - undo(待った): 直前手の本人だけ・相手応手前だけ取消可。成立時 相手へ toast
+   - series: [{game,winner: pid|null}] をstateで配信。pid=公開のプレイヤー識別(色は毎局入替のため)
+   - 再戦: 先後入替後、席が変わった接続へ新しい assigned を再送 (clientのseat更新) */
 import { GO_N, checkGomoku } from './gomoku-core.js';
 
 const SIZE = GO_N * GO_N; // 225
@@ -25,11 +28,18 @@ function freshGame() {
     board: new Array(SIZE).fill(null),
     turn: 'black',
     last: -1,
+    moves: [],                                      // 着手index履歴 (待ったで pop / last復元に使う)
     result: null,                                   // {winner,line} | {draw:true}
-    seats: { black: null, white: null },            // {token,name} | null
+    seats: { black: null, white: null },            // {token,name,disc,pid} | null
     rematch: { black: false, white: false },
     gameNo: 1,
+    series: [],                                     // シリーズ成績 [{game, winner: pid|null(引分)}]
   };
+}
+// 盤だけ新規化 (席/シリーズ/トークンは保持)。再戦リセットで使う
+function resetBoard(g) {
+  g.board = new Array(SIZE).fill(null);
+  g.turn = 'black'; g.last = -1; g.moves = []; g.result = null;
 }
 
 export default class GomokuServer {
@@ -39,7 +49,13 @@ export default class GomokuServer {
   }
 
   async onStart() {
-    this.game = (await this.room.storage.get('game')) || freshGame();
+    const g = (await this.room.storage.get('game')) || freshGame();
+    // 旧形式storage(本機能デプロイ前から残る部屋)の正規化: 新フィールドを補完して例外を防ぐ
+    if (!Array.isArray(g.moves)) g.moves = (g.last != null && g.last >= 0) ? [g.last] : []; // 進行中なら直前手をseed(待った可能に)
+    if (!Array.isArray(g.series)) g.series = [];
+    if (!g.rematch) g.rematch = { black: false, white: false };
+    for (const c of MARKS) if (g.seats[c] && !g.seats[c].pid) g.seats[c].pid = crypto.randomUUID().slice(0, 8);
+    this.game = g;
   }
   async save() {
     await this.room.storage.put('game', this.game);
@@ -99,8 +115,8 @@ export default class GomokuServer {
         if (!g.result && g.board.some(c => c)) midGameReset = true; // 対局途中の解放 → 盤リセット
       }
     }
-    if (released && midGameReset) { // fresh盤で残存席+新規がクリーンに開始できるように
-      g.board = new Array(SIZE).fill(null); g.turn = 'black'; g.last = -1; g.result = null;
+    if (released && midGameReset) { // fresh盤で残存席+新規がクリーンに開始できるように (moves も必ずクリア)
+      resetBoard(g);
       g.rematch = { black: false, white: false }; g.gameNo++;
     }
     await this.save();
@@ -125,7 +141,8 @@ export default class GomokuServer {
         const open = MARKS.find(c => !g.seats[c]);
         if (open) {
           seat = open;
-          g.seats[open] = { token: crypto.randomUUID(), name, disc: null };
+          // token=再接続用の秘密 / pid=公開のプレイヤー識別(シリーズ集計用。全員へ配信してよい)
+          g.seats[open] = { token: crypto.randomUUID(), name, disc: null, pid: crypto.randomUUID().slice(0, 8) };
         }
       } else {
         g.seats[seat].name = name; // 復帰時に名前を更新
@@ -157,13 +174,38 @@ export default class GomokuServer {
       if (g.board[i] !== null) return this.err(conn, 'すでに石があります');
       // 受理
       g.board[i] = st.seat;
-      g.last = i;
+      g.last = i; g.moves.push(i);
       const r = checkGomoku(g.board, i);
-      if (r.winner) g.result = { winner: r.winner, line: r.line };
-      else if (g.board.every(c => c)) g.result = { draw: true };
-      else g.turn = g.turn === 'black' ? 'white' : 'black';
+      if (r.winner) { // 勝者の pid をシリーズに記録 (色は毎局入替なので pid で識別)
+        g.result = { winner: r.winner, line: r.line };
+        g.series.push({ game: g.gameNo, winner: g.seats[r.winner] ? g.seats[r.winner].pid : null });
+      } else if (g.board.every(c => c)) {
+        g.result = { draw: true };
+        g.series.push({ game: g.gameNo, winner: null });
+      } else g.turn = g.turn === 'black' ? 'white' : 'black';
       await this.save();
       this.broadcastState();
+      return;
+    }
+
+    if (m.type === 'undo') {
+      // 待った: 直前に着手した本人だけ・相手が打つ前だけ取り消せる (合意不要・レース無し)
+      if (st.seat !== 'black' && st.seat !== 'white') return; // 観戦者は無視
+      if (g.result || g.last < 0) return this.err(conn, 'まったは できません');
+      if (g.board[g.last] !== st.seat) return this.err(conn, 'まったは できません'); // 直前手が自分の石でない
+      if (g.turn === st.seat) return this.err(conn, 'まったは できません');          // 自分の手番=まだ打ってない/相手が打った後
+      g.board[g.last] = null;             // 直前1手を取り消し
+      g.moves.pop();
+      g.last = g.moves.length ? g.moves[g.moves.length - 1] : -1;
+      g.turn = st.seat;                   // 手番を本人へ戻す
+      await this.save();
+      this.broadcastState();
+      // 相手へ通知トースト (requester以外の着席相手)
+      const opp = st.seat === 'black' ? 'white' : 'black';
+      for (const c of this.room.getConnections()) {
+        const cs = c.state;
+        if (cs && cs.seat === opp) c.send(JSON.stringify({ type: 'toast', msg: 'あいてが まったを しました' }));
+      }
       return;
     }
 
@@ -183,16 +225,19 @@ export default class GomokuServer {
       g.rematch[st.seat] = m.on !== false; // 既定 true。on:false で取り消し
       // 両席合意 → リセット + 先手後手入替
       if (g.rematch.black && g.rematch.white) {
-        const sw = g.seats.black; g.seats.black = g.seats.white; g.seats.white = sw; // 席(=トークン+名前)を入替
-        g.board = new Array(SIZE).fill(null);
-        g.turn = 'black'; g.last = -1; g.result = null;
+        const sw = g.seats.black; g.seats.black = g.seats.white; g.seats.white = sw; // 席(=トークン+名前+pid)を入替
+        resetBoard(g);                       // 盤だけ初期化 (series/席は保持)
         g.rematch = { black: false, white: false };
         g.gameNo++;
-        // 各接続の seat を「トークンがいまどちらの席にあるか」で更新
+        // 各接続の seat を「トークンがいまどちらの席にあるか」で更新し、新しい assigned を再送
         for (const c of this.room.getConnections()) {
           const cs = c.state; if (!cs || !cs.token) continue;
           const ns = MARKS.find(mk => g.seats[mk] && g.seats[mk].token === cs.token) || 'spectator';
-          if (ns !== cs.seat) c.setState({ ...cs, seat: ns });
+          if (ns !== cs.seat) {
+            c.setState({ ...cs, seat: ns });
+            // ★#3修正: 入替後の席をクライアントへ通知。これが無いと client の state.seat が古いまま=手番ズレで両者打てない
+            c.send(JSON.stringify({ type: 'assigned', seat: ns, token: ns === 'spectator' ? null : cs.token, name: cs.name }));
+          }
         }
       }
       await this.save();
@@ -214,7 +259,7 @@ export default class GomokuServer {
     }
     const seat = c => {
       const s = this.game.seats[c];
-      return s ? { name: s.name, connected: live.has(s.token) } : null;
+      return s ? { name: s.name, connected: live.has(s.token), pid: s.pid } : null; // pid=公開ID(集計用)
     };
     return { black: seat('black'), white: seat('white'), spectators };
   }
@@ -224,7 +269,7 @@ export default class GomokuServer {
     return {
       type: 'state',
       board: g.board, turn: g.turn, last: g.last, result: g.result,
-      gameNo: g.gameNo, rematch: g.rematch,
+      gameNo: g.gameNo, rematch: g.rematch, series: g.series,
       seats: { black: p.black, white: p.white }, spectators: p.spectators,
     };
   }

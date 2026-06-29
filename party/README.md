@@ -18,9 +18,12 @@
 | `wrangler.toml` | Workers/DO 設定（DOバインディング `Main`→party `main`、SQLite-backed DO、migration） |
 
 ## メッセージ仕様（WebSocket / JSON）
-- client→server: `hello{token?,name}` / `move{index}` / `rename{name}` / `rematch{on}`
-- server→client: `assigned{seat,token}` / `state{board,turn,last,result,seats,spectators,gameNo,rematch}` / `error{msg}`
+- client→server: `hello{token?,name}` / `move{index}` / `undo` / `rename{name}` / `rematch{on}`
+- server→client: `assigned{seat,token}` / `state{board,turn,last,result,seats,spectators,gameNo,rematch,series}` / `toast{msg}` / `error{msg}`
 - 座席: 1人目=黒(先手) / 2人目=白(後手) / 3人目以降=観戦。`hello.token` が既存席と一致すれば同席復帰。
+- `undo`(待った): 直前に着手した本人だけ・相手応手前だけ取消可。成立時は相手へ `toast` 通知。
+- `series`: `[{game, winner: pid|null}]`。`seats[].pid` は公開のプレイヤー識別（色は毎局入替のため pid で集計）。
+- 再戦成立時は先後を入替え、席が変わった接続へ新しい `assigned` を再送（クライアントの seat 更新）。
 - 接続パス: `wss://<host>/parties/main/<部屋コード>`（DOバインディング `Main` が kebab 化されて party `main` に対応）。
 
 ## セットアップ（依存インストール）
