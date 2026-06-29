@@ -236,6 +236,17 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 #onlineBar .ol-seatline{gap:3cqw;font-weight:800}
 #onlineBar #olBlack{color:#fff}#onlineBar #olWhite{color:#cfe0ff}#onlineBar #olSpec{color:#bcb3d6;font-weight:700}
 #onlineBar .me{text-decoration:underline;text-underline-offset:.6cqw}
+#onlineBar .ol-mini.ol-lineinv{width:auto;padding:0 2cqw;font-size:2.8cqw;font-weight:800;
+  background:#06c755;border-color:#06c755;color:#fff} /* LINE招待 */
+#onlineBar .ol-seriesline{position:relative}
+#onlineBar .ol-series{pointer-events:auto;font-size:3cqw;font-weight:800;color:#ffd23f;
+  background:rgba(255,255,255,.1);border:.4cqw solid rgba(255,255,255,.22);border-radius:2cqw;padding:.4cqw 2.4cqw}
+#onlineBar .ol-series.hidden{display:none}
+#onlineBar .ol-serieslist{position:absolute;left:0;bottom:120%;z-index:6;min-width:46cqw;max-height:46cqw;overflow:auto;
+  background:#1c1733;border:.5cqw solid #4b4280;border-radius:2.4cqw;padding:2.4cqw 3cqw;
+  font-size:2.9cqw;font-weight:700;color:#e8e2ff;line-height:1.7;box-shadow:0 1.5cqw 4cqw rgba(0,0,0,.5)}
+#onlineBar .ol-serieslist.hidden{display:none}
+#onlineBar .ol-serieslist .win{color:#7af0c0}#onlineBar .ol-serieslist .lose{color:#ff9bb5}#onlineBar .ol-serieslist .draw{color:#cfc6e8}
 
 /* ---- サウンド確認ダイアログ ---- */
 #soundAsk{z-index:60}
@@ -357,10 +368,15 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
       <div class="ol-line"><span class="ol-room">あいことば <b id="olRoomCode">—</b></span>
         <button id="olCopy" class="ol-mini" title="コードを コピー">📋</button>
         <button id="olCopyLink" class="ol-mini" title="リンクを コピー">🔗</button>
+        <button id="olLine" class="ol-mini ol-lineinv" title="LINEで しょうたい">LINE</button>
       </div>
       <div class="ol-line"><span id="olStatus" class="ol-status">せつぞくちゅう…</span></div>
       <div class="ol-line ol-seatline">
         <span id="olBlack">●—</span><span id="olWhite">○—</span><span id="olSpec">👀0</span>
+      </div>
+      <div class="ol-line ol-seriesline">
+        <button id="olSeries" class="ol-series hidden" title="きょくべつ せいせき">つうさん 0-0</button>
+        <div id="olSeriesList" class="ol-serieslist hidden"></div>
       </div>
     </div>
   </section>
@@ -2668,7 +2684,7 @@ const GomokuNet=(()=>{
   const randName=()=>ADJ[ri(ADJ.length)]+ANI[ri(ANI.length)];
   function getName(){let n=store.get(NAME_KEY,'');if(!n){n=randName();store.set(NAME_KEY,n);}return n;}
   function setName(n){const v=String(n||'').replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,12);store.set(NAME_KEY,v||randName());}
-  const state={ws:null,code:'',status:'idle',seat:null,game:null,error:'',onChange:null,_left:false,_retry:0};
+  const state={ws:null,code:'',status:'idle',seat:null,game:null,error:'',onChange:null,_left:false,_retry:0,toastSeq:0,toastMsg:''};
   const host=()=>String((window.PGP_CONFIG||{}).partyHost||'').trim();
   const available=()=>!!host();
   const emit=()=>{if(state.onChange)state.onChange();};
@@ -2690,6 +2706,7 @@ const GomokuNet=(()=>{
       else if(m.type==='state'){state.game=m;
         state.status=m.result?'ended':((m.seats.black&&m.seats.white)?'playing':'waiting');emit();}
       else if(m.type==='error'){state.error=m.msg||'';emit();}
+      else if(m.type==='toast'){state.toastSeq++;state.toastMsg=m.msg||'';emit();} // 相手の待った通知など
     };
     ws.onclose=()=>{state.ws=null;if(state.status==='idle'||state._left)return;
       state.status='disconnected';emit();
@@ -2701,6 +2718,7 @@ const GomokuNet=(()=>{
   const send=o=>{if(state.ws&&state.ws.readyState===1)state.ws.send(JSON.stringify(o));};
   return {state,available,host,getName,setName,randName,genCode,connect,disconnect,leave,seatKey,
     move:i=>send({type:'move',index:i}),
+    undo:()=>send({type:'undo'}),
     rename:n=>{setName(n);send({type:'rename',name:getName()});},
     rematch:(on=true)=>send({type:'rematch',on})};
 })();
@@ -2709,6 +2727,11 @@ function roomLink(code){return location.origin+location.pathname+'?room='+encode
 function setRoomUrl(code){try{history.replaceState(null,'',code?roomLink(code):location.origin+location.pathname);}catch(e){}}
 function copyText(t){try{navigator.clipboard.writeText(t);}catch(e){}}
 function flashBtn(el,txt){const o=el.textContent;el.textContent=txt;setTimeout(()=>{el.textContent=o;},900);}
+function lineInvite(code){ // #6 LINEで しょうたい (お誘い文+部屋リンク)
+  if(!code)return;
+  const text='「五目並べ」いっしょにやろ！ '+roomLink(code);
+  window.open('https://line.me/R/msg/text/?'+encodeURIComponent(text),'_blank');
+}
 /* オンライン情報バー(DOM)を現在のサーバー状態で更新 */
 function renderOnlineBar(){
   const s=GomokuNet.state;if(s.status==='idle')return;
@@ -2727,6 +2750,24 @@ function renderOnlineBar(){
   else if(s.status==='disconnected')st='せつだん…さいせつぞくちゅう';
   else if(s.status==='error')st=s.error||'エラー';
   $('olStatus').textContent=st;
+  // #8 通算勝敗 + 局別履歴 (色は毎局入替なので pid で集計)
+  const series=(g&&g.series)||[],seriesBtn=$('olSeries'),seriesList=$('olSeriesList');
+  if(series.length&&g){
+    const myPid=(me==='black'||me==='white')&&g.seats[me]?g.seats[me].pid:null;
+    const pidName={};if(g.seats.black)pidName[g.seats.black.pid]=g.seats.black.name;if(g.seats.white)pidName[g.seats.white.pid]=g.seats.white.name;
+    let win=0,lose=0,draw=0;const rows=[];
+    series.forEach((e,k)=>{
+      let cls,label;
+      if(e.winner===null){draw++;cls='draw';label='ひきわけ';}
+      else if(myPid&&e.winner===myPid){win++;cls='win';label='あなたの かち';}
+      else if(myPid){lose++;cls='lose';label='あいての かち';}
+      else{cls='draw';label=(pidName[e.winner]||'？')+' の かち';} // 観戦は名前で
+      rows.push('<div>'+(k+1)+'局目: <span class="'+cls+'">'+label+'</span></div>');
+    });
+    seriesBtn.textContent=myPid?('つうさん あなた '+win+' - '+lose+' あいて'+(draw?'（ひきわけ '+draw+'）':'')):('せいせき '+series.length+'局');
+    seriesList.innerHTML=rows.join('');
+    seriesBtn.classList.remove('hidden');
+  }else{seriesBtn.classList.add('hidden');seriesList.classList.add('hidden');}
 }
 function hideOnlineUI(){$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');}
 /* boot から1回だけ呼ぶ: オンライン入室UIのDOMハンドラを束ねる */
@@ -2745,6 +2786,11 @@ function setupOnlineUI(){
   $('olBack').addEventListener('click',()=>{AudioKit.pop();GomokuNet.leave();hideOnlineUI();if(game&&game.onlineBack)game.onlineBack();});
   $('olCopy').addEventListener('click',()=>{AudioKit.pop();copyText(GomokuNet.state.code);flashBtn($('olCopy'),'✓');});
   $('olCopyLink').addEventListener('click',()=>{AudioKit.pop();copyText(roomLink(GomokuNet.state.code));flashBtn($('olCopyLink'),'✓');});
+  $('olLine').addEventListener('click',()=>{AudioKit.pop();lineInvite(GomokuNet.state.code);}); // #6
+  // #8 局別履歴: タップで開閉(スマホ) + ホバーで表示(PC)
+  $('olSeries').addEventListener('click',()=>{AudioKit.pop();$('olSeriesList').classList.toggle('hidden');});
+  $('olSeries').addEventListener('mouseenter',()=>$('olSeriesList').classList.remove('hidden'));
+  $('olSeries').addEventListener('mouseleave',()=>$('olSeriesList').classList.add('hidden'));
 }
 registerGame({
   id:'gomoku', emoji:'⚫', title:'ごもくならべ',
@@ -2779,6 +2825,7 @@ registerGame({
     let turn=0,result=null,winLine=null,last=-1,t=0;
     let history=[],hint=-1,hintT=0,undoLock=false,cpuTimer=0; // 履歴 / ヒント / 連打防止 / CPU思考ディレイ
     let onlineSeenNo=-1,onlineFxDone=false; // オンライン: 対局番号の変化検出 / 結果演出を1回だけ
+    let pendingMove=-1,onlineToastSeq=0,onlineSnap=''; // 仮置き(#5) / 相手通知の既読seq / 盤状態スナップ(変化検出)
     const parts=new Particles();
 
     function applyCfg(){ // cfg → players
@@ -2920,6 +2967,7 @@ registerGame({
     function enterOnline(){
       if(!GomokuNet.available())return;
       screen='online';result=null;winLine=null;parts.list=[];hint=-1;hintT=0;onlineSeenNo=-1;onlineFxDone=false;
+      pendingMove=-1;onlineToastSeq=GomokuNet.state.toastSeq;onlineSnap='';
       if(pendingOnlineRoom){const code=pendingOnlineRoom;pendingOnlineRoom='';   // ?room= 自動参加
         GomokuNet.connect(code);setRoomUrl(code);$('onlineBar').classList.remove('hidden');renderOnlineBar();}
       else{$('olName').value=GomokuNet.getName();$('olCode').value='';$('olSetupMsg').textContent='';
@@ -2927,7 +2975,7 @@ registerGame({
     }
     function leaveOnline(){
       GomokuNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');
-      setRoomUrl('');screen='setup';A.pop();
+      setRoomUrl('');screen='setup';pendingMove=-1;A.pop();
     }
     function fireResultFx(res){ // 勝敗演出 (place()と同等。1対局1回だけ)
       if(res.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
@@ -2936,19 +2984,29 @@ registerGame({
         confetti();}
     }
     function mirrorOnline(){ // サーバーstate→ローカル描画変数へ反映
-      const ng=GomokuNet.state.game;if(!ng)return;
+      const s=GomokuNet.state,ng=s.game;if(!ng)return;
       if(onlineSeenNo!==ng.gameNo){onlineSeenNo=ng.gameNo;parts.list=[];hint=-1;hintT=0;onlineFxDone=false;} // 新対局(初回/もう一局)
+      // 盤状態(手番/直前手/局番号)が変わったら仮置きをクリア (相手着手・待った・再戦など)
+      const snap=ng.turn+'/'+ng.last+'/'+ng.gameNo;
+      if(snap!==onlineSnap){onlineSnap=snap;pendingMove=-1;}
       for(let i=0;i<N*N;i++)board[i]=ng.board[i]||null;
       turn=ng.turn==='black'?0:1;last=ng.last;
-      if(ng.result){winLine=ng.result.line||null;result=ng.result.draw?{draw:true}:{winner:ng.result.winner};
+      if(ng.result){pendingMove=-1;winLine=ng.result.line||null;result=ng.result.draw?{draw:true}:{winner:ng.result.winner};
         if(!onlineFxDone){onlineFxDone=true;fireResultFx(result);}}
       else{result=null;winLine=null;}
+      // 相手の待った等の通知トースト (新しいseqが来たらbanner表示)
+      if(s.toastSeq!==onlineToastSeq){onlineToastSeq=s.toastSeq;if(s.toastMsg){banner(s.toastMsg);A.bad();}}
     }
     function showHintOnline(){ // 自席・自手番のみローカル計算でヒント (純関数・無害)
       const s=GomokuNet.state,ng=s.game;
       if(!ng||ng.result||(s.seat!=='black'&&s.seat!=='white')||ng.turn!==s.seat){A.bad();return;}
       const idx=getGomokuHint(board,s.seat);
       if(idx>=0&&board[idx]===null){hint=idx;hintT=3.2;A.coin();}else A.bad();
+    }
+    // 待った可否(オンライン): 直前手が自分の石 かつ 自分の手番でない(=直前に打ったのが自分)= 相手応手前
+    function undoOnlineOk(){
+      const s=GomokuNet.state,ng=s.game;
+      return !!(ng&&!ng.result&&(s.seat==='black'||s.seat==='white')&&ng.last>=0&&ng.board[ng.last]===s.seat&&ng.turn!==s.seat);
     }
     function drawOnlineButtons(g){
       const s=GomokuNet.state,ng=s.game;
@@ -2958,7 +3016,7 @@ registerGame({
         drawBtn(g,btnL,'🔄 もう一局','#ff4d94',!seated);
         drawBtn(g,btnR,'↩ まった','#7a6cc0',true);
       }else{
-        drawBtn(g,btnL,'↩ まった','#7a6cc0',true);   // オンラインは待った無効
+        drawBtn(g,btnL,'↩ まった','#7a6cc0',!undoOnlineOk());  // 直前手の本人・相手応手前のみ
         drawBtn(g,btnR,'💡 ヒント','#3a9bdc',!myTurn);
       }
       drawBtn(g,setBtn,'🚪 たいきょ','#5a5278',false,15);
@@ -2969,10 +3027,14 @@ registerGame({
       const seated=(s.seat==='black'||s.seat==='white');
       if(ng.result){ if(hitBtn(btnL,x,y)){seated?(GomokuNet.rematch(true),A.pop()):A.bad();} return; }
       if(hitBtn(btnR,x,y)){showHintOnline();return;}
-      if(hitBtn(btnL,x,y)){A.bad();return;}          // 待った無効
-      if(seated&&ng.turn===s.seat){const c=cellAt(x,y); // 盤タップ→自席自手番ならmove送信(サーバー検証)
-        if(c>=0&&ng.board[c]===null){GomokuNet.move(c);A.pop();}else if(c>=0)A.bad();}
-      else if(cellAt(x,y)>=0)A.bad();
+      if(hitBtn(btnL,x,y)){ if(undoOnlineOk()){GomokuNet.undo();pendingMove=-1;A.pop();}else A.bad(); return; } // 待った
+      // 盤タップ: 自席・自手番のみ。仮置き→同じ交点を再タップで確定(#5)
+      if(seated&&ng.turn===s.seat){
+        const c=cellAt(x,y);if(c<0)return;
+        if(ng.board[c]!==null){A.bad();return;}
+        if(pendingMove===c){GomokuNet.move(c);pendingMove=-1;A.pop();} // 同交点 再タップ=確定
+        else{pendingMove=c;A.pop();}                                   // 仮置き(別交点なら移動)
+      }else if(cellAt(x,y)>=0)A.bad();
     }
     if(pendingOnlineRoom)enterOnline(); // ?room= で開かれた場合は即オンラインへ
 
@@ -3042,6 +3104,13 @@ registerGame({
         // 石
         const sr=CELL*0.46;
         for(let i=0;i<board.length;i++)if(board[i])drawStone(g,board[i],center(i),sr);
+        // 仮置きプレビュー (#5 オンライン: 半透明の自色石 + シアンの確定リング)
+        if(online&&pendingMove>=0&&!board[pendingMove]){
+          const ms=GomokuNet.state.seat,mk=(ms==='black'||ms==='white')?ms:'black',pc=center(pendingMove);
+          g.save();g.globalAlpha=0.4;drawStone(g,mk,pc,sr);g.restore();
+          g.save();g.globalAlpha=0.5+0.5*Math.sin(t*9);g.strokeStyle='#21e6c1';g.lineWidth=3;
+          g.beginPath();g.arc(pc.x,pc.y,sr+2,0,TAU);g.stroke();g.restore();
+        }
         // 直前手マーカー (Should): 小さな赤点
         if(last>=0&&!winLine){
           const c=center(last);
