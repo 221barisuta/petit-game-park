@@ -3096,21 +3096,24 @@ registerGame({
    3×3の穴からモグラが出現。出ているうちにタップで成功。
    爆弾モグラを叩くとコンボリセット。空振りはノーペナルティ。
    ── 純関数 (テスト対象) ────────────────────────────────
-   moleLayout()        : 9穴の中心座標とヒット半径 {holes:[{x,y}],r}
-   hitHole(x,y,layout) : タップ座標 → 穴index または null
+   moleLayout()          : 9穴の中心座標とタップ半径 {holes:[{x,y}],r}
+   hitHole(x,y,targets,r): タップ座標 → 当たったモグラのindex または null
+                           targets[i]=穴iに出ているモグラの見た目中心(なければnull)
+                           ※穴ではなく「せり上がったモグラの位置」で判定する
    ============================================================ */
 function moleLayout(){
   const cols=[88,210,332], rows=[330,452,574]; // W=420基準・HUD/コンボ表示と非干渉
   const holes=[];
   for(const y of rows)for(const x of cols)holes.push({x,y});
-  return {holes, r:52}; // 穴間隔122 > 2*52 なので判定は一意
+  return {holes, r:60}; // タップ半径(見た目のモグラに対して判定)
 }
-function hitHole(x,y,layout){
+function hitHole(x,y,targets,r){
   let best=null, bd=Infinity;
-  for(let i=0;i<layout.holes.length;i++){
-    const h=layout.holes[i];
-    const d=Math.hypot(x-h.x, y-h.y);
-    if(d<=layout.r && d<bd){bd=d; best=i;}
+  for(let i=0;i<targets.length;i++){
+    const t=targets[i];
+    if(!t)continue;                 // その穴にモグラが出ていない
+    const d=Math.hypot(x-t.x, y-t.y);
+    if(d<=r && d<bd){bd=d; best=i;}
   }
   return best;
 }
@@ -3118,19 +3121,24 @@ function runMoleTests(){
   const L=moleLayout();
   let pass=0,fail=0;const log=[];
   const ck=(cond,msg)=>{cond?pass++:fail++;if(!cond)log.push(msg)};
-  // 穴数=9
+  const NUL=()=>new Array(9).fill(null);
+  // 形状
   ck(L.holes.length===9,'holes!=9 ('+L.holes.length+')');
-  // 各穴の中心は自分のindexを返す
-  L.holes.forEach((h,i)=>ck(hitHole(h.x,h.y,L)===i,'center '+i+' -> '+hitHole(h.x,h.y,L)));
-  // 半径ぎりぎり内側は当たる / 外側はnull
-  {const h=L.holes[4];
-   ck(hitHole(h.x+L.r-1,h.y,L)===4,'inside r-1 -> '+hitHole(h.x+L.r-1,h.y,L));
-   ck(hitHole(h.x+L.r+5,h.y,L)===null,'outside r+5 -> '+hitHole(h.x+L.r+5,h.y,L));}
-  // 隣り合う穴の中点はどちらにも入らない (距離61>52)
-  {const a=L.holes[0],b=L.holes[1],mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
-   ck(hitHole(mx,my,L)===null,'midpoint 0-1 -> '+hitHole(mx,my,L));}
-  // 画面の隅(穴なし)はnull
-  ck(hitHole(5,5,L)===null,'corner -> '+hitHole(5,5,L));
+  ck(L.r>0,'r<=0 ('+L.r+')');
+  // 1体だけ出ている: その見た目位置を叩くと当たる
+  {const tg=NUL(); tg[4]={x:200,y:300};
+   ck(hitHole(200,300,tg,L.r)===4,'center hit -> '+hitHole(200,300,tg,L.r));
+   ck(hitHole(200+L.r-2,300,tg,L.r)===4,'inside r -> '+hitHole(200+L.r-2,300,tg,L.r));
+   ck(hitHole(200+L.r+10,300,tg,L.r)===null,'outside r -> '+hitHole(200+L.r+10,300,tg,L.r));
+   // 出ていない穴の座標を叩いても当たらない
+   ck(hitHole(88,330,tg,L.r)===null,'empty hole -> '+hitHole(88,330,tg,L.r));}
+  // 1体も出ていなければ常に null
+  ck(hitHole(200,300,NUL(),L.r)===null,'all-null -> not null');
+  // 2体出ているときは近い方を返す
+  {const tg=NUL(); tg[0]={x:100,y:100}; tg[8]={x:300,y:100};
+   ck(hitHole(112,100,tg,L.r)===0,'nearest 0 -> '+hitHole(112,100,tg,L.r));
+   ck(hitHole(288,100,tg,L.r)===8,'nearest 8 -> '+hitHole(288,100,tg,L.r));
+   ck(hitHole(200,100,tg,L.r)===null,'between(far) -> '+hitHole(200,100,tg,L.r));}
   console.log('[mole tests] pass='+pass+' / fail='+fail, log.length?log:'');
   return {pass,fail,log};
 }
@@ -3323,10 +3331,18 @@ registerGame({
         g.restore();
       },
       onDown(x,y){
-        const idx=hitHole(x,y,L);
-        if(idx==null)return;            // 空振り: ノーペナルティ
+        // 判定は「穴」ではなく、せり上がって見えているモグラ/爆弾の位置に対して行う
+        const targets=new Array(N).fill(null);
+        for(let i=0;i<N;i++){
+          const s=slots[i];
+          if(s&&s.state==='up'){
+            const lift=easeOutBack(clamp(s.rise,0,1))*52;  // 描画の lift と同じ
+            targets[i]={x:L.holes[i].x, y:L.holes[i].y-lift-28}; // モグラ本体の中心あたり
+          }
+        }
+        const idx=hitHole(x,y,targets,L.r);
+        if(idx==null)return;            // 空振り / 出ていない: ノーペナルティ
         const s=slots[idx];
-        if(!s||s.state!=='up')return;   // あなが 空 or ひっこみ中: 無効
         const h=L.holes[idx];
         if(s.kind==='bomb'){
           ctx.judge('wrong',h.x,h.y-34);   // コンボリセット+bad音 (減点なし=既存仕様)

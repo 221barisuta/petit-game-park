@@ -1,7 +1,7 @@
 /* プチゲー★パーク service worker
    キャッシュ優先 + ネットワークフォールバック。オフラインでも起動できる。
    ファイルを更新したら CACHE_VERSION を上げること（古いキャッシュは自動削除）。 */
-const CACHE_VERSION = 'pgp2-v10';
+const CACHE_VERSION = 'pgp2-v11';
 const PRECACHE = [
   './',
   './index.html',
