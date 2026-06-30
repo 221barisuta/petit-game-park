@@ -196,8 +196,8 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 #cdNum.pop{animation:cdPop .5s ease forwards}
 @keyframes cdPop{0%{transform:scale(2.1);opacity:0}30%{transform:scale(1);opacity:1}75%{transform:scale(1);opacity:1}100%{transform:scale(.7);opacity:0}}
 #banner{background:transparent;pointer-events:none}
-#bannerText{font-size:10.5cqw;font-weight:800;color:#fff;-webkit-text-stroke:2cqw #b8336e;paint-order:stroke fill;
-  text-shadow:0 1.6cqw 0 rgba(120,20,70,.5);white-space:nowrap}
+#bannerText{font-size:8.5cqw;font-weight:800;color:#fff;-webkit-text-stroke:1.7cqw #b8336e;paint-order:stroke fill;
+  text-shadow:0 1.6cqw 0 rgba(120,20,70,.5);max-width:84cqw;text-align:center;line-height:1.2;word-break:keep-all;overflow-wrap:break-word}
 #bannerText.pop{animation:bannerPop 1.05s ease forwards}
 @keyframes bannerPop{0%{transform:scale(.2) rotate(-8deg);opacity:0}25%{transform:scale(1.1) rotate(2deg);opacity:1}
   45%{transform:scale(1)}80%{transform:scale(1);opacity:1}100%{transform:scale(1.15);opacity:0}}
@@ -233,8 +233,18 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 #onlineBar .ol-mini{pointer-events:auto;width:7.4cqw;height:7.4cqw;border-radius:2.2cqw;font-size:3.6cqw;
   background:rgba(255,255,255,.14);color:#fff;border:.4cqw solid rgba(255,255,255,.25)}
 #onlineBar .ol-status{font-weight:800;color:#ffd23f}
-#onlineBar .ol-seatline{gap:3cqw;font-weight:800}
-#onlineBar #olBlack{color:#fff}#onlineBar #olWhite{color:#cfe0ff}#onlineBar #olSpec{color:#bcb3d6;font-weight:700}
+#onlineBar .ol-seatline{gap:3cqw;font-weight:800;position:relative}
+#onlineBar #olBlack{color:#fff}#onlineBar #olWhite{color:#cfe0ff}
+#onlineBar .ol-spec{pointer-events:auto;color:#bcb3d6;font-weight:700;background:rgba(255,255,255,.1);
+  border:.4cqw solid rgba(255,255,255,.22);border-radius:2cqw;padding:.4cqw 2cqw;font-size:3cqw}
+#onlineBar .ol-swap{font-size:4cqw}
+#onlineBar .ol-take{pointer-events:auto;font-size:3cqw;font-weight:800;color:#fff;background:linear-gradient(180deg,#54c878,#39b061);
+  border:none;border-radius:2cqw;padding:.6cqw 2.6cqw;box-shadow:0 .6cqw 0 rgba(0,0,0,.22)}
+#onlineBar .ol-take.hidden,#onlineBar .ol-swap.hidden{display:none}
+#onlineBar .ol-speclist{left:auto;right:0}
+#onlineBar .ol-speclist .sp-row{display:flex;align-items:center;justify-content:space-between;gap:2cqw}
+#onlineBar .ol-speclist .sp-kick{pointer-events:auto;flex:none;font-size:2.6cqw;font-weight:800;color:#fff;
+  background:#c0392b;border:none;border-radius:1.6cqw;padding:.4cqw 2cqw}
 #onlineBar .me{text-decoration:underline;text-underline-offset:.6cqw}
 #onlineBar .ol-mini.ol-lineinv{width:auto;padding:0 2cqw;font-size:2.8cqw;font-weight:800;
   background:#06c755;border-color:#06c755;color:#fff} /* LINE招待 */
@@ -385,7 +395,11 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
       </div>
       <div class="ol-line"><span id="olStatus" class="ol-status">せつぞくちゅう…</span></div>
       <div class="ol-line ol-seatline">
-        <span id="olBlack">●—</span><span id="olWhite">○—</span><span id="olSpec">👀0</span>
+        <span id="olBlack">●—</span><span id="olWhite">○—</span>
+        <button id="olSwap" class="ol-mini ol-swap hidden" title="せんご いれかえ">⇄</button>
+        <button id="olTake" class="ol-take hidden">▶ さんか</button>
+        <button id="olSpec" class="ol-spec">👀0</button>
+        <div id="olSpecList" class="ol-serieslist ol-speclist hidden"></div>
       </div>
       <div class="ol-line ol-seriesline">
         <button id="olSeries" class="ol-series hidden" title="きょくべつ せいせき">つうさん 0-0</button>
@@ -2729,7 +2743,7 @@ const GomokuNet=(()=>{
   const randName=()=>ADJ[ri(ADJ.length)]+ANI[ri(ANI.length)];
   function getName(){let n=store.get(NAME_KEY,'');if(!n){n=randName();store.set(NAME_KEY,n);}return n;}
   function setName(n){const v=String(n||'').replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,12);store.set(NAME_KEY,v||randName());}
-  const state={ws:null,code:'',status:'idle',seat:null,game:null,error:'',onChange:null,_left:false,_retry:0,toastSeq:0,toastMsg:''};
+  const state={ws:null,code:'',status:'idle',seat:null,game:null,error:'',onChange:null,_left:false,_retry:0,toastSeq:0,toastMsg:'',_kicked:false};
   const host=()=>String((window.PGP_CONFIG||{}).partyHost||'').trim();
   const available=()=>!!host();
   const emit=()=>{if(state.onChange)state.onChange();};
@@ -2752,6 +2766,7 @@ const GomokuNet=(()=>{
         state.status=m.result?'ended':((m.seats.black&&m.seats.white)?'playing':'waiting');emit();}
       else if(m.type==='error'){state.error=m.msg||'';emit();}
       else if(m.type==='toast'){state.toastSeq++;state.toastMsg=m.msg||'';emit();} // 相手の待った通知など
+      else if(m.type==='kicked'){state._kicked=true;state._left=true;disconnect();state.status='idle';state.code='';state.seat=null;state.game=null;emit();} // 着席者に退出させられた
     };
     ws.onclose=()=>{state.ws=null;if(state.status==='idle'||state._left)return;
       state.status='disconnected';emit();
@@ -2765,7 +2780,11 @@ const GomokuNet=(()=>{
     move:i=>send({type:'move',index:i}),
     undo:()=>send({type:'undo'}),
     rename:n=>{setName(n);send({type:'rename',name:getName()});},
-    rematch:(on=true)=>send({type:'rematch',on})};
+    rematch:(on=true)=>send({type:'rematch',on}),
+    rematchDecline:()=>send({type:'rematchDecline'}),
+    kick:spid=>send({type:'kick',spid}),
+    takeSeat:()=>send({type:'takeSeat'}),
+    swapColors:()=>send({type:'swapColors'})};
 })();
 let pendingOnlineRoom=''; // ?room=CODE 自動参加用 (boot→gomoku create で消費)
 function roomLink(code){return location.origin+location.pathname+'?room='+encodeURIComponent(code);}
@@ -2785,13 +2804,33 @@ function renderOnlineBar(){
   const setSeat=(el,mark,sym)=>{const o=g&&g.seats[mark];
     $(el).textContent=sym+(o?o.name+(o.connected?'':'⚠'):'まち…');$(el).classList.toggle('me',me===mark);};
   setSeat('olBlack','black','●');setSeat('olWhite','white','○');
-  $('olSpec').textContent='👀'+(g?g.spectators:0);
+  // 観戦者: 人数 + 先頭3名を表示、タップで全員リスト(着席者は「たいきょ」で追い出せる)
+  const seated=(me==='black'||me==='white');
+  const specs=(g&&g.specList)||[],spCount=g?g.spectators:0;
+  const shown=specs.slice(0,3).map(x=>x.name).join('・');
+  $('olSpec').textContent='👀'+spCount+(shown?' '+shown+(spCount>3?' +'+(spCount-3):''):'');
+  const sl=$('olSpecList');sl.textContent=''; // 名前はユーザー入力。DOM+textContentでXSS回避
+  if(specs.length){specs.forEach(x=>{
+    const row=document.createElement('div');row.className='sp-row';
+    const nm=document.createElement('span');nm.textContent='👀 '+x.name;row.appendChild(nm);
+    if(seated&&x.spid){const kb=document.createElement('button');kb.className='sp-kick';kb.textContent='たいきょ';
+      kb.addEventListener('click',()=>{AudioKit.pop();GomokuNet.kick(x.spid);sl.classList.add('hidden');});row.appendChild(kb);}
+    sl.appendChild(row);});
+  }else{const e=document.createElement('div');e.textContent='かんせんしゃ なし';sl.appendChild(e);}
+  // 入れ替え(先後): 着席・2人そろい・盤が空(開始前)のみ / 参加: 観戦者で空席があるとき
+  const bothSeats=!!(g&&g.seats.black&&g.seats.white);
+  const boardEmpty=!!(g&&g.board&&!g.board.some(c=>c));
+  const openSeat=!!(g&&(!g.seats.black||!g.seats.white));
+  $('olSwap').classList.toggle('hidden',!(seated&&bothSeats&&boardEmpty&&!(g&&g.result)));
+  $('olTake').classList.toggle('hidden',!(me==='spectator'&&openSeat));
   let st='せつぞくちゅう…';
   if(s.status==='waiting')st=me==='spectator'?'たいきょくを まっています':'あいてを まっています';
   else if(s.status==='playing')st=(g&&g.turn===me)?'あなたの ばん':(me==='spectator'?'かんせんちゅう':'あいての ばん');
   else if(s.status==='ended'&&g&&g.result){st=g.result.draw?'ひきわけ':
     (g.result.winner===me?'あなたの かち！':(me==='spectator'?(g.result.winner==='black'?'●の かち':'○の かち'):'あいての かち'));
-    if((me==='black'||me==='white')&&g.rematch&&g.rematch[me])st+=' / もう一局まち';}
+    if(me==='black'||me==='white'){const opp=me==='black'?'white':'black';
+      if(g.rematch&&g.rematch[me])st+=' / もう一局まち';
+      else if(g.rematch&&g.rematch[opp])st+=' / あいてが きぼう';}}
   else if(s.status==='disconnected')st='せつだん…さいせつぞくちゅう';
   else if(s.status==='error')st=s.error||'エラー';
   $('olStatus').textContent=st;
@@ -2839,6 +2878,10 @@ function setupOnlineUI(){
   $('olSeries').addEventListener('click',()=>{AudioKit.pop();$('olSeriesList').classList.toggle('hidden');});
   $('olSeries').addEventListener('mouseenter',()=>$('olSeriesList').classList.remove('hidden'));
   $('olSeries').addEventListener('mouseleave',()=>$('olSeriesList').classList.add('hidden'));
+  // 観戦者リスト 開閉 / 先後いれかえ / 観戦者の参加(空席へ)
+  $('olSpec').addEventListener('click',()=>{AudioKit.pop();$('olSpecList').classList.toggle('hidden');});
+  $('olSwap').addEventListener('click',()=>{AudioKit.pop();GomokuNet.swapColors();});
+  $('olTake').addEventListener('click',()=>{AudioKit.pop();GomokuNet.takeSeat();});
 }
 registerGame({
   id:'gomoku', emoji:'⚫', title:'ごもくならべ',
@@ -3061,8 +3104,19 @@ registerGame({
       const seated=(s.seat==='black'||s.seat==='white');
       const myTurn=seated&&ng&&!ng.result&&ng.turn===s.seat;
       if(ng&&ng.result){
-        drawBtn(g,btnL,'🔄 もう一局','#ff4d94',!seated);
-        drawBtn(g,btnR,'↩ まった','#7a6cc0',true);
+        const opp=s.seat==='black'?'white':'black';
+        const meReq=seated&&ng.rematch&&ng.rematch[s.seat];
+        const oppReq=seated&&ng.rematch&&ng.rematch[opp];
+        if(oppReq&&!meReq){                                  // 相手から再戦リクエスト → うける/ことわる
+          drawBtn(g,btnL,'✅ うける','#39c06a',false);
+          drawBtn(g,btnR,'✖ ことわる','#a8704a',false);
+        }else if(meReq){                                     // 自分が希望済み → 返事まち(タップで取消)
+          drawBtn(g,btnL,'⏳ へんじまち','#7a6cc0',false);
+          drawBtn(g,btnR,'↩ まった','#7a6cc0',true);
+        }else{                                               // 再戦リクエストを送る
+          drawBtn(g,btnL,'🔄 もう一局','#ff4d94',!seated);
+          drawBtn(g,btnR,'↩ まった','#7a6cc0',true);
+        }
       }else{
         drawBtn(g,btnL,'↩ まった','#7a6cc0',!undoOnlineOk());  // 直前手の本人・相手応手前のみ
         drawBtn(g,btnR,'💡 ヒント','#3a9bdc',!myTurn);
@@ -3073,7 +3127,20 @@ registerGame({
       if(hitBtn(setBtn,x,y)){leaveOnline();return;}
       const s=GomokuNet.state,ng=s.game;if(!ng)return;
       const seated=(s.seat==='black'||s.seat==='white');
-      if(ng.result){ if(hitBtn(btnL,x,y)){seated?(GomokuNet.rematch(true),A.pop()):A.bad();} return; }
+      if(ng.result){
+        const opp=s.seat==='black'?'white':'black';
+        const meReq=seated&&ng.rematch&&ng.rematch[s.seat];
+        const oppReq=seated&&ng.rematch&&ng.rematch[opp];
+        if(hitBtn(btnL,x,y)){
+          if(!seated){A.bad();return;}
+          if(oppReq&&!meReq)GomokuNet.rematch(true);   // うける → 両者合意で再開
+          else if(meReq)GomokuNet.rematch(false);      // へんじまち → 取消
+          else GomokuNet.rematch(true);                // もう一局リクエスト
+          A.pop();return;
+        }
+        if(hitBtn(btnR,x,y)){ if(oppReq&&!meReq){GomokuNet.rematchDecline();A.pop();}else A.bad(); return; }
+        return;
+      }
       if(hitBtn(btnR,x,y)){showHintOnline();return;}
       if(hitBtn(btnL,x,y)){ if(undoOnlineOk()){GomokuNet.undo();pendingMove=-1;A.pop();}else A.bad(); return; } // 待った
       // 盤タップ: 自席・自手番のみ。仮置き→同じ交点を再タップで確定(#5)
@@ -3108,7 +3175,9 @@ registerGame({
       },
       update(dt){
         t+=dt;parts.update(dt);
-        if(screen==='online'){mirrorOnline();if(hintT>0){hintT-=dt;if(hintT<=0){hintT=0;hint=-1;}}return;}
+        if(screen==='online'){
+          if(GomokuNet.state._kicked){GomokuNet.state._kicked=false;banner('たいきょ させられました');A.bad();leaveOnline();return;}
+          mirrorOnline();if(hintT>0){hintT-=dt;if(hintT<=0){hintT=0;hint=-1;}}return;}
         if(screen!=='play')return;
         if(hintOn)hint=hintApplicable()?getGomokuHint(board,players[turn].mark):-1; // 常時ヒント
         else if(hintT>0){hintT-=dt;if(hintT<=0){hintT=0;hint=-1;}}                  // オンデマンドの減衰
@@ -3197,8 +3266,7 @@ registerGame({
       },
       hudInfo(){
         if(screen==='setup')return 'モードを えらぶ';
-        if(screen==='online'){const st=GomokuNet.state.status;
-          return st==='playing'?'たいきょくちゅう':st==='waiting'?'あいて まち':st==='ended'?'けっちゃく':'オンライン';}
+        if(screen==='online')return ''; // オンラインは上部DOMバー(onlineBar)が状態表示。右上hudと🔗リンクの重なりを防ぐため空に
         if(result)return result.draw?'ひきわけ':STONE[result.winner]+'の かち';
         return STONE[players[turn].mark]+'の ばん'+(players[turn].type==='cpu'?' (CPU)':'');
       },
@@ -3596,9 +3664,9 @@ registerGame({
     const A=ctx.audio;
     const SX=W/960;                 // world(960幅) → 実canvas幅 への比率
     const wx=x=>x*SX;               // world x → screen x
-    const EDGE_SX=wx(CHK_EDGE_X), START_SX=wx(CHK_START_X), CARW_S=CHK_CAR_W*SX;
-    const COLP={car:'#ff5c6c',dark:'#a82a37',glow:'#ff97a2',win:'#ff5c6c'}; // あなた=赤系
-    const COLC={car:'#2fd6dc',dark:'#147b80',glow:'#86f2f6',win:'#2fd6dc'}; // CPU=シアン系
+    const EDGE_SX=wx(CHK_EDGE_X), CARW_S=CHK_CAR_W*SX;
+    const COLP={car:'#ff5c6c',dark:'#a82a37',glow:'#ff97a2'}; // あなた=赤系
+    const COLC={car:'#2fd6dc',dark:'#147b80',glow:'#86f2f6'}; // CPU=シアン系
     const LANE_C=326, LANE_P=452;   // レーン中心Y (縦canvas: 奥=CPU上 / 手前=Player下)
     // タイトルの難易度ボタン (タイトル局面のみ当たり判定)
     const DIFF_KEYS=['easy','normal','hard'], DIFF_LBL={easy:'よわい',normal:'ふつう',hard:'つよい'};
@@ -3611,8 +3679,9 @@ registerGame({
     let diff=store.get('pgp2_chk_diff','normal'); if(!DIFF[diff])diff='normal';
     let stPhase='title';            // title|count|run|rresult|mresult
     let round=0, results=[];
-    let pCar=null, cCar=null, pAccel=false;
-    let cdT=0, cdIdx=-1, t=0, acc=0, resolveT=0, shakeT=0, flashT=0;
+    let pCar=null, cCar=null, held=false, keyHeld=false; // held=ポインタ押下 / keyHeld=Space
+    let cdT=0, cdIdx=-1, t=0, acc=0, resolveT=0, shakeT=0, flashT=0, runT=0;
+    let skyGrad=null, abyssGrad=null;                    // 定数グラデはキャッシュ(毎フレーム再生成しない)
     const parts=new Particles();
 
     function mkCar(key){
@@ -3621,25 +3690,27 @@ registerGame({
     }
     const planDef=()=>CARS[ROUND_PLAN[round].car];
     const planSlope=()=>SLOPES[ROUND_PLAN[round].slope];
+    // アクセルは run 中のみ有効。ポインタ/Space の物理的な押下状態をそのまま反映
+    // → カウントダウン中から押しっぱなしでも GO で即加速する (押し直し不要)
+    const accelOn=()=> stPhase==='run' && (held||keyHeld);
 
     function setupRound(){
       pCar=mkCar('p'); cCar=mkCar('c');
       const D=DIFF[diff];
       cCar.target=Math.max(3, D.gap+rand(-1,1)*D.spread);
       cCar.bias=rand(D.bias[0],D.bias[1]);
-      pAccel=false; acc=0; resolveT=0;
+      acc=0; resolveT=0; runT=0;
     }
     function beginCountdown(){ stPhase='count'; cdT=0; cdIdx=-1; }
     function startMatch(){ round=0; results=[]; setupRound(); beginCountdown(); }
     function nextRound(){
-      round++;
-      if(round>=ROUND_PLAN.length){
+      if(round>=ROUND_PLAN.length-1){   // 最終ラウンド後 → マッチ結果 (round は範囲内に保つ)
         stPhase='mresult';
         const w=judgeMatch(results);
         if(w==='p'){A.coin();confetti();vib([30,50,30,50,30]);}
         else if(w==='c'){A.bad();vib([60,40,60]);}
         else A.ok();
-      }else{ setupRound(); beginCountdown(); A.pop(); }
+      }else{ round++; setupRound(); beginCountdown(); A.pop(); }
     }
 
     // ── 物理: 1/60 固定ステップ (仕様「毎フレーム x+=speed」を fps非依存に) ──
@@ -3668,7 +3739,7 @@ registerGame({
         const dist=CHK_EDGE_X-(cCar.x+CHK_CAR_W);
         cAccel=(dist-predicted)>cCar.target && cCar.speed<def.max;
       }
-      stepOne(pCar,pAccel,def,g);
+      stepOne(pCar,accelOn(),def,g);
       stepOne(cCar,cAccel,def,g);
     }
     const carDone=c=>c.settled||(c.fell&&c.fallY>300);
@@ -3684,8 +3755,7 @@ registerGame({
     }
 
     // ── 描画ヘルパ ──
-    const tan=r=>Math.tan(r);
-    const roadY=(centerY,sxPos,tilt)=>centerY+(sxPos-EDGE_SX)*tan(tilt); // 崖端で centerY
+    const roadY=(centerY,sxPos,tilt)=>centerY+(sxPos-EDGE_SX)*Math.tan(tilt); // 崖端で centerY
     function drawRoad(g,centerY,tilt,nearCol){
       const yL=roadY(centerY,0,tilt), yR=roadY(centerY,EDGE_SX,tilt), bandH=46;
       g.save();
@@ -3706,7 +3776,7 @@ registerGame({
       const w=CARW_S, h=24;
       g.save(); g.translate(cx,cy); g.rotate(rot);
       // スピードライン (加速中・高速)
-      if(!car.fell&&car.speed>1.4&&((car.key==='p'&&pAccel)||car.key==='c')){
+      if(!car.fell&&car.speed>1.4&&((car.key==='p'&&accelOn())||car.key==='c')){
         g.strokeStyle='rgba(255,255,255,.35)'; g.lineWidth=2;
         for(let i=0;i<4;i++){const yy=-h/2+4+i*5; g.beginPath();
           g.moveTo(-w/2-6-car.speed*3,yy); g.lineTo(-w/2-2,yy); g.stroke();}
@@ -3745,10 +3815,13 @@ registerGame({
       }else if(stPhase==='run'){
         acc+=dt; let guard=0;
         while(acc>=1/60 && guard<10){ acc-=1/60; physicsStep(); guard++; }
-        if(pAccel&&!pCar.fell&&!pCar.settled&&pCar.speed>1.2&&Math.random()<0.4){
+        if(accelOn()&&!pCar.fell&&!pCar.settled&&pCar.speed>1.2&&Math.random()<0.4){
           const cx=wx(pCar.x),cy=roadY(LANE_P,cx,planSlope().tilt);
           parts.add({x:cx-4,y:cy+6,vx:-rand(30,90),vy:-rand(5,30),grav:120,life:rand(.3,.5),r:rand(2,4),col:'#cfa882'});
         }
+        runT+=dt;
+        // 安全装置: 入力が無く一度も動かない車があっても必ず決着させる (versusはタイマー無し)
+        if(runT>14){ for(const c of [pCar,cCar]) if(!c.settled&&!c.fell){ c.settled=true; c.speed=0; } }
         if(carDone(pCar)&&carDone(cCar)){ resolveT+=dt; if(resolveT>0.45)resolveRound(); }
       }
     }
@@ -3756,12 +3829,14 @@ registerGame({
     function draw(g){
       g.save();
       if(shakeT>0){const s=shakeT*16;g.translate(rand(-s,s),rand(-s,s));}
-      // 夕暮れの空
-      const sky=g.createLinearGradient(0,0,0,H);
-      sky.addColorStop(0,'#241a44'); sky.addColorStop(0.34,'#5a2f63');
-      sky.addColorStop(0.52,'#b5476a'); sky.addColorStop(0.62,'#e8743b'); sky.addColorStop(0.7,'#3a2236');
-      sky.addColorStop(1,'#161029');
-      g.fillStyle=sky; g.fillRect(0,0,W,H);
+      // 夕暮れの空 (定数グラデは初回のみ生成してキャッシュ)
+      if(!skyGrad){
+        skyGrad=g.createLinearGradient(0,0,0,H);
+        skyGrad.addColorStop(0,'#241a44'); skyGrad.addColorStop(0.34,'#5a2f63');
+        skyGrad.addColorStop(0.52,'#b5476a'); skyGrad.addColorStop(0.62,'#e8743b'); skyGrad.addColorStop(0.7,'#3a2236');
+        skyGrad.addColorStop(1,'#161029');
+      }
+      g.fillStyle=skyGrad; g.fillRect(0,0,W,H);
       // 夕日
       g.save();g.fillStyle='rgba(255,210,120,.9)';g.beginPath();g.arc(W*0.66,250,46,0,TAU);g.fill();
       g.globalAlpha=.25;g.beginPath();g.arc(W*0.66,250,70,0,TAU);g.fill();g.restore();
@@ -3771,10 +3846,12 @@ registerGame({
       if(stPhase!=='title'){
         drawRoad(g,LANE_C,tilt,'#3a3350');
         drawRoad(g,LANE_P,tilt,'#4a4360');
-        // 崖の奈落 (EDGE より右は暗い)
-        const ab=g.createLinearGradient(EDGE_SX,0,W,0);
-        ab.addColorStop(0,'rgba(10,6,20,.0)'); ab.addColorStop(0.25,'rgba(8,4,16,.92)'); ab.addColorStop(1,'#05030d');
-        g.fillStyle=ab; g.fillRect(EDGE_SX,150,W-EDGE_SX,H-150);
+        // 崖の奈落 (EDGE より右は暗い。定数グラデはキャッシュ)
+        if(!abyssGrad){
+          abyssGrad=g.createLinearGradient(EDGE_SX,0,W,0);
+          abyssGrad.addColorStop(0,'rgba(10,6,20,.0)'); abyssGrad.addColorStop(0.25,'rgba(8,4,16,.92)'); abyssGrad.addColorStop(1,'#05030d');
+        }
+        g.fillStyle=abyssGrad; g.fillRect(EDGE_SX,150,W-EDGE_SX,H-150);
         // 危険ライン
         const blink=0.55+0.45*Math.sin(t*7);
         g.save();g.strokeStyle=`rgba(255,60,70,${blink})`;g.lineWidth=4;
@@ -3829,13 +3906,14 @@ registerGame({
       }
       else if(stPhase==='run'){
         // アクセルペダル (画面どこ押しでも加速。状態を表示)
+        const on=accelOn();
         g.save();
-        g.fillStyle=pAccel?'#ff4d5e':'rgba(40,28,54,.82)';
+        g.fillStyle=on?'#ff4d5e':'rgba(40,28,54,.82)';
         rr(g,PEDAL.x,PEDAL.y,PEDAL.w,PEDAL.h,PEDAL.r);g.fill();
-        g.lineWidth=3;g.strokeStyle=pAccel?'#ffd9a0':'rgba(255,120,90,.5)';
+        g.lineWidth=3;g.strokeStyle=on?'#ffd9a0':'rgba(255,120,90,.5)';
         rr(g,PEDAL.x,PEDAL.y,PEDAL.w,PEDAL.h,PEDAL.r);g.stroke();
         g.restore();
-        outlinedText(g,pAccel?'🔥 アクセル全開！':'⛽ アクセル (長押し)',W/2,PEDAL.y+50,22,'#fff',pAccel?'#7a1020':'#3a2233',6);
+        outlinedText(g,on?'🔥 アクセル全開！':'⛽ アクセル (長押し)',W/2,PEDAL.y+50,22,'#fff',on?'#7a1020':'#3a2233',6);
         outlinedText(g,'離して崖ギリで止めろ',W/2,PEDAL.y+86,14,'#ffe6cf','#3a2233',4);
       }
       else if(stPhase==='rresult'||stPhase==='mresult'){
@@ -3844,7 +3922,7 @@ registerGame({
         if(stPhase==='rresult'){
           const wtxt=r.winner==='p'?'あなたの勝ち！':r.winner==='c'?'CPUの勝ち':'引き分け';
           const wc=r.winner==='p'?COLP.car:r.winner==='c'?COLC.car:'#ffd23f';
-          outlinedText(g,'ラウンド'+round+' 結果',W/2,210,18,'#cbb8e8','#241636',5);
+          outlinedText(g,'ラウンド'+(round+1)+' 結果',W/2,210,18,'#cbb8e8','#241636',5);
           outlinedText(g,wtxt,W/2,256,30,wc,'#fff',8);
           const cm=v=>Math.round(v);
           outlinedText(g,'あなた: '+(r.pFell?'転落…':'崖まで '+cm(r.pGap)+'cm'),W/2,330,18,COLP.glow,'#2a1020',5);
@@ -3882,37 +3960,37 @@ registerGame({
 
     return {
       onDown(x,y){
+        held=true;                       // ポインタ押下を記録 (run中は accelOn が拾う)
         if(stPhase==='title'){
           for(const b of diffBtns)if(x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h){diff=b.k;store.set('pgp2_chk_diff',b.k);A.pop();return;}
           startMatch(); A.pop(); return;
         }
-        if(stPhase==='run'){ pAccel=true; A.tone({f:150,f2:96,type:'square',dur:.05,vol:.08}); return; }
+        if(stPhase==='run'){ A.tone({f:150,f2:96,type:'square',dur:.05,vol:.08}); return; }
         if(stPhase==='rresult'){ nextRound(); return; }
         if(stPhase==='mresult'){ startMatch(); A.pop(); return; }
-        // count 中は無視
+        // count 中は加速対象外 (held は run 開始まで保持され GO で発火)
       },
-      onUp(){ if(stPhase==='run')pAccel=false; },
+      onUp(){ held=false; },
       onKey(code,down){
         if(code!=='Space')return;
         if(down){
-          if(stPhase==='title'){startMatch();A.pop();return;}
-          if(stPhase==='run'){pAccel=true;return;}
-          if(stPhase==='rresult'){nextRound();return;}
-          if(stPhase==='mresult'){startMatch();A.pop();return;}
-        }else{
-          if(stPhase==='run')pAccel=false;
-        }
+          keyHeld=true;
+          if(stPhase==='title'){startMatch();A.pop();}
+          else if(stPhase==='rresult'){nextRound();}
+          else if(stPhase==='mresult'){startMatch();A.pop();}
+          // run中は keyHeld=true を accelOn が拾って加速
+        }else{ keyHeld=false; }
       },
       update,
       draw,
       hudInfo(){
         if(stPhase==='title')return 'むずかしさ: '+DIFF_LBL[diff];
-        if(stPhase==='count')return 'R'+(round+1)+'/'+ROUND_PLAN.length+'  よーい…';
+        if(stPhase==='count')return 'R'+(round+1)+'/'+ROUND_PLAN.length+' よーい';
         if(stPhase==='run'){
           const cm=Math.max(0,Math.round(pCar.gap));
-          return 'R'+(round+1)+'/'+ROUND_PLAN.length+'  ⚡'+pCar.speed.toFixed(1)+'  崖まで'+cm+'cm';
+          return 'R'+(round+1)+'/'+ROUND_PLAN.length+' 崖'+cm+'cm';
         }
-        if(stPhase==='rresult')return 'R'+round+'/'+ROUND_PLAN.length+' けっか';
+        if(stPhase==='rresult')return 'R'+(round+1)+'/'+ROUND_PLAN.length+' けっか';
         return 'マッチ終了';
       },
     };
