@@ -3486,6 +3486,290 @@ if(typeof window!=='undefined'){
   if(/[?&]selftest/.test(location.search))runMoleTests();
 }
 
+/* ============================================================
+   ゲームG: オセロ (リバーシ) (versus / ターン制・スコア無し)
+   ------------------------------------------------------------
+   盤面・反転・勝敗のロジックは純関数に分離 (自動テスト対象)。
+   board: 長さ64 (8x8) の配列。各要素は 'black' | 'white' | null(空)。
+          → ox/gomoku と空セル表現 (null) と色名 (black/white) を揃える。
+   初期配置 (黒先手): d4=白(27) e4=黒(28) d5=黒(35) e5=白(36)。
+   将来CPU化する場合は getOthelloCpuMove(board,color) を作り
+   getValidMoves/applyMove をそのまま読みに使えばよい (副作用なしで分離済み)。
+   ============================================================ */
+const OTH_N=8;
+const OTH_DIRS=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]; // 8方向
+function othOpp(color){return color==='black'?'white':'black';}
+function othInitial(){
+  const b=Array(OTH_N*OTH_N).fill(null);
+  b[27]='white';b[36]='white';b[28]='black';b[35]='black';return b;
+}
+// その手で反転するマスのindex配列を返す。空(非合法)なら []。副作用なし。
+function getFlips(board,index,color){
+  if(index<0||index>=OTH_N*OTH_N||board[index]!==null)return [];
+  const N=OTH_N,x=index%N,y=Math.floor(index/N),opp=othOpp(color),flips=[];
+  for(const [dx,dy] of OTH_DIRS){
+    const line=[];let cx=x+dx,cy=y+dy;
+    while(cx>=0&&cx<N&&cy>=0&&cy<N&&board[cy*N+cx]===opp){line.push(cy*N+cx);cx+=dx;cy+=dy;}
+    if(line.length&&cx>=0&&cx<N&&cy>=0&&cy<N&&board[cy*N+cx]===color)flips.push(...line); // 自石で挟めた時のみ確定
+  }
+  return flips;
+}
+// color が打てる合法手のindex配列 (昇順・決定的)。副作用なし。
+function getValidMoves(board,color){
+  const moves=[];
+  for(let i=0;i<board.length;i++)if(board[i]===null&&getFlips(board,i,color).length)moves.push(i);
+  return moves;
+}
+// 着手+反転を反映した新盤面を返す (入力 board は不変)。非合法手なら内容不変のコピーを返す。
+function applyMove(board,index,color){
+  const flips=getFlips(board,index,color);
+  const nb=board.slice();
+  if(!flips.length)return nb;
+  nb[index]=color;for(const f of flips)nb[f]=color;return nb;
+}
+function countStones(board){
+  let black=0,white=0;
+  for(const c of board){if(c==='black')black++;else if(c==='white')white++;}
+  return {black,white};
+}
+// 両者とも合法手なし (盤が埋まった場合も含む) で終局。副作用なし。
+function isGameOver(board){
+  return getValidMoves(board,'black').length===0&&getValidMoves(board,'white').length===0;
+}
+function getWinner(board){
+  const {black,white}=countStones(board);
+  return black>white?'black':white>black?'white':'draw';
+}
+/* runOthelloTests 自動テスト: 初期配置 / 基本反転 / 複数方向同時反転 / 入力不変 /
+   非合法手 / パス(片側0手) / 終局 / 勝敗集計 / 引き分け。?selftest で実行。 */
+function runOthelloTests(){
+  let pass=0,fail=0;const log=[];
+  const ck=(name,cond)=>{cond?pass++:fail++;if(!cond)log.push(name);};
+  // 初期配置
+  {const b=othInitial();const cs=countStones(b);
+   ck('init-count',cs.black===2&&cs.white===2);
+   ck('init-cells',b[27]==='white'&&b[36]==='white'&&b[28]==='black'&&b[35]==='black');
+   ck('init-moves-black',getValidMoves(b,'black').join()===[19,26,37,44].join());
+   ck('init-moves-white',getValidMoves(b,'white').join()===[20,29,34,43].join());
+   ck('init-not-over',isGameOver(b)===false);}
+  // 基本反転: 黒が d3(19) を打つと 27(白) を反転
+  {const b=othInitial();
+   ck('flip-basic',getFlips(b,19,'black').join()===[27].join());
+   const nb=applyMove(b,19,'black');const cs=countStones(nb);
+   ck('apply-basic',nb[19]==='black'&&nb[27]==='black'&&cs.black===4&&cs.white===1);
+   ck('apply-immutable',b[19]===null&&b[27]==='white');} // 入力不変
+  // 非合法手: 反転なし → []
+  {const b=othInitial();
+   ck('illegal-empty',getFlips(b,0,'black').length===0);
+   ck('illegal-occupied',getFlips(b,27,'black').length===0);
+   const nb=applyMove(b,0,'black');
+   ck('apply-illegal',nb!==b&&nb.every((v,i)=>v===b[i]));}
+  // 複数方向同時反転: 27 に黒 → 右(28白,29黒) と 下(35白,43黒) を同時に挟む
+  {const b=Array(64).fill(null);b[28]='white';b[29]='black';b[35]='white';b[43]='black';
+   const fl=getFlips(b,27,'black').slice().sort((a,b)=>a-b);
+   ck('multi-flip',fl.join()===[28,35].join());
+   const nb=applyMove(b,27,'black');
+   ck('multi-apply',nb[27]==='black'&&nb[28]==='black'&&nb[35]==='black');}
+  // パス: 白に合法手なし・黒にあり (終局ではない)
+  {const b=Array(64).fill('black');b[9]='white';b[0]=null;
+   ck('pass-white-none',getValidMoves(b,'white').length===0);
+   ck('pass-black-has',getValidMoves(b,'black').length>0);
+   ck('pass-not-over',isGameOver(b)===false);}
+  // 終局: 白石なし → 双方0手 / 黒勝ち
+  {const b=Array(64).fill('black');b[0]=null;
+   ck('over-true',isGameOver(b)===true);
+   ck('over-black-wins',getWinner(b)==='black');}
+  // 終局: 満盤 + 石数集計 (黒40/白24)
+  {const b=Array(64).fill('black');for(let i=0;i<24;i++)b[i]='white';
+   ck('full-over',isGameOver(b)===true);
+   const cs=countStones(b);ck('full-count',cs.black===40&&cs.white===24);
+   ck('full-winner',getWinner(b)==='black');}
+  // 引き分け (32/32) と 白勝ち
+  {const b=Array(64).fill('black');for(let i=0;i<32;i++)b[i]='white';
+   ck('draw',getWinner(b)==='draw');}
+  {const b=Array(64).fill('white');b[0]='black';ck('winner-white',getWinner(b)==='white');}
+  console.log('[othello tests] pass='+pass+' / fail='+fail, log.length?log:'');
+  return {pass,fail,log};
+}
+registerGame({
+  id:'othello', emoji:'🔴', title:'オセロ',
+  desc:'2人で あそぶ オセロ (リバーシ)',
+  color:'#7bc47f', type:'versus',   // duration は付けない (タイマー無し)
+  howto:[
+    ['👆','ひかる マスを タップして いしを おく'],
+    ['🔄','あいての いしを はさんで ひっくりかえそう！'],
+    ['🏆','さいごに いしが おおい ほうの かち！'],
+  ],
+  create(ctx){
+    const A=ctx.audio;
+    const N=OTH_N;
+    const SYM={black:'●',white:'○'}; // HUD/結果表示用
+    // 盤レイアウト (W=420,H=740 基準)。石はマス内中央に配置。
+    const CELL=44, BOARD=CELL*N, BX=Math.round((W-BOARD)/2), BY=178;
+    // 盤下のボタン: プレイ時=[まった] / 決着時=[もういちど][まった]
+    const FBY=BY+BOARD+18; // ボタン上端 (=548)
+    const btnL={x:59,y:FBY,w:146,h:48}, btnR={x:215,y:FBY,w:146,h:48};
+    const hitBtn=(b,x,y)=>x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h;
+
+    const players=[{color:'black'},{color:'white'}]; // 黒=players[0]=先手
+    let board=othInitial();
+    let turn=0,result=null,last=-1,t=0;
+    let history=[];           // 待った用の盤面スナップショット
+    let flipMap=null,flipT=0;  // 反転アニメ (index→反転前の色)
+    let placedAt=-1,placeT=0;  // 着手アニメ (置いた石のポップ)
+    const FLIP_DUR=0.30, PLACE_DUR=0.16;
+
+    function center(idx){
+      return {x:BX+(idx%N)*CELL+CELL/2, y:BY+Math.floor(idx/N)*CELL+CELL/2};
+    }
+    function cellAt(x,y){ // 盤外は -1。スマホは最寄りマスにスナップ
+      if(x<BX||x>=BX+BOARD||y<BY||y>=BY+BOARD)return -1;
+      const cx=Math.floor((x-BX)/CELL),cy=Math.floor((y-BY)/CELL);
+      if(cx<0||cx>=N||cy<0||cy>=N)return -1;
+      return cy*N+cx;
+    }
+    function reset(){
+      board=othInitial();turn=0;result=null;last=-1;history=[];
+      flipMap=null;flipT=0;placedAt=-1;placeT=0;A.pop();
+    }
+    function endGame(){
+      const w=getWinner(board);
+      result=w==='draw'?{draw:true}:{winner:w};
+      if(result.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
+      else{banner(SYM[w]+'の かち！');A.fever();vib([30,50,30,50,30]);confetti();}
+    }
+    function advanceTurn(){ // 着手後の手番送り (相手番 / 自動パス / 終局 を判定)
+      const oppIdx=1-turn,oppColor=players[oppIdx].color,myColor=players[turn].color;
+      if(getValidMoves(board,oppColor).length){turn=oppIdx;}             // 相手に手あり
+      else if(getValidMoves(board,myColor).length){                     // 相手0手→自動パス(手番維持)
+        banner(SYM[oppColor]+'は パス');A.bad();
+      }else{endGame();}                                                  // 両者0手→終局
+    }
+    function place(cell){ // 着手を1箇所に集約 (反転・手番送りもここ)
+      if(result||cell<0||cell>=N*N||board[cell]!==null)return;
+      const color=players[turn].color;
+      const flips=getFlips(board,cell,color);
+      if(!flips.length){A.bad();vib(8);return;}        // 非合法マス
+      history.push({board:board.slice(),turn,last});   // 待った用スナップショット
+      board=applyMove(board,cell,color);
+      last=cell;placedAt=cell;placeT=PLACE_DUR;
+      flipMap=new Map();const opp=othOpp(color);for(const f of flips)flipMap.set(f,opp);flipT=FLIP_DUR;
+      A.pop();vib(8);
+      advanceTurn();
+    }
+    function undo(){ // 待った: 直前の自分の着手(自動パス含む)を1手戻す
+      if(!history.length){A.bad();return;}
+      const s=history.pop();
+      board=s.board;turn=s.turn;last=s.last;
+      result=null;flipMap=null;flipT=0;placedAt=-1;placeT=0;
+      A.pop();vib(8);
+    }
+    function drawStone(g,color,c,r,sx,sc){
+      g.save();g.translate(c.x,c.y);g.scale((sx==null?1:sx)*(sc==null?1:sc),(sc==null?1:sc));
+      g.beginPath();g.arc(0,0,r,0,TAU);
+      if(color==='black'){g.fillStyle='#23203a';g.fill();
+        g.beginPath();g.arc(-r*0.28,-r*0.28,r*0.34,0,TAU);g.fillStyle='rgba(255,255,255,.14)';g.fill();}
+      else{g.fillStyle='#fbf8ef';g.fill();g.lineWidth=2;g.strokeStyle='#b7ad93';g.stroke();
+        g.beginPath();g.arc(-r*0.28,-r*0.28,r*0.30,0,TAU);g.fillStyle='rgba(255,255,255,.7)';g.fill();}
+      g.restore();
+    }
+    function drawBtn(g,b,label,col,disabled){
+      g.save();g.fillStyle=disabled?'#6b6480':col;rr(g,b.x,b.y,b.w,b.h,14);g.fill();
+      if(!disabled){g.fillStyle='rgba(255,255,255,.22)';rr(g,b.x+8,b.y+5,b.w-16,9,5);g.fill();}
+      g.restore();
+      outlinedText(g,label,b.x+b.w/2,b.y+b.h/2+1,18,'#fff','rgba(0,0,0,.4)',5,disabled?0.55:1);
+    }
+
+    return {
+      onDown(x,y){
+        if(result){
+          if(hitBtn(btnR,x,y)){undo();return}  // 決着後: まった(誤タップ救済)
+          reset();return;                       // それ以外のタップでリセット
+        }
+        if(hitBtn(btnL,x,y)){undo();return}     // プレイ中: まった
+        place(cellAt(x,y));
+      },
+      update(dt){
+        t+=dt;
+        if(flipT>0)flipT=Math.max(0,flipT-dt);
+        if(placeT>0)placeT=Math.max(0,placeT-dt);
+      },
+      draw(g){
+        g.fillStyle='#2b2550';g.fillRect(0,0,W,H);
+        outlinedText(g,'オセロ',W/2,68,27,'#fff','#3a2a4a',7);
+        // 石数 (常時表示)
+        const {black,white}=countStones(board);
+        outlinedText(g,'●'+black,W/2-70,112,26,'#fff','#23203a',7);
+        outlinedText(g,'○'+white,W/2+70,112,26,'#2b2550','#fbf8ef',7);
+        // 手番 / 結果
+        if(!result){
+          const m=players[turn].color;
+          outlinedText(g,SYM[m]+'の ばん',W/2,150,23,m==='black'?'#fff':'#fff',m==='black'?'#23203a':'#7a6a3a',6);
+        }else if(result.draw){
+          outlinedText(g,'ひきわけ！',W/2,150,26,'#ffd23f','#5a3a10',7);
+        }else{
+          outlinedText(g,SYM[result.winner]+'の かち！',W/2,150,28,'#ffd23f','#5a3a10',7);
+        }
+        // 盤パネル (緑のフェルト)
+        g.save();g.fillStyle='#176a3a';rr(g,BX-12,BY-12,BOARD+24,BOARD+24,16);g.fill();g.restore();
+        // グリッド
+        g.save();g.strokeStyle='#0c4a26';g.lineWidth=2;
+        for(let i=0;i<=N;i++){
+          g.beginPath();g.moveTo(BX+i*CELL,BY);g.lineTo(BX+i*CELL,BY+BOARD);g.stroke();
+          g.beginPath();g.moveTo(BX,BY+i*CELL);g.lineTo(BX+BOARD,BY+i*CELL);g.stroke();
+        }
+        // 基準点 (中央4x4の角)
+        g.fillStyle='#0c4a26';
+        for(const [sx,sy] of [[2,2],[6,2],[2,6],[6,6]]){g.beginPath();g.arc(BX+sx*CELL,BY+sy*CELL,3.2,0,TAU);g.fill();}
+        g.restore();
+        // 合法手マーカー (現手番色の薄い点)
+        if(!result){
+          const mc=players[turn].color;
+          g.save();g.globalAlpha=0.28+0.14*Math.sin(t*5);g.fillStyle=mc==='black'?'#101020':'#fbf8ef';
+          for(const i of getValidMoves(board,mc)){const c=center(i);g.beginPath();g.arc(c.x,c.y,CELL*0.16,0,TAU);g.fill();}
+          g.restore();
+        }
+        // 石 (反転アニメ=scaleXフリップ / 着手=ポップ)
+        const sr=CELL*0.40;
+        for(let i=0;i<board.length;i++){
+          if(!board[i])continue;
+          const c=center(i);
+          if(flipMap&&flipMap.has(i)&&flipT>0){
+            const p=1-flipT/FLIP_DUR;                       // 0→1
+            const sx=Math.abs(Math.cos(p*Math.PI));         // 横に潰れて反対面へ
+            drawStone(g,p<0.5?flipMap.get(i):board[i],c,sr,sx,1);
+          }else if(i===placedAt&&placeT>0){
+            const p=1-placeT/PLACE_DUR;
+            drawStone(g,board[i],c,sr,1,0.6+0.4*p);
+          }else drawStone(g,board[i],c,sr,1,1);
+        }
+        // 直前着手マーカー
+        if(last>=0){const c=center(last);
+          g.save();g.strokeStyle='#ff4d94';g.lineWidth=2.5;g.beginPath();g.arc(c.x,c.y,sr+3,0,TAU);g.stroke();g.restore();}
+        // ボタン
+        if(result){
+          drawBtn(g,btnL,'▶ もう いちど','#ff4d94',false);
+          drawBtn(g,btnR,'↩ まった','#7a6cc0',!history.length);
+        }else{
+          drawBtn(g,btnL,'↩ まった','#7a6cc0',!history.length);
+          outlinedText(g,'ひかる マスに おけるよ',W/2+78,FBY+24,15,'#cfc6e8','#2b2550',4);
+        }
+      },
+      hudInfo(){
+        const {black,white}=countStones(board);
+        const base='●'+black+' ○'+white;
+        if(result)return base+' ／ '+(result.draw?'ひきわけ':SYM[result.winner]+'の かち');
+        return base+' ／ '+SYM[players[turn].color]+'の ばん';
+      },
+    };
+  }
+});
+// 純ロジックの自動テスト公開 (?selftest で実行・core boot は不変更)
+if(typeof window!=='undefined'){
+  window.runOthelloTests=runOthelloTests;
+  if(/[?&]selftest/.test(location.search))runOthelloTests();
+}
+
 // ▼ 新しいミニゲームは registerGame({...}) をここに追加 ▼
 
 /* ============================================================
