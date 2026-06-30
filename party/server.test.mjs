@@ -9,9 +9,10 @@ if (!globalThis.crypto) globalThis.crypto = (await import('node:crypto')).webcry
 
 const idx = (x, y) => y * GO_N + x;
 class Conn {
-  constructor(id) { this.id = id; this.state = undefined; this.sent = []; }
+  constructor(id) { this.id = id; this.state = undefined; this.sent = []; this.closed = false; this.room = null; }
   setState(s) { this.state = s; }
   send(s) { this.sent.push(JSON.parse(s)); }
+  close() { this.closed = true; if (this.room) this.room.conns.delete(this); } // 実環境のws切断 ≒ 接続一覧から外れる
   last() { return this.sent[this.sent.length - 1]; }
   lastOf(t) { return [...this.sent].reverse().find(m => m.type === t); }
 }
@@ -103,7 +104,7 @@ ck('rematch:reassigned-w', w.lastOf('assigned').seat === 'black' && w.lastOf('as
 async function freshSrv() {
   const room = new Room(); const srv = new GomokuServer(room); await srv.onStart();
   return { room, srv,
-    connect: c => { room.conns.add(c); srv.onConnect(c); },
+    connect: c => { c.room = room; room.conns.add(c); srv.onConnect(c); },
     hello: (c, n, t) => srv.onMessage(JSON.stringify({ type: 'hello', name: n, token: t }), c),
     move: (c, i) => srv.onMessage(JSON.stringify({ type: 'move', index: i }), c),
     undo: c => srv.onMessage(JSON.stringify({ type: 'undo' }), c),
@@ -238,6 +239,91 @@ async function freshSrv() {
   // 続けて新規着手も g.moves.push が例外を出さない
   await srv.onMessage(JSON.stringify({ type: 'move', index: idx(5, 5) }), B);
   ck('legacy:move-after-ok', srv.game.board[idx(5, 5)] === 'black' && srv.game.moves.length === 1);
+}
+
+// ── 観戦者リスト(名前+spid)を state で配信 (先頭表示/追い出し用) ──
+{ const { room, srv, connect, hello } = await freshSrv();
+  const B = new Conn('B'); connect(B); await hello(B, 'くろ');
+  const W = new Conn('W'); connect(W); await hello(W, 'しろ');
+  const S1 = new Conn('S1'); connect(S1); await hello(S1, 'みる1');
+  const S2 = new Conn('S2'); connect(S2); await hello(S2, 'みる2');
+  const stt = B.lastOf('state');
+  ck('spec:count', stt.spectators === 2);
+  ck('spec:list-len', Array.isArray(stt.specList) && stt.specList.length === 2);
+  ck('spec:list-names', stt.specList.map(s => s.name).sort().join(',') === 'みる1,みる2');
+  ck('spec:list-spid', stt.specList.every(s => typeof s.spid === 'string' && s.spid.length > 0));
+  ck('spec:seated-not-listed', !stt.specList.some(s => s.name === 'くろ' || s.name === 'しろ'));
+}
+
+// ── 再戦=承認方式: 片方の希望で相手へ通知 / ことわる で両者クリア+通知 ──
+{ const { room, srv, connect, hello, move } = await freshSrv();
+  const B = new Conn('B'); connect(B); await hello(B, 'くろ');
+  const W = new Conn('W'); connect(W); await hello(W, 'しろ');
+  // 決着させる (黒勝ち)
+  const win = [[B, idx(0, 5)], [W, idx(0, 0)], [B, idx(1, 5)], [W, idx(2, 0)], [B, idx(2, 5)], [W, idx(4, 0)], [B, idx(3, 5)], [W, idx(6, 0)], [B, idx(4, 5)]];
+  for (const [c, i] of win) await move(c, i);
+  // 黒が「もう一局」希望 → 白へ通知トースト / まだリセットされない
+  await srv.onMessage(JSON.stringify({ type: 'rematch', on: true }), B);
+  ck('rematch:request-toast', W.lastOf('toast') && /きぼう/.test(W.lastOf('toast').msg));
+  ck('rematch:not-reset-yet', srv.game.rematch.black === true && srv.game.result !== null);
+  // 白が「ことわる」 → 両者クリア + 黒へ通知
+  await srv.onMessage(JSON.stringify({ type: 'rematchDecline' }), W);
+  ck('rematch:decline-clears', srv.game.rematch.black === false && srv.game.rematch.white === false);
+  ck('rematch:decline-toast', B.lastOf('toast') && /ことわり/.test(B.lastOf('toast').msg));
+  ck('rematch:decline-no-reset', srv.game.result !== null); // 盤はそのまま
+}
+
+// ── 追い出し(kick): 着席者が観戦者を退出させる / 観戦者は kick 不可 ──
+{ const { room, srv, connect, hello } = await freshSrv();
+  const B = new Conn('B'); connect(B); await hello(B, 'くろ');
+  const W = new Conn('W'); connect(W); await hello(W, 'しろ');
+  const S = new Conn('S'); connect(S); await hello(S, 'みる人');
+  const spid = B.lastOf('state').specList[0].spid;
+  // 観戦者が kick しようとしても無効
+  await srv.onMessage(JSON.stringify({ type: 'kick', spid }), S);
+  ck('kick:spectator-cannot', !S.closed && room.conns.has(S));
+  // 黒(着席)が観戦者を追い出す → kicked 受信 + 接続が外れる + 観戦者0
+  await srv.onMessage(JSON.stringify({ type: 'kick', spid }), B);
+  ck('kick:kicked-msg', S.lastOf('kicked') !== undefined);
+  ck('kick:closed', S.closed === true && !room.conns.has(S));
+  ck('kick:count-0', B.lastOf('state').spectators === 0);
+}
+
+// ── 参加(takeSeat): 空席に観戦者が着く / 空席なしは拒否 ──
+{ const { room, srv, connect, hello } = await freshSrv();
+  srv.now = () => 0;
+  const B = new Conn('B'); connect(B); await hello(B, 'くろ');
+  const W = new Conn('W'); connect(W); await hello(W, 'しろ');
+  const S = new Conn('S'); connect(S); await hello(S, 'みる人');
+  ck('take:before-spectator', S.lastOf('assigned').seat === 'spectator');
+  // 白が抜けて猶予超過 → 白席が空く (盤は空なのでリセット無し)
+  room.conns.delete(W); await srv.onClose(W);
+  srv.now = () => 31000; await srv.onAlarm();
+  ck('take:white-freed', srv.game.seats.white === null);
+  // 観戦者Sが空席(白)に着いて参加
+  await srv.onMessage(JSON.stringify({ type: 'takeSeat' }), S);
+  ck('take:now-white', S.lastOf('assigned').seat === 'white' && srv.game.seats.white && srv.game.seats.white.name === 'みる人');
+  ck('take:spectators-0', B.lastOf('state').spectators === 0);
+  // もう空席が無い別観戦者は拒否
+  const S2 = new Conn('S2'); connect(S2); await hello(S2, 'みる2');
+  await srv.onMessage(JSON.stringify({ type: 'takeSeat' }), S2);
+  ck('take:no-open-rejected', S2.lastOf('error') && S2.lastOf('assigned').seat === 'spectator');
+}
+
+// ── 先後入替(swapColors): 開始前のみ / 着手後は拒否 ──
+{ const { room, srv, connect, hello, move } = await freshSrv();
+  const B = new Conn('B'); connect(B); await hello(B, 'くろ');
+  const W = new Conn('W'); connect(W); await hello(W, 'しろ');
+  const pidB = srv.game.seats.black.pid, pidW = srv.game.seats.white.pid;
+  // 開始前: 入替成立 (B=白, W=黒)。assigned が再送される
+  await srv.onMessage(JSON.stringify({ type: 'swapColors' }), B);
+  ck('swap:pre-ok', srv.game.seats.black.pid === pidW && srv.game.seats.white.pid === pidB);
+  ck('swap:reassigned', B.lastOf('assigned').seat === 'white' && W.lastOf('assigned').seat === 'black');
+  ck('swap:turn-black', srv.game.turn === 'black');
+  // 着手後は入替不可 (いまの黒=元W)
+  await move(W, idx(7, 7));
+  await srv.onMessage(JSON.stringify({ type: 'swapColors' }), W);
+  ck('swap:mid-game-rejected', W.lastOf('error') && srv.game.seats.black.pid === pidW);
 }
 
 console.log('[server logic] pass=' + pass + ' / fail=' + fail, log.length ? log : '');
