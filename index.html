@@ -299,6 +299,19 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
   box-shadow:0 .8cqw 0 rgba(0,0,0,.2)}
 #muteBtn:active{transform:scale(.9)}
 #scr-game.active~#muteBtn{top:auto;bottom:2.6cqw}
+/* 新バージョン検知トースト: 控えめに下部中央へ */
+#swToast{position:absolute;left:50%;bottom:4cqw;z-index:60;
+  transform:translateX(-50%) translateY(3cqw);
+  display:flex;align-items:center;gap:2.4cqw;white-space:nowrap;
+  background:rgba(255,255,255,.96);color:#56497a;font-size:3.2cqw;font-weight:800;
+  border:.6cqw solid #cfc6e8;border-radius:99px;padding:1.8cqw 1.8cqw 1.8cqw 4cqw;
+  box-shadow:0 1.4cqw 3cqw rgba(58,45,86,.32);
+  opacity:0;pointer-events:none;transition:opacity .3s,transform .3s}
+#swToast.show{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto}
+#swToastBtn{font-size:3.2cqw;font-weight:800;color:#fff;
+  background:linear-gradient(180deg,#ff8fb3,#ff5c8a);
+  border-radius:99px;padding:1.6cqw 4.2cqw;box-shadow:0 .8cqw 0 #d23f6e}
+#swToastBtn:active{transform:translateY(.4cqw);box-shadow:0 .3cqw 0 #d23f6e}
 </style>
 </head>
 <body>
@@ -409,6 +422,12 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
   </div>
 
   <button id="muteBtn">🔊</button>
+
+  <!-- 新バージョン検知トースト (SW更新) -->
+  <div id="swToast" role="status">
+    <span id="swToastMsg">🆕 あたらしい バージョンが あります</span>
+    <button id="swToastBtn">こうしん</button>
+  </div>
 </div>
 
 <script>
@@ -1394,7 +1413,30 @@ function boot(){
   // PWA service worker (localhostでは登録しない: 開発中のキャッシュ事故防止)
   if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)
      &&!['localhost','127.0.0.1'].includes(location.hostname)){
-    navigator.serviceWorker.register('sw.js').catch(()=>{});
+    // 待機SWが有効化されたら一度だけリロードして最新版に切替
+    let swReloaded=false;
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{
+      if(swReloaded)return;swReloaded=true;location.reload();
+    });
+    const showSwToast=worker=>{
+      const t=$('swToast');if(!t||!worker)return;
+      t.classList.add('show');
+      $('swToastBtn').onclick=()=>{
+        worker.postMessage({type:'SKIP_WAITING'});
+        t.classList.remove('show');
+      };
+    };
+    navigator.serviceWorker.register('sw.js').then(reg=>{
+      // すでに待機中の更新があれば即トースト (controller あり= 既存SW稼働中)
+      if(reg.waiting&&navigator.serviceWorker.controller)showSwToast(reg.waiting);
+      reg.addEventListener('updatefound',()=>{
+        const w=reg.installing;if(!w)return;
+        w.addEventListener('statechange',()=>{
+          // installed かつ controller あり= 旧版を置き換える待機中の更新
+          if(w.state==='installed'&&navigator.serviceWorker.controller)showSwToast(w);
+        });
+      });
+    }).catch(()=>{});
   }
   setupOnlineUI();
   // ?room=CODE で開いたら五目並べのオンライン対戦へ自動参加
@@ -1759,7 +1801,8 @@ registerGame({
     }
     spawnItem(W*0.62);spawnItem(W*0.95);
     function speed(){
-      let s=(95+t*2)*(t<5?0.5:1)*(ctx.rookie?0.85:1);
+      // ベース流速を +25% (体感向上)。開始補正(t<5)と初心者補正(rookie)は維持
+      let s=(95+t*2)*1.25*(t<5?0.5:1)*(ctx.rookie?0.85:1);
       if(ctx.isFever())s*=1.1;
       return s;
     }
