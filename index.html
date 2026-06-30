@@ -300,7 +300,7 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 #muteBtn:active{transform:scale(.9)}
 #scr-game.active~#muteBtn{top:auto;bottom:2.6cqw}
 /* 新バージョン検知トースト: 控えめに下部中央へ */
-#swToast{position:absolute;left:50%;bottom:4cqw;z-index:60;
+#swToast{position:absolute;left:50%;bottom:4cqw;z-index:45;
   transform:translateX(-50%) translateY(3cqw);
   display:flex;align-items:center;gap:2.4cqw;white-space:nowrap;
   background:rgba(255,255,255,.96);color:#56497a;font-size:3.2cqw;font-weight:800;
@@ -1413,15 +1413,17 @@ function boot(){
   // PWA service worker (localhostでは登録しない: 開発中のキャッシュ事故防止)
   if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)
      &&!['localhost','127.0.0.1'].includes(location.hostname)){
-    // 待機SWが有効化されたら一度だけリロードして最新版に切替
-    let swReloaded=false;
+    // 更新ボタン押下後のみリロード。初回SW登録の clients.claim() 由来の
+    // controllerchange では reload しない(初回訪問の不意なリロード防止)
+    let reloadOnSwUpdate=false;
     navigator.serviceWorker.addEventListener('controllerchange',()=>{
-      if(swReloaded)return;swReloaded=true;location.reload();
+      if(reloadOnSwUpdate)location.reload();
     });
     const showSwToast=worker=>{
       const t=$('swToast');if(!t||!worker)return;
       t.classList.add('show');
       $('swToastBtn').onclick=()=>{
+        reloadOnSwUpdate=true;
         worker.postMessage({type:'SKIP_WAITING'});
         t.classList.remove('show');
       };
