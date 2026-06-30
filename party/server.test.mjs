@@ -326,5 +326,27 @@ async function freshSrv() {
   ck('swap:mid-game-rejected', W.lastOf('error') && srv.game.seats.black.pid === pidW);
 }
 
+// ── reviewer指摘: 再戦希望中の席が解放→takeSeat されても希望を引き継がない ──
+{ const { room, srv, connect, hello, move } = await freshSrv();
+  srv.now = () => 0;
+  const B = new Conn('B'); connect(B); await hello(B, 'くろ');
+  const W = new Conn('W'); connect(W); await hello(W, 'しろ');
+  const S = new Conn('S'); connect(S); await hello(S, 'みる人');
+  const win = [[B, idx(0, 5)], [W, idx(0, 0)], [B, idx(1, 5)], [W, idx(2, 0)], [B, idx(2, 5)], [W, idx(4, 0)], [B, idx(3, 5)], [W, idx(6, 0)], [B, idx(4, 5)]];
+  for (const [c, i] of win) await move(c, i);
+  // 白だけ再戦希望 (黒は希望せず → 再戦は成立しない)
+  await srv.onMessage(JSON.stringify({ type: 'rematch', on: true }), W);
+  ck('rematch-stale:white-flag-set', srv.game.rematch.white === true);
+  // 白が切断 → 30秒grace → onAlarm で解放。解放時に rematch.white をクリア
+  room.conns.delete(W); await srv.onClose(W);
+  srv.now = () => 31000; await srv.onAlarm();
+  ck('rematch-stale:white-seat-freed', srv.game.seats.white === null);
+  ck('rematch-stale:cleared-on-release', srv.game.rematch.white === false);
+  // 観戦者Sが白へ → 前任者の希望を引き継がない (新しい白は「へんじまち」にならない)
+  await srv.onMessage(JSON.stringify({ type: 'takeSeat' }), S);
+  ck('rematch-stale:new-white-seated', srv.game.seats.white && srv.game.seats.white.name === 'みる人');
+  ck('rematch-stale:new-white-no-rematch', srv.game.rematch.white === false);
+}
+
 console.log('[server logic] pass=' + pass + ' / fail=' + fail, log.length ? log : '');
 process.exit(fail ? 1 : 0);

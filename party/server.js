@@ -116,7 +116,7 @@ export default class GomokuServer {
     for (const mark of MARKS) {
       const s = g.seats[mark];
       if (s && s.disc != null && !live.has(s.token) && now - s.disc >= GRACE_MS) {
-        g.seats[mark] = null; released = true;
+        g.seats[mark] = null; g.rematch[mark] = false; released = true; // 解放席の再戦希望もクリア(新着席者へ引き継がない。相手側の希望は維持)
         if (!g.result && g.board.some(c => c)) midGameReset = true; // 対局途中の解放 → 盤リセット
       }
     }
@@ -288,6 +288,7 @@ export default class GomokuServer {
       if (!open) return this.err(conn, 'あきせきが ありません');
       const name = sanitizeName(st.name);
       g.seats[open] = { token: crypto.randomUUID(), name, disc: null, pid: crypto.randomUUID().slice(0, 8) };
+      g.rematch[open] = false; // 防御: 前任者の再戦希望を新着席者へ引き継がない(相手側の希望は維持)
       conn.setState({ seat: open, token: g.seats[open].token, name, spid: '' });
       conn.send(JSON.stringify({ type: 'assigned', seat: open, token: g.seats[open].token, name }));
       await this.save();
