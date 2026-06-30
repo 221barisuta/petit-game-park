@@ -3615,6 +3615,7 @@ registerGame({
     let board=othInitial();
     let turn=0,result=null,last=-1,t=0;
     let history=[];           // 待った用の盤面スナップショット
+    let lastPass=null;        // 直前に自動パスした色 (次着手まで HUD/盤面に表示)
     let flipMap=null,flipT=0;  // 反転アニメ (index→反転前の色)
     let placedAt=-1,placeT=0;  // 着手アニメ (置いた石のポップ)
     const FLIP_DUR=0.30, PLACE_DUR=0.16;
@@ -3629,7 +3630,7 @@ registerGame({
       return cy*N+cx;
     }
     function reset(){
-      board=othInitial();turn=0;result=null;last=-1;history=[];
+      board=othInitial();turn=0;result=null;last=-1;history=[];lastPass=null;
       flipMap=null;flipT=0;placedAt=-1;placeT=0;A.pop();
     }
     function endGame(){
@@ -3642,7 +3643,7 @@ registerGame({
       const oppIdx=1-turn,oppColor=players[oppIdx].color,myColor=players[turn].color;
       if(getValidMoves(board,oppColor).length){turn=oppIdx;}             // 相手に手あり
       else if(getValidMoves(board,myColor).length){                     // 相手0手→自動パス(手番維持)
-        banner(SYM[oppColor]+'は パス');A.bad();
+        lastPass=oppColor;banner(SYM[oppColor]+'は パス');A.bad();      // 次着手まで HUD/盤面に表示
       }else{endGame();}                                                  // 両者0手→終局
     }
     function place(cell){ // 着手を1箇所に集約 (反転・手番送りもここ)
@@ -3650,7 +3651,8 @@ registerGame({
       const color=players[turn].color;
       const flips=getFlips(board,cell,color);
       if(!flips.length){A.bad();vib(8);return;}        // 非合法マス
-      history.push({board:board.slice(),turn,last});   // 待った用スナップショット
+      history.push({board:board.slice(),turn,last,lastPass}); // 待った用スナップショット
+      lastPass=null;                                   // 着手したらパス表示を消す
       board=applyMove(board,cell,color);
       last=cell;placedAt=cell;placeT=PLACE_DUR;
       flipMap=new Map();const opp=othOpp(color);for(const f of flips)flipMap.set(f,opp);flipT=FLIP_DUR;
@@ -3660,7 +3662,7 @@ registerGame({
     function undo(){ // 待った: 直前の自分の着手(自動パス含む)を1手戻す
       if(!history.length){A.bad();return;}
       const s=history.pop();
-      board=s.board;turn=s.turn;last=s.last;
+      board=s.board;turn=s.turn;last=s.last;lastPass=s.lastPass;
       result=null;flipMap=null;flipT=0;placedAt=-1;placeT=0;
       A.pop();vib(8);
     }
@@ -3704,7 +3706,8 @@ registerGame({
         // 手番 / 結果
         if(!result){
           const m=players[turn].color;
-          outlinedText(g,SYM[m]+'の ばん',W/2,150,23,m==='black'?'#fff':'#fff',m==='black'?'#23203a':'#7a6a3a',6);
+          const txt=(lastPass?SYM[lastPass]+'は パス → ':'')+SYM[m]+'の ばん'; // 直前のパスを次着手まで表示
+          outlinedText(g,txt,W/2,150,lastPass?18:23,'#fff',m==='black'?'#23203a':'#7a6a3a',6);
         }else if(result.draw){
           outlinedText(g,'ひきわけ！',W/2,150,26,'#ffd23f','#5a3a10',7);
         }else{
@@ -3759,7 +3762,7 @@ registerGame({
         const {black,white}=countStones(board);
         const base='●'+black+' ○'+white;
         if(result)return base+' ／ '+(result.draw?'ひきわけ':SYM[result.winner]+'の かち');
-        return base+' ／ '+SYM[players[turn].color]+'の ばん';
+        return base+' ／ '+(lastPass?SYM[lastPass]+'パス→':'')+SYM[players[turn].color]+'の ばん';
       },
     };
   }
