@@ -3769,12 +3769,13 @@ registerGame({
         outlinedText(g,'オセロ',W/2,68,27,'#fff','#2a3352',7);
         // 石数 (常時表示)。●=黒/○=白 が色でも一致するよう ● は濃色・○ は淡色で描く
         const {black,white}=countStones(board);
+        // ○(中空グリフ)は塗り色にしても中が透けて半透明に見えるため、白も塗りつぶし円●を白で描く(色で黒白を区別)
         outlinedText(g,'●'+black,W/2-70,112,26,'#15122a','#e9e4f5',7);
-        outlinedText(g,'○'+white,W/2+70,112,26,'#ffffff','#15122a',7); // 白は不透明の純白で(半透明感を解消)
+        outlinedText(g,'●'+white,W/2+70,112,26,'#ffffff','#15122a',7);
         // 手番 / 結果
         if(!result){
           const m=players[turn].color;
-          const txt=(lastPass?SYM[lastPass]+'は パス → ':'')+SYM[m]+'の ばん'; // 直前のパスを次着手まで表示
+          const txt=(lastPass?'●は パス → ':'')+'●の ばん'; // 直前のパスを次着手まで表示 (●=塗りつぶし)
           // 手番の色を石に合わせる (黒=濃色/淡アウトライン, 白=純白/濃アウトライン)
           const isB=m==='black';
           outlinedText(g,txt,W/2,150,lastPass?18:23,isB?'#15122a':'#ffffff',isB?'#e9e4f5':'#15122a',6);
