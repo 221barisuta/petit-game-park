@@ -1348,7 +1348,7 @@ function buildCards(){
     c.style.setProperty('--c',def.color);
     const vsBadge=def.id==='chicken'?'🤖 CPUと たいせん':'👥 2人で たいせん'; // #1 チキンはCPUとの度胸試し
     c.innerHTML=`${isDaily?'<span class="badge">📅 きょうのチャレンジ</span>':''}
-      <span class="ic">${def.emoji}</span>
+      <span class="ic">${def.iconHtml||def.emoji}</span>
       <span class="tx"><span class="nm">${def.title}</span>
       <span class="ds">${isDaily?'きょうは みんな おなじもんだい！':def.desc}</span>
       ${isDaily
@@ -1973,10 +1973,7 @@ registerGame({
           g.beginPath();g.ellipse(it.x,BELT_Y-6,40,13,0,0,TAU);g.fill();
           g.strokeStyle=it.plate;g.lineWidth=5;g.stroke();
           emojiText(g,it.e,it.x,ey,44);
-          if(it.cat===odai){
-            const tw=1+Math.sin(t*6+it.ph)*0.15;
-            drawStar(g,it.x+26,ey-26,6*tw,t*2,'#ffd23f');
-          }
+          // お題該当の⭐ヒントは非表示 (内部判定 it.cat===odai は grab/スコア側で維持)
         }
         for(const f of flying){
           const a=clamp(1-(f.t-0.35)/0.35,0,1);
@@ -2351,6 +2348,8 @@ function runTicTacToeTests(){
 }
 registerGame({
   id:'ox', emoji:'⭕', title:'まるばつ たいせん',
+  // 選択画面アイコン: ○(赤系)と×(青系)を1つにまとめ、オセロ/五目と一目で区別 (盤面と同じ配色)
+  iconHtml:`<svg viewBox="0 0 100 100" width="80%" height="80%" style="display:block;overflow:visible"><circle cx="37" cy="40" r="23" fill="none" stroke="#ff5c8a" stroke-width="10"/><g stroke="#2a9df0" stroke-width="10" stroke-linecap="round"><line x1="53" y1="53" x2="83" y2="83"/><line x1="83" y1="53" x2="53" y2="83"/></g></svg>`,
   desc:'2人で あそぶ ○×ゲーム',
   color:'#ffd6a5', type:'versus',   // duration は付けない (タイマー無し)
   howto:[
@@ -4016,6 +4015,8 @@ function runChickenTests(){
 }
 registerGame({
   id:'chicken', emoji:'🏁', title:'チキンレース',
+  // 選択画面アイコン: チェッカーフラッグ🏁 + 鶏🐔 でチキンレースと分かるように (小サイズでも判別)
+  iconHtml:`<span style="display:inline-flex;align-items:center;justify-content:center;line-height:1;font-size:6.8cqw">🏁<span style="margin-left:-1.4cqw">🐔</span></span>`,
   desc:'崖ギリギリで止めろ！CPUとの度胸試し',
   color:'#ff8a5c', type:'versus',   // duration は付けない (タイマー無し・3R対戦)
   howto:[
