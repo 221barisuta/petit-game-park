@@ -12,7 +12,18 @@ compatibility_date = "2025-06-01"
 name = "Main"
 class_name = "Gomoku"
 
+# #11 オセロ: バインディング名 "Othello" は partyserver で kebab 化され party "othello" に対応
+# → クライアントの接続パス /parties/othello/<code> に対応する。五目(main)とは別DO=別部屋空間。
+[[durable_objects.bindings]]
+name = "Othello"
+class_name = "Othello"
+
 # SQLite-backed Durable Object (無料枠で利用可)。WebSocket Hibernation と DO Alarm(席解放) が動く。
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Gomoku"]
+
+# #11 オセロ DO を追加 (既存 v1 は不変更。tag 追記のみ)
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Othello"]
