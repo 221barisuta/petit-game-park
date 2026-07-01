@@ -1354,7 +1354,7 @@ function buildCards(){
       ${isDaily
         ? '<span class="bs" id="best-daily">きょうのベスト 0</span>'
         : def.type==='versus'
-          ? `<span class="vs">${vsBadge}</span>`
+          ? `<span class="vs">${vsBadge}</span>${def.id==='chicken'?'<span class="bs" id="best-chicken">ベスト 0</span>':''}`
           : `<span class="bs" id="best-${def.id}">ベスト 0</span>`}</span>
       <span class="qbtn" data-q="${def.id}">?</span>`;
     // 「？」は専用ハンドラで howto を明示起動 (stopPropagation でカード遷移と分離)
@@ -3770,12 +3770,14 @@ registerGame({
         // 石数 (常時表示)。●=黒/○=白 が色でも一致するよう ● は濃色・○ は淡色で描く
         const {black,white}=countStones(board);
         outlinedText(g,'●'+black,W/2-70,112,26,'#15122a','#e9e4f5',7);
-        outlinedText(g,'○'+white,W/2+70,112,26,'#fbf8ef','#15122a',7);
+        outlinedText(g,'○'+white,W/2+70,112,26,'#ffffff','#15122a',7); // 白は不透明の純白で(半透明感を解消)
         // 手番 / 結果
         if(!result){
           const m=players[turn].color;
           const txt=(lastPass?SYM[lastPass]+'は パス → ':'')+SYM[m]+'の ばん'; // 直前のパスを次着手まで表示
-          outlinedText(g,txt,W/2,150,lastPass?18:23,'#fff',m==='black'?'#23203a':'#7a6a3a',6);
+          // 手番の色を石に合わせる (黒=濃色/淡アウトライン, 白=純白/濃アウトライン)
+          const isB=m==='black';
+          outlinedText(g,txt,W/2,150,lastPass?18:23,isB?'#15122a':'#ffffff',isB?'#e9e4f5':'#15122a',6);
         }else if(result.draw){
           outlinedText(g,'ひきわけ！',W/2,150,26,'#ffd23f','#5a3a10',7);
         }else{
