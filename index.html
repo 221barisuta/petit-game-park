@@ -1456,9 +1456,10 @@ function boot(){
     }).catch(()=>{});
   }
   setupOnlineUI();
-  // ?room=CODE で開いたら五目並べのオンライン対戦へ自動参加
-  {const rp=new URLSearchParams(location.search).get('room');
-   if(rp&&GomokuNet.available()){const def=GAMES.find(g=>g.id==='gomoku');
+  // ?room=CODE[&g=<gameId>] で開いたら該当ゲームのオンライン対戦へ自動参加 (g省略=五目・従来互換)
+  {const sp=new URLSearchParams(location.search),rp=sp.get('room'),gid=(sp.get('g')||'gomoku').toLowerCase();
+   const net=gid==='othello'?OthelloNet:GomokuNet; // 部屋のparty空間を持つnetで可用性判定
+   if(rp&&net.available()){const def=GAMES.find(g=>g.id===gid)||GAMES.find(g=>g.id==='gomoku');
      if(def){pendingOnlineRoom=rp.toUpperCase();openGame(def,{});}}}
   window.__PGP={
     get game(){return game},get phase(){return phase},get def(){return curDef},
@@ -2736,7 +2737,7 @@ function runGomokuCpuTests(){
    - 席トークン/名前を localStorage 保存し再接続で同席復帰 (seatPrefix でゲーム別に分離)
    ============================================================ */
 function makeOnlineNet(opts){
-  const {party,seatPrefix,gameLabel}=opts;
+  const {party,seatPrefix,gameLabel,gameId}=opts;
   const NAME_KEY='pgp2_name'; // 名前はゲーム横断で共有
   const seatKey=code=>seatPrefix+code;
   const ADJ=['あかい','あおい','きいろい','みどりの','しろい','むらさきの','ちゃいろい','オレンジの','ピンクの','きんいろの'];
@@ -2778,7 +2779,7 @@ function makeOnlineNet(opts){
   function disconnect(){clearTimeout(state._retry);if(state.ws){try{state.ws.onclose=null;state.ws.close();}catch(e){}state.ws=null;}}
   function leave(){state._left=true;disconnect();state.status='idle';state.code='';state.seat=null;state.game=null;emit();}
   const send=o=>{if(state.ws&&state.ws.readyState===1)state.ws.send(JSON.stringify(o));};
-  return {state,available,host,getName,setName,randName,genCode,connect,disconnect,leave,seatKey,gameLabel,
+  return {state,available,host,getName,setName,randName,genCode,connect,disconnect,leave,seatKey,gameLabel,gameId,
     move:i=>send({type:'move',index:i}),
     undo:()=>send({type:'undo'}),
     rename:n=>{setName(n);send({type:'rename',name:getName()});},
@@ -2788,11 +2789,16 @@ function makeOnlineNet(opts){
     takeSeat:()=>send({type:'takeSeat'}),
     swapColors:()=>send({type:'swapColors'})};
 }
-const GomokuNet=makeOnlineNet({party:'main',seatPrefix:'pgp2_gomoku_seat_',gameLabel:'五目並べ'});
-const OthelloNet=makeOnlineNet({party:'othello',seatPrefix:'pgp2_othello_seat_',gameLabel:'オセロ'});
+const GomokuNet=makeOnlineNet({party:'main',seatPrefix:'pgp2_gomoku_seat_',gameLabel:'五目並べ',gameId:'gomoku'});
+const OthelloNet=makeOnlineNet({party:'othello',seatPrefix:'pgp2_othello_seat_',gameLabel:'オセロ',gameId:'othello'});
 let activeNet=GomokuNet; // オンライン画面に入ったゲームの net を指す (renderOnlineBar/setupOnlineUI 共用)
 let pendingOnlineRoom=''; // ?room=CODE 自動参加用 (boot→gomoku create で消費)
-function roomLink(code){return location.origin+location.pathname+'?room='+encodeURIComponent(code);}
+function roomLink(code,gameId){
+  // 招待リンクにゲーム種別を付与。五目は従来互換(?room=CODE)、オセロ等は &g=<id> を足す
+  gameId=gameId||(typeof activeNet!=='undefined'&&activeNet?activeNet.gameId:'gomoku')||'gomoku';
+  const q=(gameId&&gameId!=='gomoku')?'&g='+encodeURIComponent(gameId):'';
+  return location.origin+location.pathname+'?room='+encodeURIComponent(code)+q;
+}
 function setRoomUrl(code){try{history.replaceState(null,'',code?roomLink(code):location.origin+location.pathname);}catch(e){}}
 function copyText(t){try{navigator.clipboard.writeText(t);}catch(e){}}
 function flashBtn(el,txt){const o=el.textContent;el.textContent=txt;setTimeout(()=>{el.textContent=o;},900);}
@@ -4029,8 +4035,10 @@ registerGame({
       activeNet=OthelloNet; // オンラインバー(DOM)をオセロnetへ束ねる
       screen='online';result=null;last=-1;lastPass=null;flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;
       onlineSeenNo=-1;onlineFxDone=false;pendingMove=-1;onlineToastSeq=OthelloNet.state.toastSeq;onlineSnap='';
-      $('olName').value=OthelloNet.getName();$('olCode').value='';$('olSetupMsg').textContent='';
-      $('onlineSetup').classList.remove('hidden'); // 入室UI(DOM)を出す
+      if(pendingOnlineRoom){const code=pendingOnlineRoom;pendingOnlineRoom='';   // ?room=&g=othello 自動参加
+        OthelloNet.connect(code);setRoomUrl(code);$('onlineBar').classList.remove('hidden');renderOnlineBar();}
+      else{$('olName').value=OthelloNet.getName();$('olCode').value='';$('olSetupMsg').textContent='';
+        $('onlineSetup').classList.remove('hidden');}                            // 入室UI(DOM)を出す
     }
     function leaveOnline(){
       OthelloNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');
@@ -4117,6 +4125,7 @@ registerGame({
         else{pendingMove=c;A.pop();}                                    // 仮置き(別マスなら移動)
       }else if(cellAt(x,y)>=0)A.bad();
     }
+    if(pendingOnlineRoom)enterOnline(); // ?room=&g=othello で開かれた場合は即オンラインへ
 
     return {
       onDown(x,y){
