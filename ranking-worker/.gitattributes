@@ -1,0 +1,3 @@
+# worker.js contains an escaped control-char range in a regex; force textual
+# diffs so `gh pr diff` / GitHub render it as text (not "Binary files differ").
+worker.js diff text
