@@ -740,7 +740,10 @@ const GAMES=[];
 function registerGame(def){GAMES.push(def)}
 // メニュー分類: versus=たいせん / それ以外=ひとり (新規ゲームも type で自動振り分け)
 const soloGames=()=>GAMES.filter(g=>g.type!=='versus');
-const versusGames=()=>GAMES.filter(g=>g.type==='versus');
+// たいせんの表示順 (#7 まるばつ→オセロ→五目→チキン。方針: マス目が多いほど下)。未定義idは末尾。
+const VS_ORDER=['ox','othello','gomoku','chicken'];
+const vsOrder=id=>{const i=VS_ORDER.indexOf(id);return i<0?99:i;};
+const versusGames=()=>GAMES.filter(g=>g.type==='versus').sort((a,b)=>vsOrder(a.id)-vsOrder(b.id));
 // デイリー抽選は「ひとり(非versus)」プールのみから選ぶ (versusはスコア競争にならないため除外)
 const dailyDef=()=>{const s=soloGames();return s[todaySeed()%s.length]};
 let menuTab=store.get('pgp2_menutab','solo')==='versus'?'versus':'solo'; // アクティブタブ (localStorage復元)
@@ -3008,7 +3011,7 @@ registerGame({
       let y=368;
       if(cfg.mode==='pvc'){
         add(50,y+18,150,44,'あなた せんて','first',1,cfg.humanFirst);
-        add(220,y+18,150,44,'あなた こうて','first',0,!cfg.humanFirst);y+=78;
+        add(220,y+18,150,44,'あなた ごて','first',0,!cfg.humanFirst);y+=78;
         for(let i=0;i<3;i++)add(50+i*108,y+18,100,44,LV[i],'levelL',i+1,cfg.levelL===i+1);y+=78;
       }else if(cfg.mode==='cvc'){
         for(let i=0;i<3;i++)add(50+i*108,y+18,100,44,LV[i],'levelL',i+1,cfg.levelL===i+1);y+=78;
