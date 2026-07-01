@@ -164,6 +164,10 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 #btnQuit{width:9cqw;height:9cqw;border-radius:50%;font-size:4.2cqw;font-weight:800;color:#fff;
   background:rgba(20,16,40,.5);border:.6cqw solid rgba(255,255,255,.5);flex:none}
 #btnQuit:active{transform:scale(.92)}
+/* 結果画面のメニュー戻りもゲーム中と同じ左上×に統一 (#12) */
+#btnQuitResult{position:absolute;top:2.4cqw;left:3cqw;width:9cqw;height:9cqw;border-radius:50%;
+  font-size:4.2cqw;font-weight:800;color:#fff;background:rgba(20,16,40,.5);border:.6cqw solid rgba(255,255,255,.5);z-index:6}
+#btnQuitResult:active{transform:scale(.92)}
 #hudMid{flex:1;display:flex;flex-direction:column;align-items:center;gap:.6cqw;pointer-events:none}
 #hudScore{font-size:7.4cqw;font-weight:800;color:#fff;line-height:1;
   -webkit-text-stroke:1.4cqw #2c2547;paint-order:stroke fill;text-shadow:0 .9cqw 0 rgba(0,0,0,.25)}
@@ -409,6 +413,7 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
   </section>
 
   <section id="scr-result" class="screen">
+    <button id="btnQuitResult" title="メニューへ">✕</button>
     <div id="resHead"><span id="resGameName"></span><span id="resDaily" class="hidden">📅 デイリー</span></div>
     <div id="resScore">0</div>
     <div id="resRecord" class="hidden">🎉 しんきろく！ 🎉</div>
@@ -420,7 +425,6 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
     <div id="resRow">
       <button class="mini-btn" id="btnShare">📤 シェア</button>
       <button class="mini-btn" id="btnSavePng">💾 がぞう</button>
-      <button class="mini-btn" id="btnToSelect2">🎮 えらぶ</button>
     </div>
     <div id="resBest">ベスト: 0</div>
   </section>
@@ -740,7 +744,10 @@ const GAMES=[];
 function registerGame(def){GAMES.push(def)}
 // メニュー分類: versus=たいせん / それ以外=ひとり (新規ゲームも type で自動振り分け)
 const soloGames=()=>GAMES.filter(g=>g.type!=='versus');
-const versusGames=()=>GAMES.filter(g=>g.type==='versus');
+// たいせんの表示順 (#7 まるばつ→オセロ→五目→チキン。方針: マス目が多いほど下)。未定義idは末尾。
+const VS_ORDER=['ox','othello','gomoku','chicken'];
+const vsOrder=id=>{const i=VS_ORDER.indexOf(id);return i<0?99:i;};
+const versusGames=()=>GAMES.filter(g=>g.type==='versus').sort((a,b)=>vsOrder(a.id)-vsOrder(b.id));
 // デイリー抽選は「ひとり(非versus)」プールのみから選ぶ (versusはスコア競争にならないため除外)
 const dailyDef=()=>{const s=soloGames();return s[todaySeed()%s.length]};
 let menuTab=store.get('pgp2_menutab','solo')==='versus'?'versus':'solo'; // アクティブタブ (localStorage復元)
@@ -1332,29 +1339,23 @@ function buildCards(){
   document.querySelectorAll('#menuTabs .mtab').forEach(b=>b.classList.toggle('active',b.dataset.tab===menuTab));
   $('tcount-solo').textContent=soloGames().length;
   $('tcount-versus').textContent=versusGames().length;
-  // デイリーチャレンジカード (ひとりタブのみ。抽選も soloGames から)
-  if(!versus){
-    const ddef=dailyDef();
-    const dc=document.createElement('button');
-    dc.className='gcard daily';
-    dc.innerHTML=`<span class="badge">📅 きょうのチャレンジ</span>
-      <span class="ic">${ddef.emoji}</span>
-      <span class="tx"><span class="nm">${todayLabel()}は「${ddef.title}」</span>
-      <span class="ds">きょうは みんな おなじもんだい！</span>
-      <span class="bs" id="best-daily">きょうのベスト 0</span></span>`;
-    dc.addEventListener('click',()=>{AudioKit.ensure();AudioKit.pop();openGame(ddef,{daily:true})});
-    list.appendChild(dc);
-  }
+  // デイリーチャレンジ (#3): 別カードを増やさず、対象ゲームの自カードを強調枠にする (ひとりタブのみ・抽選も soloGames から)
+  const ddef=!versus?dailyDef():null;
   for(const def of (versus?versusGames():soloGames())){
+    const isDaily=!!(ddef&&def.id===ddef.id);   // このカード自体を「きょうのチャレンジ」枠に
     const c=document.createElement('button');
-    c.className='gcard';
+    c.className='gcard'+(isDaily?' daily':'');
     c.style.setProperty('--c',def.color);
-    c.innerHTML=`<span class="ic">${def.emoji}</span>
+    const vsBadge=def.id==='chicken'?'🤖 CPUと たいせん':'👥 2人で たいせん'; // #1 チキンはCPUとの度胸試し
+    c.innerHTML=`${isDaily?'<span class="badge">📅 きょうのチャレンジ</span>':''}
+      <span class="ic">${def.emoji}</span>
       <span class="tx"><span class="nm">${def.title}</span>
-      <span class="ds">${def.desc}</span>
-      ${def.type==='versus'
-        ? '<span class="vs">👥 2人で たいせん</span>'
-        : `<span class="bs" id="best-${def.id}">ベスト 0</span>`}</span>
+      <span class="ds">${isDaily?'きょうは みんな おなじもんだい！':def.desc}</span>
+      ${isDaily
+        ? '<span class="bs" id="best-daily">きょうのベスト 0</span>'
+        : def.type==='versus'
+          ? `<span class="vs">${vsBadge}</span>${def.id==='chicken'?'<span class="bs" id="best-chicken">ベスト 0</span>':''}`
+          : `<span class="bs" id="best-${def.id}">ベスト 0</span>`}</span>
       <span class="qbtn" data-q="${def.id}">?</span>`;
     // 「？」は専用ハンドラで howto を明示起動 (stopPropagation でカード遷移と分離)
     const q=c.querySelector('.qbtn');
@@ -1365,7 +1366,7 @@ function buildCards(){
     });
     c.addEventListener('click',()=>{
       AudioKit.ensure();AudioKit.pop();
-      openGame(def,{});
+      openGame(def,isDaily?{daily:true}:{});   // デイリー枠のカードは daily モードで起動
     });
     list.appendChild(c);
   }
@@ -1403,7 +1404,7 @@ function boot(){
   $('btnQuit').addEventListener('click',()=>{AudioKit.pop();quitGame()});
   $('btnHowtoStart').addEventListener('click',()=>{AudioKit.pop();startCountdown(false)});
   $('btnRetryBig').addEventListener('click',()=>{AudioKit.pop();openGame(curDef,{daily:isDaily,retry:true})});
-  $('btnToSelect2').addEventListener('click',()=>{AudioKit.pop();refreshBests();show('scr-select')});
+  $('btnQuitResult').addEventListener('click',()=>{AudioKit.pop();refreshBests();show('scr-select')});
   $('btnShare').addEventListener('click',()=>{doShare()});
   $('btnSavePng').addEventListener('click',()=>{AudioKit.pop();savePng()});
   $('muteBtn').addEventListener('click',()=>{
@@ -3014,7 +3015,7 @@ registerGame({
       let y=368;
       if(cfg.mode==='pvc'){
         add(50,y+18,150,44,'あなた せんて','first',1,cfg.humanFirst);
-        add(220,y+18,150,44,'あなた こうて','first',0,!cfg.humanFirst);y+=78;
+        add(220,y+18,150,44,'あなた ごて','first',0,!cfg.humanFirst);y+=78;
         for(let i=0;i<3;i++)add(50+i*108,y+18,100,44,LV[i],'levelL',i+1,cfg.levelL===i+1);y+=78;
       }else if(cfg.mode==='cvc'){
         for(let i=0;i<3;i++)add(50+i*108,y+18,100,44,LV[i],'levelL',i+1,cfg.levelL===i+1);y+=78;
@@ -3737,8 +3738,7 @@ registerGame({
     function drawStone(g,color,c,r,sx,sc){
       g.save();g.translate(c.x,c.y);g.scale((sx==null?1:sx)*(sc==null?1:sc),(sc==null?1:sc));
       g.beginPath();g.arc(0,0,r,0,TAU);
-      if(color==='black'){g.fillStyle='#23203a';g.fill();
-        g.beginPath();g.arc(-r*0.28,-r*0.28,r*0.34,0,TAU);g.fillStyle='rgba(255,255,255,.14)';g.fill();}
+      if(color==='black'){g.fillStyle='#141225';g.fill();} // 黒は白ハイライト無しの単色 (枠っぽさを除去)
       else{g.fillStyle='#fbf8ef';g.fill();g.lineWidth=2;g.strokeStyle='#b7ad93';g.stroke();
         g.beginPath();g.arc(-r*0.28,-r*0.28,r*0.30,0,TAU);g.fillStyle='rgba(255,255,255,.7)';g.fill();}
       g.restore();
@@ -3765,17 +3765,29 @@ registerGame({
         if(placeT>0)placeT=Math.max(0,placeT-dt);
       },
       draw(g){
-        g.fillStyle='#2b2550';g.fillRect(0,0,W,H);
-        outlinedText(g,'オセロ',W/2,68,27,'#fff','#3a2a4a',7);
-        // 石数 (常時表示)
+        g.fillStyle='#3c4a70';g.fillRect(0,0,W,H); // 地色を少し明るく (白黒の視認性UP)
+        outlinedText(g,'オセロ',W/2,68,27,'#fff','#2a3352',7);
+        // 石数 (常時表示)。●=黒/○=白 が色でも一致するよう ● は濃色・○ は淡色で描く
         const {black,white}=countStones(board);
-        outlinedText(g,'●'+black,W/2-70,112,26,'#fff','#23203a',7);
-        outlinedText(g,'○'+white,W/2+70,112,26,'#2b2550','#fbf8ef',7);
+        // ○(中空グリフ)は塗り色にしても中が透けて半透明に見えるため、白も塗りつぶし円●を白で描く(色で黒白を区別)
+        outlinedText(g,'●'+black,W/2-70,112,26,'#15122a','#e9e4f5',7);
+        outlinedText(g,'●'+white,W/2+70,112,26,'#ffffff','#15122a',7);
         // 手番 / 結果
         if(!result){
           const m=players[turn].color;
-          const txt=(lastPass?SYM[lastPass]+'は パス → ':'')+SYM[m]+'の ばん'; // 直前のパスを次着手まで表示
-          outlinedText(g,txt,W/2,150,lastPass?18:23,'#fff',m==='black'?'#23203a':'#7a6a3a',6);
+          // 石色で塗り分け (黒=濃色/淡アウトライン, 白=純白/濃アウトライン)
+          const col=c=>c==='black'?['#15122a','#e9e4f5']:['#ffffff','#15122a'];
+          const [cf,cs]=col(m);
+          if(lastPass){
+            // 直前の自動パスを次着手まで表示。パスした側と現手番で石色が違うので2セグメント描画
+            const [pf,ps]=col(lastPass), sz=18, sA='●は パス → ', sB='●の ばん';
+            g.save();g.font=`800 ${sz}px ${FONT}`;const wA=g.measureText(sA).width,wB=g.measureText(sB).width;g.restore();
+            const x0=W/2-(wA+wB)/2;
+            outlinedText(g,sA,x0,150,sz,pf,ps,5,1,'left');
+            outlinedText(g,sB,x0+wA,150,sz,cf,cs,5,1,'left');
+          }else{
+            outlinedText(g,'●の ばん',W/2,150,23,cf,cs,6);
+          }
         }else if(result.draw){
           outlinedText(g,'ひきわけ！',W/2,150,26,'#ffd23f','#5a3a10',7);
         }else{
@@ -3966,6 +3978,7 @@ registerGame({
     let diff=store.get('pgp2_chk_diff','normal'); if(!DIFF[diff])diff='normal';
     let stPhase='title';            // title|count|run|rresult|mresult
     let round=0, results=[];
+    let matchIsRec=false;   // #13 直近マッチでベスト更新したか (結果画面の「しんきろく！」表示用)
     let pCar=null, cCar=null, held=false, keyHeld=false; // held=ポインタ押下 / keyHeld=Space
     let cdT=0, cdIdx=-1, t=0, acc=0, resolveT=0, shakeT=0, flashT=0, runT=0;
     let skyGrad=null, abyssGrad=null;                    // 定数グラデはキャッシュ(毎フレーム再生成しない)
@@ -3989,11 +4002,15 @@ registerGame({
       acc=0; resolveT=0; runT=0;
     }
     function beginCountdown(){ stPhase='count'; cdT=0; cdIdx=-1; }
-    function startMatch(){ round=0; results=[]; setupRound(); beginCountdown(); }
+    function startMatch(){ round=0; results=[]; matchIsRec=false; setupRound(); beginCountdown(); }
     function nextRound(){
       if(round>=ROUND_PLAN.length-1){   // 最終ラウンド後 → マッチ結果 (round は範囲内に保つ)
         stPhase='mresult';
         const w=judgeMatch(results);
+        // #13 成績: マッチの近さ得点合計(pScore和)を チキンのベストとして記録
+        let mps=0;for(const rr of results)mps+=rr.pScore;
+        matchIsRec=mps>getInt('pgp2_best_chicken',0);
+        if(matchIsRec)store.set('pgp2_best_chicken',String(mps));
         if(w==='p'){A.coin();confetti();vib([30,50,30,50,30]);}
         else if(w==='c'){A.bad();vib([60,40,60]);}
         else A.ok();
@@ -4168,6 +4185,7 @@ registerGame({
       // ── 局面オーバーレイ ──
       if(stPhase==='title'){
         outlinedText(g,'～崖っぷちの勇気～',W/2,150,16,'#ffb38a','#3a1f1a',5);
+        outlinedText(g,'🏅 ベスト '+getInt('pgp2_best_chicken',0)+'pt',W/2,178,14,'#ffd9a0','#3a1f1a',4); // #13 成績表示
         outlinedText(g,'アクセル長押しで加速、離して',W/2,300,15,'#fff','#2a1530',4);
         outlinedText(g,'崖ギリギリで止めろ！越えたら負け',W/2,324,15,'#fff','#2a1530',4);
         outlinedText(g,'むずかしさ',W/2,422,15,'#cbb8e8','#241636',4);
@@ -4227,7 +4245,9 @@ registerGame({
           let ps=0,cs=0;for(const rr2 of results){ps+=rr2.pScore;cs+=rr2.cScore;}
           outlinedText(g,'勝ち数  あなた '+pw+' – '+cw+' CPU',W/2,316,18,'#fff','#241636',5);
           outlinedText(g,'近さ得点合計  '+ps+' – '+cs,W/2,350,15,'#ffe6cf','#241636',4);
-          let ry=392;
+          // #13 ベスト成績 + 新記録表示
+          outlinedText(g,'🏅 ベスト '+getInt('pgp2_best_chicken',0)+'pt'+(matchIsRec?'  🎉しんきろく！':''),W/2,374,14,matchIsRec?'#ffe93d':'#ffd9a0','#241636',4);
+          let ry=402;
           results.forEach((rr2,i)=>{
             const s=rr2.winner==='p'?'あなた':rr2.winner==='c'?'CPU':'引分';
             outlinedText(g,'R'+(i+1)+': '+s+'  ('+(rr2.pFell?'転落':rr2.pScore+'pt')+' vs '+(rr2.cFell?'転落':rr2.cScore+'pt')+')',W/2,ry,13,'#cbb8e8','#241636',3);
