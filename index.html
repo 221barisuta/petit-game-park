@@ -3609,6 +3609,22 @@ function getWinner(board){
   const {black,white}=countStones(board);
   return black>white?'black':white>black?'white':'draw';
 }
+// --- #9 ヒント / #10 CPU 共通の手評価 (純関数・副作用なし) ---
+const OTH_CORNERS=new Set([0,7,56,63]);
+// index に color が打つ手の評価値。非合法(0反転)は -Infinity。角優先(+1000) ＋ 最多反転。
+function evalOthelloMove(board,index,color){
+  const flips=getFlips(board,index,color).length;
+  if(!flips)return -Infinity;
+  return flips+(OTH_CORNERS.has(index)?1000:0); // 角が取れる手を最優先、無ければ最多反転
+}
+// color の推奨手index (評価最大・同点は最小index=決定的)。手が無ければ -1。
+function getOthelloHint(board,color){
+  const moves=getValidMoves(board,color);
+  if(!moves.length)return -1;
+  let best=moves[0],bestS=evalOthelloMove(board,moves[0],color);
+  for(const m of moves){const s=evalOthelloMove(board,m,color);if(s>bestS){bestS=s;best=m;}}
+  return best;
+}
 /* runOthelloTests 自動テスト: 初期配置 / 基本反転 / 複数方向同時反転 / 入力不変 /
    非合法手 / パス(片側0手) / 終局 / 勝敗集計 / 引き分け。?selftest で実行。 */
 function runOthelloTests(){
@@ -3660,6 +3676,30 @@ function runOthelloTests(){
   console.log('[othello tests] pass='+pass+' / fail='+fail, log.length?log:'');
   return {pass,fail,log};
 }
+/* runOthelloHintTests 自動テスト: 角優先 / 最多反転(同点は最小index) / 非合法-∞ /
+   手なし-1 / 初期盤の推奨手が合法手。?selftest で実行。 */
+function runOthelloHintTests(){
+  let pass=0,fail=0;const log=[];
+  const ck=(name,cond)=>{cond?pass++:fail++;if(!cond)log.push(name);};
+  // 角優先: 角(0)を取れる手(1反転) を、非角で反転数の多い手(2反転) より優先する
+  {const b=Array(64).fill(null);b[1]='white';b[2]='black';           // 0に打つと[1]反転=角取り
+   b[20]='white';b[21]='white';b[22]='black';                        // 19に打つと[20,21]反転=非角2反転
+   ck('corner-legal',getFlips(b,0,'black').length>0);
+   ck('eval-corner-over-flips',evalOthelloMove(b,0,'black')>evalOthelloMove(b,19,'black'));
+   ck('hint-prefers-corner',getOthelloHint(b,'black')===0);}
+  // 角が無い盤(初期配置)は各手1反転で同点 → 最小index(19)を決定的に返す
+  {const b=othInitial();ck('most-flips-tie-min',getOthelloHint(b,'black')===19);}
+  // 非合法(空マスで挟めない/既に石あり)は -Infinity
+  {const b=othInitial();
+   ck('illegal-neginf',evalOthelloMove(b,0,'black')===-Infinity);
+   ck('occupied-neginf',evalOthelloMove(b,27,'black')===-Infinity);}
+  // 合法手ゼロ → -1
+  {const b=Array(64).fill('black');ck('no-moves-neg1',getOthelloHint(b,'white')===-1);}
+  // 初期盤の推奨手は合法手のひとつ
+  {const b=othInitial();ck('hint-is-valid',getValidMoves(b,'black').includes(getOthelloHint(b,'black')));}
+  console.log('[othello hint tests] pass='+pass+' / fail='+fail, log.length?log:'');
+  return {pass,fail,log};
+}
 registerGame({
   id:'othello', emoji:'🔴', title:'オセロ',
   desc:'2人で あそぶ オセロ (リバーシ)',
@@ -3687,6 +3727,7 @@ registerGame({
     let lastPass=null;        // 直前に自動パスした色 (次着手まで HUD/盤面に表示)
     let flipMap=null,flipT=0;  // 反転アニメ (index→反転前の色)
     let placedAt=-1,placeT=0;  // 着手アニメ (置いた石のポップ)
+    let hint=-1,hintT=0;       // #9 ヒント: 推奨手index / 残り点滅秒
     const FLIP_DUR=0.30, PLACE_DUR=0.16;
 
     function center(idx){
@@ -3700,7 +3741,7 @@ registerGame({
     }
     function reset(){
       board=othInitial();turn=0;result=null;last=-1;history=[];lastPass=null;
-      flipMap=null;flipT=0;placedAt=-1;placeT=0;A.pop();
+      flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;A.pop();
     }
     function endGame(){
       const w=getWinner(board);
@@ -3722,6 +3763,7 @@ registerGame({
       if(!flips.length){A.bad();vib(8);return;}        // 非合法マス
       history.push({board:board.slice(),turn,last,lastPass}); // 待った用スナップショット
       lastPass=null;                                   // 着手したらパス表示を消す
+      hint=-1;hintT=0;                                 // 着手でヒント消去
       board=applyMove(board,cell,color);
       last=cell;placedAt=cell;placeT=PLACE_DUR;
       flipMap=new Map();const opp=othOpp(color);for(const f of flips)flipMap.set(f,opp);flipT=FLIP_DUR;
@@ -3732,8 +3774,13 @@ registerGame({
       if(!history.length){A.bad();return;}
       const s=history.pop();
       board=s.board;turn=s.turn;last=s.last;lastPass=s.lastPass;
-      result=null;flipMap=null;flipT=0;placedAt=-1;placeT=0;
+      result=null;flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;
       A.pop();vib(8);
+    }
+    function showOthHint(){ // 💡 推奨手を1マス点滅表示 (対局中の現手番のみ・#8全合法手表示とは別)
+      if(result){A.bad();return;}
+      const idx=getOthelloHint(board,players[turn].color);
+      if(idx>=0&&board[idx]===null){hint=idx;hintT=3.2;A.coin();}else A.bad();
     }
     function drawStone(g,color,c,r,sx,sc){
       g.save();g.translate(c.x,c.y);g.scale((sx==null?1:sx)*(sc==null?1:sc),(sc==null?1:sc));
@@ -3757,12 +3804,14 @@ registerGame({
           reset();return;                       // それ以外のタップでリセット
         }
         if(hitBtn(btnL,x,y)){undo();return}     // プレイ中: まった
+        if(hitBtn(btnR,x,y)){showOthHint();return} // プレイ中: 💡ヒント
         place(cellAt(x,y));
       },
       update(dt){
         t+=dt;
         if(flipT>0)flipT=Math.max(0,flipT-dt);
         if(placeT>0)placeT=Math.max(0,placeT-dt);
+        if(hintT>0)hintT=Math.max(0,hintT-dt);
       },
       draw(g){
         g.fillStyle='#3c4a70';g.fillRect(0,0,W,H); // 地色を少し明るく (白黒の視認性UP)
@@ -3812,6 +3861,13 @@ registerGame({
           for(const i of getValidMoves(board,mc)){const c=center(i);g.beginPath();g.arc(c.x,c.y,CELL*0.16,0,TAU);g.fill();}
           g.restore();
         }
+        // #9 ヒント: 推奨手を金色リングで点滅 (#8 合法手マーカーとは別表示で共存)
+        if(!result&&hint>=0&&hintT>0&&board[hint]===null){
+          const c=center(hint);
+          g.save();g.globalAlpha=0.55+0.45*Math.sin(t*8);
+          g.strokeStyle='#ffd23f';g.lineWidth=3.5;
+          g.beginPath();g.arc(c.x,c.y,CELL*0.42,0,TAU);g.stroke();g.restore();
+        }
         // 石 (反転アニメ=scaleXフリップ / 着手=ポップ)
         const sr=CELL*0.40;
         for(let i=0;i<board.length;i++){
@@ -3835,7 +3891,7 @@ registerGame({
           drawBtn(g,btnR,'↩ まった','#7a6cc0',!history.length);
         }else{
           drawBtn(g,btnL,'↩ まった','#7a6cc0',!history.length);
-          outlinedText(g,'ひかる マスに おけるよ',W/2+78,FBY+24,15,'#cfc6e8','#2b2550',4);
+          drawBtn(g,btnR,'💡 ヒント','#f2a541',false);
         }
       },
       hudInfo(){
@@ -3850,7 +3906,10 @@ registerGame({
 // 純ロジックの自動テスト公開 (?selftest で実行・core boot は不変更)
 if(typeof window!=='undefined'){
   window.runOthelloTests=runOthelloTests;
-  if(/[?&]selftest/.test(location.search))runOthelloTests();
+  window.runOthelloHintTests=runOthelloHintTests;
+  window.getOthelloHint=getOthelloHint;
+  window.evalOthelloMove=evalOthelloMove;
+  if(/[?&]selftest/.test(location.search)){runOthelloTests();runOthelloHintTests();}
 }
 
 // ▼ 新しいミニゲームは registerGame({...}) をここに追加 ▼
