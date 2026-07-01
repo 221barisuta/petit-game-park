@@ -1332,29 +1332,23 @@ function buildCards(){
   document.querySelectorAll('#menuTabs .mtab').forEach(b=>b.classList.toggle('active',b.dataset.tab===menuTab));
   $('tcount-solo').textContent=soloGames().length;
   $('tcount-versus').textContent=versusGames().length;
-  // デイリーチャレンジカード (ひとりタブのみ。抽選も soloGames から)
-  if(!versus){
-    const ddef=dailyDef();
-    const dc=document.createElement('button');
-    dc.className='gcard daily';
-    dc.innerHTML=`<span class="badge">📅 きょうのチャレンジ</span>
-      <span class="ic">${ddef.emoji}</span>
-      <span class="tx"><span class="nm">${todayLabel()}は「${ddef.title}」</span>
-      <span class="ds">きょうは みんな おなじもんだい！</span>
-      <span class="bs" id="best-daily">きょうのベスト 0</span></span>`;
-    dc.addEventListener('click',()=>{AudioKit.ensure();AudioKit.pop();openGame(ddef,{daily:true})});
-    list.appendChild(dc);
-  }
+  // デイリーチャレンジ (#3): 別カードを増やさず、対象ゲームの自カードを強調枠にする (ひとりタブのみ・抽選も soloGames から)
+  const ddef=!versus?dailyDef():null;
   for(const def of (versus?versusGames():soloGames())){
+    const isDaily=!!(ddef&&def.id===ddef.id);   // このカード自体を「きょうのチャレンジ」枠に
     const c=document.createElement('button');
-    c.className='gcard';
+    c.className='gcard'+(isDaily?' daily':'');
     c.style.setProperty('--c',def.color);
-    c.innerHTML=`<span class="ic">${def.emoji}</span>
+    const vsBadge=def.id==='chicken'?'🤖 CPUと たいせん':'👥 2人で たいせん'; // #1 チキンはCPUとの度胸試し
+    c.innerHTML=`${isDaily?'<span class="badge">📅 きょうのチャレンジ</span>':''}
+      <span class="ic">${def.emoji}</span>
       <span class="tx"><span class="nm">${def.title}</span>
-      <span class="ds">${def.desc}</span>
-      ${def.type==='versus'
-        ? '<span class="vs">👥 2人で たいせん</span>'
-        : `<span class="bs" id="best-${def.id}">ベスト 0</span>`}</span>
+      <span class="ds">${isDaily?'きょうは みんな おなじもんだい！':def.desc}</span>
+      ${isDaily
+        ? '<span class="bs" id="best-daily">きょうのベスト 0</span>'
+        : def.type==='versus'
+          ? `<span class="vs">${vsBadge}</span>`
+          : `<span class="bs" id="best-${def.id}">ベスト 0</span>`}</span>
       <span class="qbtn" data-q="${def.id}">?</span>`;
     // 「？」は専用ハンドラで howto を明示起動 (stopPropagation でカード遷移と分離)
     const q=c.querySelector('.qbtn');
@@ -1365,7 +1359,7 @@ function buildCards(){
     });
     c.addEventListener('click',()=>{
       AudioKit.ensure();AudioKit.pop();
-      openGame(def,{});
+      openGame(def,isDaily?{daily:true}:{});   // デイリー枠のカードは daily モードで起動
     });
     list.appendChild(c);
   }
@@ -3737,8 +3731,7 @@ registerGame({
     function drawStone(g,color,c,r,sx,sc){
       g.save();g.translate(c.x,c.y);g.scale((sx==null?1:sx)*(sc==null?1:sc),(sc==null?1:sc));
       g.beginPath();g.arc(0,0,r,0,TAU);
-      if(color==='black'){g.fillStyle='#23203a';g.fill();
-        g.beginPath();g.arc(-r*0.28,-r*0.28,r*0.34,0,TAU);g.fillStyle='rgba(255,255,255,.14)';g.fill();}
+      if(color==='black'){g.fillStyle='#141225';g.fill();} // 黒は白ハイライト無しの単色 (枠っぽさを除去)
       else{g.fillStyle='#fbf8ef';g.fill();g.lineWidth=2;g.strokeStyle='#b7ad93';g.stroke();
         g.beginPath();g.arc(-r*0.28,-r*0.28,r*0.30,0,TAU);g.fillStyle='rgba(255,255,255,.7)';g.fill();}
       g.restore();
@@ -3765,12 +3758,12 @@ registerGame({
         if(placeT>0)placeT=Math.max(0,placeT-dt);
       },
       draw(g){
-        g.fillStyle='#2b2550';g.fillRect(0,0,W,H);
-        outlinedText(g,'オセロ',W/2,68,27,'#fff','#3a2a4a',7);
-        // 石数 (常時表示)
+        g.fillStyle='#3c4a70';g.fillRect(0,0,W,H); // 地色を少し明るく (白黒の視認性UP)
+        outlinedText(g,'オセロ',W/2,68,27,'#fff','#2a3352',7);
+        // 石数 (常時表示)。●=黒/○=白 が色でも一致するよう ● は濃色・○ は淡色で描く
         const {black,white}=countStones(board);
-        outlinedText(g,'●'+black,W/2-70,112,26,'#fff','#23203a',7);
-        outlinedText(g,'○'+white,W/2+70,112,26,'#2b2550','#fbf8ef',7);
+        outlinedText(g,'●'+black,W/2-70,112,26,'#15122a','#e9e4f5',7);
+        outlinedText(g,'○'+white,W/2+70,112,26,'#fbf8ef','#15122a',7);
         // 手番 / 結果
         if(!result){
           const m=players[turn].color;
