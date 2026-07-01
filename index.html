@@ -3705,7 +3705,7 @@ registerGame({
   desc:'2人で あそぶ オセロ (リバーシ)',
   color:'#7bc47f', type:'versus',   // duration は付けない (タイマー無し)
   howto:[
-    ['👆','ひかる マスを タップして いしを おく'],
+    ['👆','おける マスを タップして いしを おく'],
     ['🔄','あいての いしを はさんで ひっくりかえそう！'],
     ['🏆','さいごに いしが おおい ほうの かち！'],
   ],
@@ -3718,6 +3718,7 @@ registerGame({
     // 盤下のボタン: プレイ時=[まった] / 決着時=[もういちど][まった]
     const FBY=BY+BOARD+18; // ボタン上端 (=548)
     const btnL={x:59,y:FBY,w:146,h:48}, btnR={x:215,y:FBY,w:146,h:48};
+    const togBtn={x:59,y:FBY+56,w:302,h:40}; // #8 2段目: 合法手アシスト表示トグル(💡ヒントとは別操作)
     const hitBtn=(b,x,y)=>x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h;
 
     const players=[{color:'black'},{color:'white'}]; // 黒=players[0]=先手
@@ -3728,6 +3729,7 @@ registerGame({
     let flipMap=null,flipT=0;  // 反転アニメ (index→反転前の色)
     let placedAt=-1,placeT=0;  // 着手アニメ (置いた石のポップ)
     let hint=-1,hintT=0;       // #9 ヒント: 推奨手index / 残り点滅秒
+    let assistOn=store.get('pgp2_othello_assist','0')==='1'; // #8 合法手アシスト表示(既定OFF・localStorageで永続。五目ヒントと同方式)
     const FLIP_DUR=0.30, PLACE_DUR=0.16;
 
     function center(idx){
@@ -3799,6 +3801,7 @@ registerGame({
 
     return {
       onDown(x,y){
+        if(hitBtn(togBtn,x,y)){assistOn=!assistOn;store.set('pgp2_othello_assist',assistOn?'1':'0');A.pop();return} // #8 アシスト切替(対局中/決着後どちらでも)
         if(result){
           if(hitBtn(btnR,x,y)){undo();return}  // 決着後: まった(誤タップ救済)
           reset();return;                       // それ以外のタップでリセット
@@ -3854,8 +3857,8 @@ registerGame({
         g.fillStyle='#0c4a26';
         for(const [sx,sy] of [[2,2],[6,2],[2,6],[6,6]]){g.beginPath();g.arc(BX+sx*CELL,BY+sy*CELL,3.2,0,TAU);g.fill();}
         g.restore();
-        // 合法手マーカー (現手番色の薄い点)
-        if(!result){
+        // 合法手マーカー (現手番色の薄い点)。#8 アシストONの時だけ表示
+        if(!result&&assistOn){
           const mc=players[turn].color;
           g.save();g.globalAlpha=0.28+0.14*Math.sin(t*5);g.fillStyle=mc==='black'?'#101020':'#fbf8ef';
           for(const i of getValidMoves(board,mc)){const c=center(i);g.beginPath();g.arc(c.x,c.y,CELL*0.16,0,TAU);g.fill();}
@@ -3893,6 +3896,8 @@ registerGame({
           drawBtn(g,btnL,'↩ まった','#7a6cc0',!history.length);
           drawBtn(g,btnR,'💡 ヒント','#f2a541',false);
         }
+        // #8 合法手アシストトグル(2段目・常時表示)。💡ヒント(推奨手1つ)とは別操作
+        drawBtn(g,togBtn,'アシスト（うてる所）: '+(assistOn?'ON':'OFF'),assistOn?'#39c06a':'#5a5278',false);
       },
       hudInfo(){
         const {black,white}=countStones(board);
