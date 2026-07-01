@@ -3775,10 +3775,19 @@ registerGame({
         // 手番 / 結果
         if(!result){
           const m=players[turn].color;
-          const txt=(lastPass?'●は パス → ':'')+'●の ばん'; // 直前のパスを次着手まで表示 (●=塗りつぶし)
-          // 手番の色を石に合わせる (黒=濃色/淡アウトライン, 白=純白/濃アウトライン)
-          const isB=m==='black';
-          outlinedText(g,txt,W/2,150,lastPass?18:23,isB?'#15122a':'#ffffff',isB?'#e9e4f5':'#15122a',6);
+          // 石色で塗り分け (黒=濃色/淡アウトライン, 白=純白/濃アウトライン)
+          const col=c=>c==='black'?['#15122a','#e9e4f5']:['#ffffff','#15122a'];
+          const [cf,cs]=col(m);
+          if(lastPass){
+            // 直前の自動パスを次着手まで表示。パスした側と現手番で石色が違うので2セグメント描画
+            const [pf,ps]=col(lastPass), sz=18, sA='●は パス → ', sB='●の ばん';
+            g.save();g.font=`800 ${sz}px ${FONT}`;const wA=g.measureText(sA).width,wB=g.measureText(sB).width;g.restore();
+            const x0=W/2-(wA+wB)/2;
+            outlinedText(g,sA,x0,150,sz,pf,ps,5,1,'left');
+            outlinedText(g,sB,x0+wA,150,sz,cf,cs,5,1,'left');
+          }else{
+            outlinedText(g,'●の ばん',W/2,150,23,cf,cs,6);
+          }
         }else if(result.draw){
           outlinedText(g,'ひきわけ！',W/2,150,26,'#ffd23f','#5a3a10',7);
         }else{
