@@ -3681,7 +3681,7 @@ function othNegamax(board,color,depth,alpha,beta,deadline){
   }
   return best;
 }
-// 指定深さの最善手index (決定的: 同点は最小index)。deadline指定時は超過でthrow。手が無ければ-1。
+// 指定深さの最善手index (決定的: move ordering順で最初の最良手を選ぶ=同一局面で常に同手)。deadline指定時は超過でthrow。手が無ければ-1。
 function othBestMove(board,color,depth,deadline){
   const moves=getValidMoves(board,color);
   if(!moves.length)return -1;
