@@ -164,6 +164,10 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 #btnQuit{width:9cqw;height:9cqw;border-radius:50%;font-size:4.2cqw;font-weight:800;color:#fff;
   background:rgba(20,16,40,.5);border:.6cqw solid rgba(255,255,255,.5);flex:none}
 #btnQuit:active{transform:scale(.92)}
+/* 結果画面のメニュー戻りもゲーム中と同じ左上×に統一 (#12) */
+#btnQuitResult{position:absolute;top:2.4cqw;left:3cqw;width:9cqw;height:9cqw;border-radius:50%;
+  font-size:4.2cqw;font-weight:800;color:#fff;background:rgba(20,16,40,.5);border:.6cqw solid rgba(255,255,255,.5);z-index:6}
+#btnQuitResult:active{transform:scale(.92)}
 #hudMid{flex:1;display:flex;flex-direction:column;align-items:center;gap:.6cqw;pointer-events:none}
 #hudScore{font-size:7.4cqw;font-weight:800;color:#fff;line-height:1;
   -webkit-text-stroke:1.4cqw #2c2547;paint-order:stroke fill;text-shadow:0 .9cqw 0 rgba(0,0,0,.25)}
@@ -409,6 +413,7 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
   </section>
 
   <section id="scr-result" class="screen">
+    <button id="btnQuitResult" title="メニューへ">✕</button>
     <div id="resHead"><span id="resGameName"></span><span id="resDaily" class="hidden">📅 デイリー</span></div>
     <div id="resScore">0</div>
     <div id="resRecord" class="hidden">🎉 しんきろく！ 🎉</div>
@@ -420,7 +425,6 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
     <div id="resRow">
       <button class="mini-btn" id="btnShare">📤 シェア</button>
       <button class="mini-btn" id="btnSavePng">💾 がぞう</button>
-      <button class="mini-btn" id="btnToSelect2">🎮 えらぶ</button>
     </div>
     <div id="resBest">ベスト: 0</div>
   </section>
@@ -1400,7 +1404,7 @@ function boot(){
   $('btnQuit').addEventListener('click',()=>{AudioKit.pop();quitGame()});
   $('btnHowtoStart').addEventListener('click',()=>{AudioKit.pop();startCountdown(false)});
   $('btnRetryBig').addEventListener('click',()=>{AudioKit.pop();openGame(curDef,{daily:isDaily,retry:true})});
-  $('btnToSelect2').addEventListener('click',()=>{AudioKit.pop();refreshBests();show('scr-select')});
+  $('btnQuitResult').addEventListener('click',()=>{AudioKit.pop();refreshBests();show('scr-select')});
   $('btnShare').addEventListener('click',()=>{doShare()});
   $('btnSavePng').addEventListener('click',()=>{AudioKit.pop();savePng()});
   $('muteBtn').addEventListener('click',()=>{
@@ -3962,6 +3966,7 @@ registerGame({
     let diff=store.get('pgp2_chk_diff','normal'); if(!DIFF[diff])diff='normal';
     let stPhase='title';            // title|count|run|rresult|mresult
     let round=0, results=[];
+    let matchIsRec=false;   // #13 直近マッチでベスト更新したか (結果画面の「しんきろく！」表示用)
     let pCar=null, cCar=null, held=false, keyHeld=false; // held=ポインタ押下 / keyHeld=Space
     let cdT=0, cdIdx=-1, t=0, acc=0, resolveT=0, shakeT=0, flashT=0, runT=0;
     let skyGrad=null, abyssGrad=null;                    // 定数グラデはキャッシュ(毎フレーム再生成しない)
@@ -3985,11 +3990,15 @@ registerGame({
       acc=0; resolveT=0; runT=0;
     }
     function beginCountdown(){ stPhase='count'; cdT=0; cdIdx=-1; }
-    function startMatch(){ round=0; results=[]; setupRound(); beginCountdown(); }
+    function startMatch(){ round=0; results=[]; matchIsRec=false; setupRound(); beginCountdown(); }
     function nextRound(){
       if(round>=ROUND_PLAN.length-1){   // 最終ラウンド後 → マッチ結果 (round は範囲内に保つ)
         stPhase='mresult';
         const w=judgeMatch(results);
+        // #13 成績: マッチの近さ得点合計(pScore和)を チキンのベストとして記録
+        let mps=0;for(const rr of results)mps+=rr.pScore;
+        matchIsRec=mps>getInt('pgp2_best_chicken',0);
+        if(matchIsRec)store.set('pgp2_best_chicken',String(mps));
         if(w==='p'){A.coin();confetti();vib([30,50,30,50,30]);}
         else if(w==='c'){A.bad();vib([60,40,60]);}
         else A.ok();
@@ -4164,6 +4173,7 @@ registerGame({
       // ── 局面オーバーレイ ──
       if(stPhase==='title'){
         outlinedText(g,'～崖っぷちの勇気～',W/2,150,16,'#ffb38a','#3a1f1a',5);
+        outlinedText(g,'🏅 ベスト '+getInt('pgp2_best_chicken',0)+'pt',W/2,178,14,'#ffd9a0','#3a1f1a',4); // #13 成績表示
         outlinedText(g,'アクセル長押しで加速、離して',W/2,300,15,'#fff','#2a1530',4);
         outlinedText(g,'崖ギリギリで止めろ！越えたら負け',W/2,324,15,'#fff','#2a1530',4);
         outlinedText(g,'むずかしさ',W/2,422,15,'#cbb8e8','#241636',4);
@@ -4223,7 +4233,9 @@ registerGame({
           let ps=0,cs=0;for(const rr2 of results){ps+=rr2.pScore;cs+=rr2.cScore;}
           outlinedText(g,'勝ち数  あなた '+pw+' – '+cw+' CPU',W/2,316,18,'#fff','#241636',5);
           outlinedText(g,'近さ得点合計  '+ps+' – '+cs,W/2,350,15,'#ffe6cf','#241636',4);
-          let ry=392;
+          // #13 ベスト成績 + 新記録表示
+          outlinedText(g,'🏅 ベスト '+getInt('pgp2_best_chicken',0)+'pt'+(matchIsRec?'  🎉しんきろく！':''),W/2,374,14,matchIsRec?'#ffe93d':'#ffd9a0','#241636',4);
+          let ry=402;
           results.forEach((rr2,i)=>{
             const s=rr2.winner==='p'?'あなた':rr2.winner==='c'?'CPU':'引分';
             outlinedText(g,'R'+(i+1)+': '+s+'  ('+(rr2.pFell?'転落':rr2.pScore+'pt')+' vs '+(rr2.cFell?'転落':rr2.cScore+'pt')+')',W/2,ry,13,'#cbb8e8','#241636',3);
