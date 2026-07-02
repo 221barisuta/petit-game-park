@@ -525,6 +525,22 @@ function rr(g,x,y,w,h,r){
   g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);
   g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();
 }
+/* ── 対戦系ゲーム共通UI部品 (各ゲームのローカル複製を一元化) ── */
+const hitBtn=(b,x,y)=>x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h; // 矩形ボタンの当たり判定
+const BTN_STYLE={r:14,px:8,py:5,gh:9,gr:5,fs:18,lw:5};        // 既定スタイル(五目/オセロ寸法)
+function drawBtn(g,b,label,col,disabled,size,st){ // 光沢つき角丸ボタン (st差し替えで寸法違いに対応)
+  st=st||BTN_STYLE;
+  g.save();g.fillStyle=disabled?'#6b6480':col;rr(g,b.x,b.y,b.w,b.h,st.r);g.fill();
+  if(!disabled){g.fillStyle='rgba(255,255,255,.22)';rr(g,b.x+st.px,b.y+st.py,b.w-st.px*2,st.gh,st.gr);g.fill();}
+  g.restore();
+  outlinedText(g,label,b.x+b.w/2,b.y+b.h/2+1,size||st.fs,'#fff','rgba(0,0,0,.4)',st.lw,disabled?0.55:1);
+}
+function drawWinLine(g,a,b,col,w,base,amp,t){ // 勝ち筋の明滅ライン (まるばつ/五目)
+  g.save();g.globalAlpha=base+amp*Math.sin(t*6);
+  g.strokeStyle=col;g.lineWidth=w;g.lineCap='round';
+  g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();g.restore();
+}
+const SELFTESTS=[]; // 各ゲームが純ロジックテストをpushし、?selftest起動時にbootが一括実行
 function outlinedText(g,txt,x,y,size,fill,stroke,lw,alpha,align){
   g.save();
   g.globalAlpha*=(alpha==null?1:alpha);
@@ -1466,8 +1482,8 @@ function boot(){
     get score(){return score},get combo(){return combo},get feverT(){return feverT},
     GAMES,openGame,show,checkWin,runTicTacToeTests,checkGomoku,runGomokuTests,getGomokuHint,runGomokuHintTests,getGomokuCpuMove,runGomokuCpuTests,GomokuNet
   };
-  // ?selftest を付けて開くと純ロジックの自動テストをコンソールに出す
-  if(/[?&]selftest/.test(location.search)){runTicTacToeTests();runGomokuTests();runGomokuHintTests();runGomokuCpuTests();}
+  // ?selftest を付けて開くと各ゲームが SELFTESTS に登録した純ロジックテストを一括実行
+  if(/[?&]selftest/.test(location.search))SELFTESTS.forEach(f=>f());
 }
 
 // __CORE_SLOT_END__
@@ -2438,12 +2454,7 @@ registerGame({
         // マーク
         for(let i=0;i<9;i++)if(board[i])drawMark(g,board[i],center(i));
         // 勝ち筋ハイライト
-        if(winLine){
-          const a=center(winLine[0]),b=center(winLine[2]);
-          g.save();g.globalAlpha=0.5+0.25*Math.sin(t*6);
-          g.strokeStyle='#ffd23f';g.lineWidth=16;g.lineCap='round';
-          g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();g.restore();
-        }
+        if(winLine)drawWinLine(g,center(winLine[0]),center(winLine[2]),'#ffd23f',16,0.5,0.25,t);
         parts.draw(g);
         // フッター: 案内 / もういちど
         if(result){
@@ -2729,6 +2740,7 @@ function runGomokuCpuTests(){
   console.log('[getGomokuCpuMove tests] pass='+pass+' / fail='+fail, log.length?log:'');
   return {pass,fail,log};
 }
+SELFTESTS.push(runTicTacToeTests,runGomokuTests,runGomokuHintTests,runGomokuCpuTests);
 /* ============================================================
    makeOnlineNet: オンライン対戦のネットワーク層 (PartyKit/WebSocket) 共通ファクトリ
    - 五目(GomokuNet, party=main) と オセロ(OthelloNet, party=othello) で共用
@@ -2923,7 +2935,6 @@ registerGame({
     const FBY=BY+SPAN+22; // ボタン1段目 上端 (=582)
     const btnL={x:59,y:FBY,w:146,h:46}, btnR={x:215,y:FBY,w:146,h:46};
     const togBtn={x:59,y:FBY+56,w:146,h:38}, setBtn={x:215,y:FBY+56,w:146,h:38}; // 2段目(=638)
-    const hitBtn=(b,x,y)=>x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h;
 
     // モード/設定 (リセット・もういちどは同じ設定で再開。せっていで変更可)
     let screen='setup';                                    // 'setup' | 'play'
@@ -3015,13 +3026,6 @@ registerGame({
     }
     function hintApplicable(){ // いま手番側にヒントを出してよいか (人間の手番のみ・cvc不可)
       return screen==='play'&&!result&&cfg.mode!=='cvc'&&players[turn].type==='human';
-    }
-    // 共通のボタン描画
-    function drawBtn(g,b,label,col,disabled,size){
-      g.save();g.fillStyle=disabled?'#6b6480':col;rr(g,b.x,b.y,b.w,b.h,14);g.fill();
-      if(!disabled){g.fillStyle='rgba(255,255,255,.22)';rr(g,b.x+8,b.y+5,b.w-16,9,5);g.fill();}
-      g.restore();
-      outlinedText(g,label,b.x+b.w/2,b.y+b.h/2+1,size||18,'#fff','rgba(0,0,0,.4)',5,disabled?0.55:1);
     }
     // ── セットアップ画面: クリック領域を一元生成 (draw と onDown で共用) ──
     function buildSetup(){
@@ -3254,12 +3258,8 @@ registerGame({
           g.save();g.fillStyle='#ff4d94';g.beginPath();g.arc(c.x,c.y,3.2,0,TAU);g.fill();g.restore();
         }
         // 勝ち筋ハイライト (連の端から端)
-        if(winLine&&winLine.length){
-          const a=center(winLine[0]),b=center(winLine[winLine.length-1]);
-          g.save();g.globalAlpha=0.45+0.3*Math.sin(t*6);
-          g.strokeStyle='#ff4d94';g.lineWidth=10;g.lineCap='round';
-          g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();g.restore();
-        }
+        if(winLine&&winLine.length)
+          drawWinLine(g,center(winLine[0]),center(winLine[winLine.length-1]),'#ff4d94',10,0.45,0.3,t);
         // ヒントリング (常時ON=継続 / オンデマンド=hintT減衰)。石と別色のシアン
         if(hint>=0&&(hintOn||hintT>0)){
           const c=center(hint);
@@ -3571,7 +3571,7 @@ registerGame({
 // 純ロジックの自動テスト公開 (?selftest で実行・core boot は不変更)
 if(typeof window!=='undefined'){
   window.runMoleTests=runMoleTests;
-  if(/[?&]selftest/.test(location.search))runMoleTests();
+  SELFTESTS.push(runMoleTests);
 }
 
 /* ============================================================
@@ -3872,7 +3872,6 @@ registerGame({
     const FBY=BY+BOARD+18; // ボタン上端 (=548)
     const btnL={x:59,y:FBY,w:146,h:48}, btnR={x:215,y:FBY,w:146,h:48};
     const togBtn={x:59,y:FBY+56,w:302,h:40}; // #8 2段目: 合法手アシスト表示トグル(💡ヒントとは別操作)
-    const hitBtn=(b,x,y)=>x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h;
 
     let players=[{color:'black',type:'human'},{color:'white',type:'human'}]; // 黒=players[0]=先手。start時に再構築
     let board=othInitial();
@@ -3965,12 +3964,6 @@ registerGame({
       else{g.fillStyle='#fbf8ef';g.fill();g.lineWidth=2;g.strokeStyle='#b7ad93';g.stroke();
         g.beginPath();g.arc(-r*0.28,-r*0.28,r*0.30,0,TAU);g.fillStyle='rgba(255,255,255,.7)';g.fill();}
       g.restore();
-    }
-    function drawBtn(g,b,label,col,disabled){
-      g.save();g.fillStyle=disabled?'#6b6480':col;rr(g,b.x,b.y,b.w,b.h,14);g.fill();
-      if(!disabled){g.fillStyle='rgba(255,255,255,.22)';rr(g,b.x+8,b.y+5,b.w-16,9,5);g.fill();}
-      g.restore();
-      outlinedText(g,label,b.x+b.w/2,b.y+b.h/2+1,18,'#fff','rgba(0,0,0,.4)',5,disabled?0.55:1);
     }
     // ── #10 CPU: あいて構築 / 対局開始 / CPU思考タイマー ──
     function buildPlayers(){ // cfg から players[{color,type,level}] を組む(五目と同分岐)
@@ -4289,7 +4282,7 @@ if(typeof window!=='undefined'){
   window.getOthelloHint=getOthelloHint;
   window.getOthelloCpuMove=getOthelloCpuMove;
   window.evalOthelloMove=evalOthelloMove;
-  if(/[?&]selftest/.test(location.search)){runOthelloTests();runOthelloHintTests();runOthelloCpuTests();}
+  SELFTESTS.push(runOthelloTests,runOthelloHintTests,runOthelloCpuTests);
 }
 
 /* ============================================================
@@ -4701,13 +4694,8 @@ registerGame({
     }
     // ── ボタン ──
     const btnPass={x:36,y:664,w:160,h:52},btnPlay={x:224,y:664,w:160,h:52},btnCorner={x:8,y:120,w:48,h:32};
-    const hitBtn=(b,x,y)=>x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h;
-    function drawBtn(g,b,label,col,disabled,size){
-      g.save();g.fillStyle=disabled?'#6b6480':col;rr(g,b.x,b.y,b.w,b.h,12);g.fill();
-      if(!disabled){g.fillStyle='rgba(255,255,255,.22)';rr(g,b.x+6,b.y+4,b.w-12,7,4);g.fill();}
-      g.restore();
-      outlinedText(g,label,b.x+b.w/2,b.y+b.h/2+1,size||17,'#fff','rgba(0,0,0,.4)',4,disabled?0.55:1);
-    }
+    const DF_BTN={r:12,px:6,py:4,gh:7,gr:4,fs:17,lw:4}; // 大富豪はボタン小ぶり
+    const dfBtn=(g,b,label,col,disabled,size)=>drawBtn(g,b,label,col,disabled,size,DF_BTN);
 
     /* ── S3: 設定画面 (RULE_DEFS からデータ駆動で行を生成。ルール追加=テーブルに1行) ── */
     const fmtSel={jokerCount:v=>v+'まい',deckCount:v=>v+'くみ',playerCount:v=>v+'にん'};
@@ -4722,8 +4710,8 @@ registerGame({
     const cycleOpt=(d,cur)=>d.opts[(d.opts.indexOf(cur)+1)%d.opts.length];
     function drawRuleRows(g,rows){
       for(const b of rows){
-        if(b.kind==='bool')drawBtn(g,b,b.label+'：'+(b.active?'ON':'OFF'),b.active?'#39c06a':'#4a4170',false,14);
-        else drawBtn(g,b,b.label+'： '+fmtSel[b.key](b.val)+' ▸','#4d6cae',false,15);
+        if(b.kind==='bool')dfBtn(g,b,b.label+'：'+(b.active?'ON':'OFF'),b.active?'#39c06a':'#4a4170',false,14);
+        else dfBtn(g,b,b.label+'： '+fmtSel[b.key](b.val)+' ▸','#4d6cae',false,15);
       }
     }
     function setupBtns(){
@@ -4741,9 +4729,9 @@ registerGame({
       const btns=setupBtns();
       drawRuleRows(g,btns.filter(b=>b.kind==='bool'||b.kind==='select'));
       for(const b of btns){
-        if(b.kind==='prev'||b.kind==='default')drawBtn(g,b,b.label,'#5a5278',false,14);
-        else if(b.kind==='start')drawBtn(g,b,b.label,'#ff4d94',false,19);
-        else if(b.kind==='online')drawBtn(g,b,b.label,DaifugoNet.available()?'#4d8cff':'#6b6480',false,15);
+        if(b.kind==='prev'||b.kind==='default')dfBtn(g,b,b.label,'#5a5278',false,14);
+        else if(b.kind==='start')dfBtn(g,b,b.label,'#ff4d94',false,19);
+        else if(b.kind==='online')dfBtn(g,b,b.label,DaifugoNet.available()?'#4d8cff':'#6b6480',false,15);
       }
     }
     function onSetupTap(x,y){
@@ -4857,8 +4845,8 @@ registerGame({
       const cs=hand.filter(c=>sel.has(c.id));
       const a=cs.length?analyzeHand(cs,curRules()):null;
       const ok=myTurn&&a&&canFollow(v.field.top,a,{inverted:invOf(v),lock:v.field.lock},curRules());
-      drawBtn(g,btnPass,'パス','#7a6cc0',!(myTurn&&v.field.top));
-      drawBtn(g,btnPlay,'だす！','#ff4d94',!ok);
+      dfBtn(g,btnPass,'パス','#7a6cc0',!(myTurn&&v.field.top));
+      dfBtn(g,btnPlay,'だす！','#ff4d94',!ok);
     }
     function drawEndPanel(g,v){
       g.save();g.fillStyle='rgba(20,14,40,.88)';rr(g,36,196,W-72,58+v.n*38,16);g.fill();g.restore();
@@ -4870,11 +4858,11 @@ registerGame({
         outlinedText(g,(me?'★ ':'')+(v.names[seat]||'—'),222,y,14,me?'#21e6c1':'#fff','rgba(0,0,0,.5)',4,1,'left');
       });
       if(screen==='play'){
-        drawBtn(g,btnPass,'⚙ せってい','#5a5278',false);
-        drawBtn(g,btnPlay,'▶ つぎの ラウンド','#ff4d94',false,15);
+        dfBtn(g,btnPass,'⚙ せってい','#5a5278',false);
+        dfBtn(g,btnPlay,'▶ つぎの ラウンド','#ff4d94',false,15);
       }else{
-        drawBtn(g,btnPass,'🚪 たいきょ','#a8704a',false);
-        drawBtn(g,btnPlay,v.host?'▶ もういちど':'ホストを まつ…','#ff4d94',!v.host,15);
+        dfBtn(g,btnPass,'🚪 たいきょ','#a8704a',false);
+        dfBtn(g,btnPlay,v.host?'▶ もういちど':'ホストを まつ…','#ff4d94',!v.host,15);
       }
     }
     function handCardAt(v,x,y){
@@ -4925,7 +4913,7 @@ registerGame({
       if(!g||!g.rules){
         g2.fillStyle='#2e4a35';g2.fillRect(0,0,W,H);
         outlinedText(g2,s.status==='error'?(s.error||'エラー'):'せつぞくちゅう…',W/2,320,18,'#fff','rgba(0,0,0,.5)',5);
-        drawBtn(g2,btnCorner,'🚪','#5a5278',false,14);
+        dfBtn(g2,btnCorner,'🚪','#5a5278',false,14);
         return;
       }
       if(g.phase==='lobby'){
@@ -4934,7 +4922,7 @@ registerGame({
           outlinedText(g2,'ルールへんこう（みんなに すぐ はんえい）',W/2,70,15,'#fff','#221737',4);
           const rows=ruleRows(g.rules,124);
           drawRuleRows(g2,rows);
-          drawBtn(g2,{x:48,y:rows._endY+8,w:324,h:44},'← ロビーへ もどる','#5a5278',false,15);
+          dfBtn(g2,{x:48,y:rows._endY+8,w:324,h:44},'← ロビーへ もどる','#5a5278',false,15);
           return;
         }
         g2.fillStyle='#2e4a35';g2.fillRect(0,0,W,H);
@@ -4942,7 +4930,7 @@ registerGame({
         outlinedText(g2,'あいことば',W/2,96,12,'#cfe0cf','#221737',3);
         outlinedText(g2,s.code||'—',W/2,126,30,'#ffd23f','#5a3a10',7);
         for(const b of lobbyBtns(g))
-          drawBtn(g2,b,b.label,b.kind==='start'?'#ff4d94':b.kind==='leave'?'#a8704a':'#4d8cff',b.on===false,b.kind==='start'?17:13);
+          dfBtn(g2,b,b.label,b.kind==='start'?'#ff4d94':b.kind==='leave'?'#a8704a':'#4d8cff',b.on===false,b.kind==='start'?17:13);
         outlinedText(g2,'メンバー（'+g.joined+'/'+g.rules.playerCount+'）',W/2,222,15,'#fff','rgba(0,0,0,.5)',4);
         for(let i=0;i<g.rules.playerCount;i++){
           const y=240+i*34,o=g.seatsPub[i];
@@ -4959,7 +4947,7 @@ registerGame({
       }
       const v=view();if(!v)return;
       drawTable(g2,v);
-      drawBtn(g2,btnCorner,'🚪','#5a5278',false,14);
+      dfBtn(g2,btnCorner,'🚪','#5a5278',false,14);
     }
     function onOnlineTap(x,y){
       const s=DaifugoNet.state,g=s.game;
@@ -5063,7 +5051,7 @@ registerGame({
         const v=view();
         if(!v){g.fillStyle='#2e4a35';g.fillRect(0,0,W,H);return;}
         drawTable(g,v);
-        if(!v.ended)drawBtn(g,btnCorner,'⚙','#5a5278',false,15);
+        if(!v.ended)dfBtn(g,btnCorner,'⚙','#5a5278',false,15);
       },
       hudInfo(){
         if(screen==='setup')return 'ルールを えらぶ';
@@ -5555,9 +5543,7 @@ registerGame({
       (R.end==='tsumo'||R.end==='ron')?A.record():A.miss();
     }
     startTurn();
-    /* ---- 描画 ---- */
-    function rr(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);
-      g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();}
+    /* ---- 描画 (rr は共通ヘルパーを使用) ---- */
     const SUIT_COL=['#c0392b','#2166ac','#2a7a3a'];
     function tile(g,x,y,w,h,t,o){
       o=o||{};
@@ -5854,7 +5840,7 @@ function runMahjongTests(){
   console.log('[mahjong tests] pass='+pass+' / fail='+fail,log.length?log:'');
   return {pass,fail,log};
 }
-if(/[?&]selftest/.test(location.search)){runMahjongTests();}
+SELFTESTS.push(runMahjongTests);
 
 /* ============================================================
    ゲームF: チキンレース ～崖っぷちの勇気～ (versus / 対CPU・スコア無し)
@@ -6309,7 +6295,7 @@ registerGame({
 // 純ロジックの自動テスト公開 (?selftest で実行・core boot は不変更)
 if(typeof window!=='undefined'){
   window.runChickenTests=runChickenTests;
-  if(/[?&]selftest/.test(location.search))runChickenTests();
+  SELFTESTS.push(runChickenTests);
 }
 
 /* ============================================================
