@@ -1456,9 +1456,10 @@ function boot(){
     }).catch(()=>{});
   }
   setupOnlineUI();
-  // ?room=CODE で開いたら五目並べのオンライン対戦へ自動参加
-  {const rp=new URLSearchParams(location.search).get('room');
-   if(rp&&GomokuNet.available()){const def=GAMES.find(g=>g.id==='gomoku');
+  // ?room=CODE[&g=<gameId>] で開いたら該当ゲームのオンライン対戦へ自動参加 (g省略=五目・従来互換)
+  {const sp=new URLSearchParams(location.search),rp=sp.get('room'),gid=(sp.get('g')||'gomoku').toLowerCase();
+   const net=gid==='othello'?OthelloNet:GomokuNet; // 部屋のparty空間を持つnetで可用性判定
+   if(rp&&net.available()){const def=GAMES.find(g=>g.id===gid)||GAMES.find(g=>g.id==='gomoku');
      if(def){pendingOnlineRoom=rp.toUpperCase();openGame(def,{});}}}
   window.__PGP={
     get game(){return game},get phase(){return phase},get def(){return curDef},
@@ -2729,14 +2730,16 @@ function runGomokuCpuTests(){
   return {pass,fail,log};
 }
 /* ============================================================
-   GomokuNet: 五目並べ オンライン対戦のネットワーク層 (PartyKit/WebSocket)
+   makeOnlineNet: オンライン対戦のネットワーク層 (PartyKit/WebSocket) 共通ファクトリ
+   - 五目(GomokuNet, party=main) と オセロ(OthelloNet, party=othello) で共用
    - PGP_CONFIG.partyHost 未設定なら available()=false でグレースフル無効化
    - サーバーが権威。クライアントは state を受信してミラー描画するだけ
-   - 席トークン/名前を localStorage 保存し再接続で同席復帰
+   - 席トークン/名前を localStorage 保存し再接続で同席復帰 (seatPrefix でゲーム別に分離)
    ============================================================ */
-const GomokuNet=(()=>{
-  const NAME_KEY='pgp2_name';
-  const seatKey=code=>'pgp2_gomoku_seat_'+code;
+function makeOnlineNet(opts){
+  const {party,seatPrefix,gameLabel,gameId}=opts;
+  const NAME_KEY='pgp2_name'; // 名前はゲーム横断で共有
+  const seatKey=code=>seatPrefix+code;
   const ADJ=['あかい','あおい','きいろい','みどりの','しろい','むらさきの','ちゃいろい','オレンジの','ピンクの','きんいろの'];
   const ANI=['キツネ','クマ','ウサギ','ネコ','イヌ','パンダ','ペンギン','ライオン','トラ','ゾウ','カエル','フクロウ','リス','イルカ','コアラ','ハリネズミ'];
   const ri=n=>Math.floor(Math.random()*n);
@@ -2756,7 +2759,7 @@ const GomokuNet=(()=>{
     const base=/^wss?:\/\//.test(raw)?raw
       :((/(localhost|127\.0\.0\.1|0\.0\.0\.0|^192\.168\.|:\d+$)/.test(raw)?'ws://':'wss://')+raw);
     let ws;
-    try{ws=new WebSocket(`${base}/parties/main/${encodeURIComponent(code.toLowerCase())}`);}
+    try{ws=new WebSocket(`${base}/parties/${party}/${encodeURIComponent(code.toLowerCase())}`);}
     catch(e){state.status='error';state.error='せつぞく できません';emit();return;}
     state.ws=ws;
     ws.onopen=()=>{ws.send(JSON.stringify({type:'hello',name:getName(),token:store.get(seatKey(code),'')||''}));};
@@ -2776,7 +2779,7 @@ const GomokuNet=(()=>{
   function disconnect(){clearTimeout(state._retry);if(state.ws){try{state.ws.onclose=null;state.ws.close();}catch(e){}state.ws=null;}}
   function leave(){state._left=true;disconnect();state.status='idle';state.code='';state.seat=null;state.game=null;emit();}
   const send=o=>{if(state.ws&&state.ws.readyState===1)state.ws.send(JSON.stringify(o));};
-  return {state,available,host,getName,setName,randName,genCode,connect,disconnect,leave,seatKey,
+  return {state,available,host,getName,setName,randName,genCode,connect,disconnect,leave,seatKey,gameLabel,gameId,
     move:i=>send({type:'move',index:i}),
     undo:()=>send({type:'undo'}),
     rename:n=>{setName(n);send({type:'rename',name:getName()});},
@@ -2785,20 +2788,28 @@ const GomokuNet=(()=>{
     kick:spid=>send({type:'kick',spid}),
     takeSeat:()=>send({type:'takeSeat'}),
     swapColors:()=>send({type:'swapColors'})};
-})();
+}
+const GomokuNet=makeOnlineNet({party:'main',seatPrefix:'pgp2_gomoku_seat_',gameLabel:'五目並べ',gameId:'gomoku'});
+const OthelloNet=makeOnlineNet({party:'othello',seatPrefix:'pgp2_othello_seat_',gameLabel:'オセロ',gameId:'othello'});
+let activeNet=GomokuNet; // オンライン画面に入ったゲームの net を指す (renderOnlineBar/setupOnlineUI 共用)
 let pendingOnlineRoom=''; // ?room=CODE 自動参加用 (boot→gomoku create で消費)
-function roomLink(code){return location.origin+location.pathname+'?room='+encodeURIComponent(code);}
+function roomLink(code,gameId){
+  // 招待リンクにゲーム種別を付与。五目は従来互換(?room=CODE)、オセロ等は &g=<id> を足す
+  gameId=gameId||(typeof activeNet!=='undefined'&&activeNet?activeNet.gameId:'gomoku')||'gomoku';
+  const q=(gameId&&gameId!=='gomoku')?'&g='+encodeURIComponent(gameId):'';
+  return location.origin+location.pathname+'?room='+encodeURIComponent(code)+q;
+}
 function setRoomUrl(code){try{history.replaceState(null,'',code?roomLink(code):location.origin+location.pathname);}catch(e){}}
 function copyText(t){try{navigator.clipboard.writeText(t);}catch(e){}}
 function flashBtn(el,txt){const o=el.textContent;el.textContent=txt;setTimeout(()=>{el.textContent=o;},900);}
 function lineInvite(code){ // #6 LINEで しょうたい (お誘い文+部屋リンク)
   if(!code)return;
-  const text='「五目並べ」いっしょにやろ！ '+roomLink(code);
+  const text='「'+(activeNet.gameLabel||'ゲーム')+'」いっしょにやろ！ '+roomLink(code);
   window.open('https://line.me/R/msg/text/?'+encodeURIComponent(text),'_blank');
 }
-/* オンライン情報バー(DOM)を現在のサーバー状態で更新 */
+/* オンライン情報バー(DOM)を現在のサーバー状態で更新 (activeNet=五目/オセロ 共用) */
 function renderOnlineBar(){
-  const s=GomokuNet.state;if(s.status==='idle')return;
+  const s=activeNet.state;if(s.status==='idle')return;
   const g=s.game,me=s.seat;
   $('olRoomCode').textContent=s.code||'—';
   const setSeat=(el,mark,sym)=>{const o=g&&g.seats[mark];
@@ -2814,14 +2825,15 @@ function renderOnlineBar(){
     const row=document.createElement('div');row.className='sp-row';
     const nm=document.createElement('span');nm.textContent='👀 '+x.name;row.appendChild(nm);
     if(seated&&x.spid){const kb=document.createElement('button');kb.className='sp-kick';kb.textContent='たいきょ';
-      kb.addEventListener('click',()=>{AudioKit.pop();GomokuNet.kick(x.spid);sl.classList.add('hidden');});row.appendChild(kb);}
+      kb.addEventListener('click',()=>{AudioKit.pop();activeNet.kick(x.spid);sl.classList.add('hidden');});row.appendChild(kb);}
     sl.appendChild(row);});
   }else{const e=document.createElement('div');e.textContent='かんせんしゃ なし';sl.appendChild(e);}
-  // 入れ替え(先後): 着席・2人そろい・盤が空(開始前)のみ / 参加: 観戦者で空席があるとき
+  // 入れ替え(先後): 着席・2人そろい・開始前(未着手=last<0)のみ / 参加: 観戦者で空席があるとき
+  // last===-1 は五目/オセロ共通の「まだ着手なし」信号 (盤の空判定に依らずゲーム非依存)
   const bothSeats=!!(g&&g.seats.black&&g.seats.white);
-  const boardEmpty=!!(g&&g.board&&!g.board.some(c=>c));
+  const preStart=!!(g&&g.last===-1);
   const openSeat=!!(g&&(!g.seats.black||!g.seats.white));
-  $('olSwap').classList.toggle('hidden',!(seated&&bothSeats&&boardEmpty&&!(g&&g.result)));
+  $('olSwap').classList.toggle('hidden',!(seated&&bothSeats&&preStart&&!(g&&g.result)));
   $('olTake').classList.toggle('hidden',!(me==='spectator'&&openSeat));
   let st='せつぞくちゅう…';
   if(s.status==='waiting')st=me==='spectator'?'たいきょくを まっています':'あいてを まっています';
@@ -2857,31 +2869,31 @@ function renderOnlineBar(){
   }else{seriesBtn.classList.add('hidden');seriesList.classList.add('hidden');}
 }
 function hideOnlineUI(){$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');}
-/* boot から1回だけ呼ぶ: オンライン入室UIのDOMハンドラを束ねる */
+/* boot から1回だけ呼ぶ: オンライン入室UIのDOMハンドラを束ねる (activeNet=五目/オセロ 共用) */
 function setupOnlineUI(){
-  GomokuNet.state.onChange=renderOnlineBar;
-  const commitName=()=>{GomokuNet.setName($('olName').value);$('olName').value=GomokuNet.getName();};
-  const start=code=>{commitName();GomokuNet.connect(code);setRoomUrl(code);
+  GomokuNet.state.onChange=renderOnlineBar;OthelloNet.state.onChange=renderOnlineBar; // 両netの変化を同じバーへ
+  const commitName=()=>{activeNet.setName($('olName').value);$('olName').value=activeNet.getName();};
+  const start=code=>{commitName();activeNet.connect(code);setRoomUrl(code);
     $('onlineSetup').classList.add('hidden');$('onlineBar').classList.remove('hidden');renderOnlineBar();};
-  $('olDice').addEventListener('click',()=>{AudioKit.pop();$('olName').value=GomokuNet.randName();});
+  $('olDice').addEventListener('click',()=>{AudioKit.pop();$('olName').value=activeNet.randName();});
   $('olName').addEventListener('change',commitName);
-  $('olCreate').addEventListener('click',()=>{AudioKit.ensure();AudioKit.pop();start(GomokuNet.genCode());});
+  $('olCreate').addEventListener('click',()=>{AudioKit.ensure();AudioKit.pop();start(activeNet.genCode());});
   $('olJoin').addEventListener('click',()=>{AudioKit.ensure();AudioKit.pop();
     const code=($('olCode').value||'').trim().toUpperCase();
     if(!/^[A-Z0-9]{4,6}$/.test(code)){$('olSetupMsg').textContent='あいことばを ただしく いれてね';return;}
     start(code);});
-  $('olBack').addEventListener('click',()=>{AudioKit.pop();GomokuNet.leave();hideOnlineUI();if(game&&game.onlineBack)game.onlineBack();});
-  $('olCopy').addEventListener('click',()=>{AudioKit.pop();copyText(GomokuNet.state.code);flashBtn($('olCopy'),'✓');});
-  $('olCopyLink').addEventListener('click',()=>{AudioKit.pop();copyText(roomLink(GomokuNet.state.code));flashBtn($('olCopyLink'),'✓');});
-  $('olLine').addEventListener('click',()=>{AudioKit.pop();lineInvite(GomokuNet.state.code);}); // #6
+  $('olBack').addEventListener('click',()=>{AudioKit.pop();activeNet.leave();hideOnlineUI();if(game&&game.onlineBack)game.onlineBack();});
+  $('olCopy').addEventListener('click',()=>{AudioKit.pop();copyText(activeNet.state.code);flashBtn($('olCopy'),'✓');});
+  $('olCopyLink').addEventListener('click',()=>{AudioKit.pop();copyText(roomLink(activeNet.state.code));flashBtn($('olCopyLink'),'✓');});
+  $('olLine').addEventListener('click',()=>{AudioKit.pop();lineInvite(activeNet.state.code);}); // #6
   // #8 局別履歴: タップで開閉(スマホ) + ホバーで表示(PC)
   $('olSeries').addEventListener('click',()=>{AudioKit.pop();$('olSeriesList').classList.toggle('hidden');});
   $('olSeries').addEventListener('mouseenter',()=>$('olSeriesList').classList.remove('hidden'));
   $('olSeries').addEventListener('mouseleave',()=>$('olSeriesList').classList.add('hidden'));
   // 観戦者リスト 開閉 / 先後いれかえ / 観戦者の参加(空席へ)
   $('olSpec').addEventListener('click',()=>{AudioKit.pop();$('olSpecList').classList.toggle('hidden');});
-  $('olSwap').addEventListener('click',()=>{AudioKit.pop();GomokuNet.swapColors();});
-  $('olTake').addEventListener('click',()=>{AudioKit.pop();GomokuNet.takeSeat();});
+  $('olSwap').addEventListener('click',()=>{AudioKit.pop();activeNet.swapColors();});
+  $('olTake').addEventListener('click',()=>{AudioKit.pop();activeNet.takeSeat();});
 }
 registerGame({
   id:'gomoku', emoji:'⚫', title:'ごもくならべ',
@@ -3057,6 +3069,7 @@ registerGame({
     // ── オンライン対戦 (GomokuNetのサーバー権威stateをミラーして描画。盤上はcanvas/情報はDOMバー) ──
     function enterOnline(){
       if(!GomokuNet.available())return;
+      activeNet=GomokuNet; // オンラインバー(DOM)を五目netへ束ねる
       screen='online';result=null;winLine=null;parts.list=[];hint=-1;hintT=0;onlineSeenNo=-1;onlineFxDone=false;
       pendingMove=-1;onlineToastSeq=GomokuNet.state.toastSeq;onlineSnap='';
       if(pendingOnlineRoom){const code=pendingOnlineRoom;pendingOnlineRoom='';   // ?room= 自動参加
@@ -3871,6 +3884,9 @@ registerGame({
     let oniUnlocked=store.get('pgp2_othello_oni_unlocked','0')==='1'; // 👹おに 解放済みか(隠し)
     let oniJustUnlocked=false;  // 直近の勝利で解放したか(結果画面の通知用)
     let cpuTimer=0;            // CPU思考ディレイ(update で減算→0で着手。UIブロック回避)
+    // #11 オンライン対戦(OthelloNetのサーバー権威stateをミラー): screen='online'
+    let onlineSeenNo=-1,onlineFxDone=false; // 対局番号の変化検出 / 結果演出を1回だけ
+    let pendingMove=-1,onlineToastSeq=0,onlineSnap=''; // 仮置き(#5) / 相手通知の既読seq / 盤状態スナップ
     const FLIP_DUR=0.30, PLACE_DUR=0.16;
 
     function center(idx){
@@ -3972,6 +3988,7 @@ registerGame({
       const L=[];let y=148;
       for(const [v,lb] of [['pvp','👥 ふたりで たいせん'],['pvc','🤖 CPUと たいせん'],['cvc','🤖🤖 CPUどうし']])
         {L.push({x:50,y,w:320,h:44,kind:'mode',val:v,label:lb,active:cfg.mode===v});y+=50;}
+      L.push({x:50,y,w:320,h:44,kind:'online',label:OthelloNet.available()?'🌐 オンライン たいせん':'🌐 オンライン (じゅんびちゅう)',online:true});y+=50; // #11
       y+=6;
       if(cfg.mode==='pvc'){
         L.push({x:50,y,w:155,h:40,kind:'first',val:1,label:'あなた せんて',active:cfg.humanFirst});
@@ -3994,7 +4011,7 @@ registerGame({
       outlinedText(g,oniJustUnlocked?'👹 おに 解放！':'あいてを えらぶ',W/2,110,16,oniJustUnlocked?'#ffe93d':'#cfe0ff','#2a3352',4);
       const btns=setupBtns();
       for(const b of btns){
-        const col=b.start?'#ff4d94':b.active?'#39c06a':b.locked?'#3a3550':'#5a5278';
+        const col=b.start?'#ff4d94':b.online?(OthelloNet.available()?'#4d8cff':'#6b6480'):b.active?'#39c06a':b.locked?'#3a3550':'#5a5278';
         drawBtn(g,b,b.label,col,!!b.locked);
       }
       if(!oniUnlocked&&cfg.mode!=='pvp'&&btns._lvY!=null) // おにロック注記
@@ -4007,14 +4024,113 @@ registerGame({
         if(b.kind==='mode'){cfg.mode=b.val;store.set('pgp2_othello_mode',b.val);A.pop();}
         else if(b.kind==='first'){cfg.humanFirst=!!b.val;store.set('pgp2_othello_first',b.val?'1':'0');A.pop();}
         else if(b.kind==='level'){cfg.level=b.val;store.set('pgp2_othello_lv',String(b.val));A.pop();}
+        else if(b.kind==='online'){OthelloNet.available()?enterOnline():A.bad();} // #11
         else if(b.kind==='start'){startPlay();}
         return;
       }
     }
+    // ── #11 オンライン対戦 (OthelloNetのサーバー権威stateをミラー。盤上はcanvas/情報はDOMバー) ──
+    function enterOnline(){
+      if(!OthelloNet.available())return;
+      activeNet=OthelloNet; // オンラインバー(DOM)をオセロnetへ束ねる
+      screen='online';result=null;last=-1;lastPass=null;flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;
+      onlineSeenNo=-1;onlineFxDone=false;pendingMove=-1;onlineToastSeq=OthelloNet.state.toastSeq;onlineSnap='';
+      if(pendingOnlineRoom){const code=pendingOnlineRoom;pendingOnlineRoom='';   // ?room=&g=othello 自動参加
+        OthelloNet.connect(code);setRoomUrl(code);$('onlineBar').classList.remove('hidden');renderOnlineBar();}
+      else{$('olName').value=OthelloNet.getName();$('olCode').value='';$('olSetupMsg').textContent='';
+        $('onlineSetup').classList.remove('hidden');}                            // 入室UI(DOM)を出す
+    }
+    function leaveOnline(){
+      OthelloNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');
+      setRoomUrl('');screen='setup';pendingMove=-1;A.pop();
+    }
+    function fireOnlineResultFx(res){ // 勝敗演出 (endGameと同等。1対局1回だけ)
+      if(res.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
+      else{banner(SYM[res.winner]+'の かち！');A.fever();vib([30,50,30,50,30]);confetti();}
+    }
+    function mirrorOnline(){ // サーバーstate→ローカル描画変数へ反映
+      const s=OthelloNet.state,ng=s.game;if(!ng)return;
+      if(onlineSeenNo!==ng.gameNo){onlineSeenNo=ng.gameNo;onlineFxDone=false;flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;} // 新対局(初回/もう一局)
+      // 盤状態(手番/直前手/局番号/自動パス)が変わったら仮置きをクリア
+      const snap=ng.turn+'/'+ng.last+'/'+ng.gameNo+'/'+(ng.pass||'');
+      if(snap!==onlineSnap){onlineSnap=snap;pendingMove=-1;}
+      for(let i=0;i<N*N;i++)board[i]=ng.board[i]||null;
+      turn=ng.turn==='black'?0:1;last=ng.last;lastPass=ng.pass||null;
+      if(ng.result){pendingMove=-1;result=ng.result.draw?{draw:true}:{winner:ng.result.winner};
+        if(!onlineFxDone){onlineFxDone=true;fireOnlineResultFx(result);}}
+      else{result=null;}
+      // 相手の待った等の通知トースト (新しいseqが来たらbanner表示)
+      if(s.toastSeq!==onlineToastSeq){onlineToastSeq=s.toastSeq;if(s.toastMsg){banner(s.toastMsg);A.bad();}}
+    }
+    function showHintOnline(){ // 自席・自手番のみローカル計算でヒント (純関数・無害)
+      const s=OthelloNet.state,ng=s.game;
+      if(!ng||ng.result||(s.seat!=='black'&&s.seat!=='white')||ng.turn!==s.seat){A.bad();return;}
+      const idx=getOthelloHint(ng.board,s.seat);
+      if(idx>=0){hint=idx;hintT=3.2;A.coin();}else A.bad();
+    }
+    // 待った可否(オンライン): 直前に置かれた石が自分の色(=直前手が自分・相手未応手)。厳密判定はサーバーが担保
+    function undoOnlineOk(){
+      const s=OthelloNet.state,ng=s.game;
+      return !!(ng&&!ng.result&&(s.seat==='black'||s.seat==='white')&&ng.last>=0&&ng.board[ng.last]===s.seat);
+    }
+    function drawOnlineButtons(g){
+      const s=OthelloNet.state,ng=s.game;
+      const seated=(s.seat==='black'||s.seat==='white');
+      const myTurn=seated&&ng&&!ng.result&&ng.turn===s.seat;
+      if(ng&&ng.result){
+        const opp=s.seat==='black'?'white':'black';
+        const meReq=seated&&ng.rematch&&ng.rematch[s.seat];
+        const oppReq=seated&&ng.rematch&&ng.rematch[opp];
+        if(oppReq&&!meReq){                                  // 相手から再戦リクエスト → うける/ことわる
+          drawBtn(g,btnL,'✅ うける','#39c06a',false);
+          drawBtn(g,btnR,'✖ ことわる','#a8704a',false);
+        }else if(meReq){                                     // 自分が希望済み → 返事まち(タップで取消)
+          drawBtn(g,btnL,'⏳ へんじまち','#7a6cc0',false);
+          drawBtn(g,btnR,'↩ まった','#7a6cc0',true);
+        }else{                                               // 再戦リクエストを送る
+          drawBtn(g,btnL,'🔄 もう一局','#ff4d94',!seated);
+          drawBtn(g,btnR,'↩ まった','#7a6cc0',true);
+        }
+      }else{
+        drawBtn(g,btnL,'↩ まった','#7a6cc0',!undoOnlineOk());  // 直前手の本人・相手応手前のみ
+        drawBtn(g,btnR,'💡 ヒント','#f2a541',!myTurn);
+      }
+      drawBtn(g,togBtn,'🚪 たいきょ','#5a5278',false);
+    }
+    function onOnlineTap(x,y){
+      if(hitBtn(togBtn,x,y)){leaveOnline();return;}
+      const s=OthelloNet.state,ng=s.game;if(!ng)return;
+      const seated=(s.seat==='black'||s.seat==='white');
+      if(ng.result){
+        const opp=s.seat==='black'?'white':'black';
+        const meReq=seated&&ng.rematch&&ng.rematch[s.seat];
+        const oppReq=seated&&ng.rematch&&ng.rematch[opp];
+        if(hitBtn(btnL,x,y)){
+          if(!seated){A.bad();return;}
+          if(oppReq&&!meReq)OthelloNet.rematch(true);   // うける → 両者合意で再開
+          else if(meReq)OthelloNet.rematch(false);      // へんじまち → 取消
+          else OthelloNet.rematch(true);                // もう一局リクエスト
+          A.pop();return;
+        }
+        if(hitBtn(btnR,x,y)){ if(oppReq&&!meReq){OthelloNet.rematchDecline();A.pop();}else A.bad(); return; }
+        return;
+      }
+      if(hitBtn(btnR,x,y)){showHintOnline();return;}
+      if(hitBtn(btnL,x,y)){ if(undoOnlineOk()){OthelloNet.undo();pendingMove=-1;A.pop();}else A.bad(); return; } // 待った
+      // 盤タップ: 自席・自手番・合法手のみ。仮置き→同じマスを再タップで確定(#5)
+      if(seated&&ng.turn===s.seat){
+        const c=cellAt(x,y);if(c<0)return;
+        if(ng.board[c]!==null||!getFlips(ng.board,c,s.seat).length){A.bad();return;} // 占有/非合法(反転なし)
+        if(pendingMove===c){OthelloNet.move(c);pendingMove=-1;A.pop();} // 同マス 再タップ=確定
+        else{pendingMove=c;A.pop();}                                    // 仮置き(別マスなら移動)
+      }else if(cellAt(x,y)>=0)A.bad();
+    }
+    if(pendingOnlineRoom)enterOnline(); // ?room=&g=othello で開かれた場合は即オンラインへ
 
     return {
       onDown(x,y){
         if(screen==='setup'){onSetupTap(x,y);return} // #10 あいて選択
+        if(screen==='online'){onOnlineTap(x,y);return} // #11 オンライン
         if(hitBtn(togBtn,x,y)){assistOn=!assistOn;store.set('pgp2_othello_assist',assistOn?'1':'0');A.pop();return} // #8 アシスト切替(常時)
         if(result){
           if(hitBtn(btnR,x,y)){undo();return}  // 決着後: まった(pvpのみ・誤タップ救済)
@@ -4030,6 +4146,10 @@ registerGame({
         if(flipT>0)flipT=Math.max(0,flipT-dt);
         if(placeT>0)placeT=Math.max(0,placeT-dt);
         if(hintT>0)hintT=Math.max(0,hintT-dt);
+        if(screen==='online'){ // #11 サーバーstateをミラー
+          if(OthelloNet.state._kicked){OthelloNet.state._kicked=false;banner('たいきょ させられました');A.bad();leaveOnline();return;}
+          mirrorOnline();return;
+        }
         // #10 CPU思考: ディレイ経過で着手(同期探索だが おに は時間キャップで凍結回避)
         if(screen==='play'&&!result&&players[turn].type==='cpu'&&cpuTimer>0){
           cpuTimer-=dt;
@@ -4038,35 +4158,42 @@ registerGame({
       },
       draw(g){
         if(screen==='setup'){drawSetup(g);return} // #10 あいて選択画面
+        const online=screen==='online'; // #11 オンラインは上部DOMバーが状態表示
         g.fillStyle='#3c4a70';g.fillRect(0,0,W,H); // 地色を少し明るく (白黒の視認性UP)
-        outlinedText(g,'オセロ',W/2,68,27,'#fff','#2a3352',7);
         // 石数 (常時表示)。●=黒/○=白 が色でも一致するよう ● は濃色・○ は淡色で描く
         const {black,white}=countStones(board);
-        // ○(中空グリフ)は塗り色にしても中が透けて半透明に見えるため、白も塗りつぶし円●を白で描く(色で黒白を区別)
-        outlinedText(g,'●'+black,W/2-70,112,26,'#15122a','#e9e4f5',7);
-        outlinedText(g,'●'+white,W/2+70,112,26,'#ffffff','#15122a',7);
-        // 手番 / 結果
-        if(!result){
-          const m=players[turn].color;
-          // 石色で塗り分け (黒=濃色/淡アウトライン, 白=純白/濃アウトライン)
-          const col=c=>c==='black'?['#15122a','#e9e4f5']:['#ffffff','#15122a'];
-          const [cf,cs]=col(m);
-          if(lastPass){
-            // 直前の自動パスを次着手まで表示。パスした側と現手番で石色が違うので2セグメント描画
-            const [pf,ps]=col(lastPass), sz=18, sA='●は パス → ', sB='●の ばん';
-            g.save();g.font=`800 ${sz}px ${FONT}`;const wA=g.measureText(sA).width,wB=g.measureText(sB).width;g.restore();
-            const x0=W/2-(wA+wB)/2;
-            outlinedText(g,sA,x0,150,sz,pf,ps,5,1,'left');
-            outlinedText(g,sB,x0+wA,150,sz,cf,cs,5,1,'left');
+        if(!online){
+          outlinedText(g,'オセロ',W/2,68,27,'#fff','#2a3352',7);
+          // ○(中空グリフ)は塗り色にしても中が透けて半透明に見えるため、白も塗りつぶし円●を白で描く(色で黒白を区別)
+          outlinedText(g,'●'+black,W/2-70,112,26,'#15122a','#e9e4f5',7);
+          outlinedText(g,'●'+white,W/2+70,112,26,'#ffffff','#15122a',7);
+          // 手番 / 結果
+          if(!result){
+            const m=players[turn].color;
+            // 石色で塗り分け (黒=濃色/淡アウトライン, 白=純白/濃アウトライン)
+            const col=c=>c==='black'?['#15122a','#e9e4f5']:['#ffffff','#15122a'];
+            const [cf,cs]=col(m);
+            if(lastPass){
+              // 直前の自動パスを次着手まで表示。パスした側と現手番で石色が違うので2セグメント描画
+              const [pf,ps]=col(lastPass), sz=18, sA='●は パス → ', sB='●の ばん';
+              g.save();g.font=`800 ${sz}px ${FONT}`;const wA=g.measureText(sA).width,wB=g.measureText(sB).width;g.restore();
+              const x0=W/2-(wA+wB)/2;
+              outlinedText(g,sA,x0,150,sz,pf,ps,5,1,'left');
+              outlinedText(g,sB,x0+wA,150,sz,cf,cs,5,1,'left');
+            }else{
+              outlinedText(g,'●の ばん',W/2,150,23,cf,cs,6);
+            }
+          }else if(result.draw){
+            outlinedText(g,'ひきわけ！',W/2,150,26,'#ffd23f','#5a3a10',7);
           }else{
-            outlinedText(g,'●の ばん',W/2,150,23,cf,cs,6);
+            outlinedText(g,SYM[result.winner]+'の かち！',W/2,150,28,'#ffd23f','#5a3a10',7);
           }
-        }else if(result.draw){
-          outlinedText(g,'ひきわけ！',W/2,150,26,'#ffd23f','#5a3a10',7);
+          if(result&&oniJustUnlocked)outlinedText(g,'👹 おに 解放！',W/2,180,15,'#ffe93d','#5a3a10',4); // #10 隠し解放通知
         }else{
-          outlinedText(g,SYM[result.winner]+'の かち！',W/2,150,28,'#ffd23f','#5a3a10',7);
+          // オンライン: 状態はDOMバー。石数(スコア)だけ盤直上にコンパクト表示
+          outlinedText(g,'●'+black,W/2-46,168,20,'#15122a','#e9e4f5',6);
+          outlinedText(g,'●'+white,W/2+46,168,20,'#ffffff','#15122a',6);
         }
-        if(result&&oniJustUnlocked)outlinedText(g,'👹 おに 解放！',W/2,180,15,'#ffe93d','#5a3a10',4); // #10 隠し解放通知
         // 盤パネル (緑のフェルト)
         g.save();g.fillStyle='#176a3a';rr(g,BX-12,BY-12,BOARD+24,BOARD+24,16);g.fill();g.restore();
         // グリッド
@@ -4079,11 +4206,15 @@ registerGame({
         g.fillStyle='#0c4a26';
         for(const [sx,sy] of [[2,2],[6,2],[2,6],[6,6]]){g.beginPath();g.arc(BX+sx*CELL,BY+sy*CELL,3.2,0,TAU);g.fill();}
         g.restore();
-        // 合法手マーカー (現手番色の薄い点)。#8 アシストONの時だけ表示
-        if(!result&&assistOn){
-          const mc=players[turn].color;
-          g.save();g.globalAlpha=0.28+0.14*Math.sin(t*5);g.fillStyle=mc==='black'?'#101020':'#fbf8ef';
-          for(const i of getValidMoves(board,mc)){const c=center(i);g.beginPath();g.arc(c.x,c.y,CELL*0.16,0,TAU);g.fill();}
+        // 合法手マーカー (現手番色の薄い点)。#8 アシストON時 / #11 オンラインは自分の手番のみ表示
+        let assistColor=null;
+        if(!result){
+          if(!online&&assistOn)assistColor=players[turn].color;
+          else if(online){const s=OthelloNet.state;if((s.seat==='black'||s.seat==='white')&&s.game&&s.game.turn===s.seat&&!s.game.result)assistColor=s.seat;}
+        }
+        if(assistColor){
+          g.save();g.globalAlpha=0.28+0.14*Math.sin(t*5);g.fillStyle=assistColor==='black'?'#101020':'#fbf8ef';
+          for(const i of getValidMoves(board,assistColor)){const c=center(i);g.beginPath();g.arc(c.x,c.y,CELL*0.16,0,TAU);g.fill();}
           g.restore();
         }
         // #9 ヒント: 推奨手を金色リングで点滅 (#8 合法手マーカーとは別表示で共存)
@@ -4110,7 +4241,15 @@ registerGame({
         // 直前着手マーカー
         if(last>=0){const c=center(last);
           g.save();g.strokeStyle='#ff4d94';g.lineWidth=2.5;g.beginPath();g.arc(c.x,c.y,sr+3,0,TAU);g.stroke();g.restore();}
+        // #5 仮置きプレビュー(オンライン): 半透明の自色石 + シアンの確定リング
+        if(online&&pendingMove>=0&&!board[pendingMove]){
+          const ms=OthelloNet.state.seat,mk=(ms==='black'||ms==='white')?ms:'black',pc=center(pendingMove);
+          g.save();g.globalAlpha=0.4;drawStone(g,mk,pc,sr,1,1);g.restore();
+          g.save();g.globalAlpha=0.5+0.5*Math.sin(t*9);g.strokeStyle='#21e6c1';g.lineWidth=3;
+          g.beginPath();g.arc(pc.x,pc.y,sr+2,0,TAU);g.stroke();g.restore();
+        }
         // ボタン
+        if(online){ drawOnlineButtons(g); return; } // #11 オンラインは専用ボタン(まった/ヒント/再戦/たいきょ)
         const undoDis=cfg.mode!=='pvp'||!history.length; // まったはpvpのみ(CPU対戦では無効)
         if(result){
           drawBtn(g,btnL,'▶ もう いちど','#ff4d94',false);
@@ -4124,11 +4263,14 @@ registerGame({
       },
       hudInfo(){
         if(screen==='setup')return 'あいてを えらぶ';
+        if(screen==='online')return ''; // #11 オンラインは上部DOMバーが状態表示 (右上hudと重なりを防ぐため空)
         const {black,white}=countStones(board);
         const base='●'+black+' ○'+white;
         if(result)return base+' ／ '+(result.draw?'ひきわけ':SYM[result.winner]+'の かち');
         return base+' ／ '+(lastPass?SYM[lastPass]+'パス→':'')+SYM[players[turn].color]+'の ばん';
       },
+      onlineBack(){screen='setup';setRoomUrl('');}, // 入室UIの「もどる」から
+      destroy(){OthelloNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');setRoomUrl('');}, // ✕退出時クリーンアップ
     };
   }
 });
