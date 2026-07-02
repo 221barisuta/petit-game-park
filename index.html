@@ -35,7 +35,7 @@
 <script>
 window.PGP_CONFIG={
   analytics:{provider:'',id:''},
-  rankingBase:'',
+  rankingBase:'https://pgp-ranking.wm-221no1.workers.dev', // ランキングWorker (#15。空にすると全ランキング機能が無効)
   partyHost:'petit-gomoku.wm-221no1.workers.dev' // 五目並べオンライン対戦のWorkerホスト(Cloudflare/wrangler)。空ならオンラインは準備中
 };
 </script>
@@ -208,25 +208,25 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 
 /* ---- オンライン対戦 UI ---- */
 #onlineSetup{z-index:12}
-#onlineCard{width:84cqw;background:#fffdf6;border:1cqw solid #3a2d56;border-radius:7cqw;padding:5.5cqw 5cqw;
+#onlineCard,#userCard{width:84cqw;background:#fffdf6;border:1cqw solid #3a2d56;border-radius:7cqw;padding:5.5cqw 5cqw;
   display:flex;flex-direction:column;align-items:center;gap:3cqw;
   box-shadow:0 2cqw 0 rgba(0,0,0,.25);animation:popIn .38s cubic-bezier(.34,1.56,.64,1)}
-#onlineCard .ol-title{font-size:5.2cqw;font-weight:800;color:#39304f}
-#onlineCard .ol-field{display:flex;align-items:center;gap:2cqw;width:100%}
-#onlineCard .ol-lbl{font-size:3.4cqw;font-weight:800;color:#6a5f86;flex:none;width:18cqw}
-#onlineCard input{flex:1;min-width:0;font-family:inherit;font-size:4cqw;font-weight:700;color:#39304f;
+#onlineCard .ol-title,#userCard .ol-title{font-size:5.2cqw;font-weight:800;color:#39304f}
+#onlineCard .ol-field,#userCard .ol-field{display:flex;align-items:center;gap:2cqw;width:100%}
+#onlineCard .ol-lbl,#userCard .ol-lbl{font-size:3.4cqw;font-weight:800;color:#6a5f86;flex:none;width:18cqw}
+#onlineCard input,#userCard input{flex:1;min-width:0;font-family:inherit;font-size:4cqw;font-weight:700;color:#39304f;
   background:#f1edfa;border:.6cqw solid #d8cfe8;border-radius:3cqw;padding:2.2cqw 3cqw}
-#onlineCard input::placeholder{color:#b3a9cc}
+#onlineCard input::placeholder,#userCard input::placeholder{color:#b3a9cc}
 #olCode{text-transform:uppercase;letter-spacing:.6cqw}
-#onlineCard .ol-icon{flex:none;width:11cqw;height:11cqw;border-radius:3cqw;font-size:5cqw;background:#f1edfa;border:.6cqw solid #d8cfe8}
-#onlineCard .ol-act{width:100%;font-size:4.4cqw;font-weight:800;color:#fff;border-radius:4cqw;padding:3.2cqw;
+#onlineCard .ol-icon,#userCard .ol-icon{flex:none;width:11cqw;height:11cqw;border-radius:3cqw;font-size:5cqw;background:#f1edfa;border:.6cqw solid #d8cfe8}
+#onlineCard .ol-act,#userCard .ol-act{width:100%;font-size:4.4cqw;font-weight:800;color:#fff;border-radius:4cqw;padding:3.2cqw;
   box-shadow:0 1.4cqw 0 rgba(0,0,0,.22)}
-#onlineCard .ol-act:active{transform:translateY(1cqw);box-shadow:0 .4cqw 0 rgba(0,0,0,.22)}
+#onlineCard .ol-act:active,#userCard .ol-act:active{transform:translateY(1cqw);box-shadow:0 .4cqw 0 rgba(0,0,0,.22)}
 #olCreate{background:linear-gradient(180deg,#54c878,#39b061)}
-#onlineCard .ol-field #olJoin{width:24cqw;flex:none;padding:2.6cqw 0;background:linear-gradient(180deg,#7ab0ff,#4d8cff)}
-#onlineCard .ol-or{font-size:3.2cqw;font-weight:800;color:#a99fc4}
-#onlineCard .ol-msg{font-size:3.2cqw;font-weight:700;color:#c0392b;min-height:4cqw;text-align:center;line-height:1.4}
-#onlineCard .ol-back{font-size:3.6cqw;font-weight:800;color:#6a5f86;background:none;padding:1cqw 3cqw}
+#onlineCard .ol-field #olJoin,#userCard .ol-field #olJoin{width:24cqw;flex:none;padding:2.6cqw 0;background:linear-gradient(180deg,#7ab0ff,#4d8cff)}
+#onlineCard .ol-or,#userCard .ol-or{font-size:3.2cqw;font-weight:800;color:#a99fc4}
+#onlineCard .ol-msg,#userCard .ol-msg{font-size:3.2cqw;font-weight:700;color:#c0392b;min-height:4cqw;text-align:center;line-height:1.4}
+#onlineCard .ol-back,#userCard .ol-back{font-size:3.6cqw;font-weight:800;color:#6a5f86;background:none;padding:1cqw 3cqw}
 /* 対局中の情報バー (canvasの上に重ねる。✕ボタンを避けて左パディング) */
 #onlineBar{position:absolute;top:0;left:0;right:0;z-index:4;pointer-events:none;
   padding:2.2cqw 3cqw 2cqw 13cqw;display:flex;flex-direction:column;gap:.5cqw;
@@ -326,6 +326,18 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
   background:linear-gradient(180deg,#ff8fb3,#ff5c8a);
   border-radius:99px;padding:1.6cqw 4.2cqw;box-shadow:0 .8cqw 0 #d23f6e}
 #swToastBtn:active{transform:translateY(.4cqw);box-shadow:0 .3cqw 0 #d23f6e}
+#selFoot{display:flex;gap:3cqw;justify-content:center}
+#userInfo{z-index:40}
+#uiAvatars{display:flex;flex-wrap:wrap;gap:1.6cqw;flex:1}
+.ui-av{width:9.5cqw;height:9.5cqw;border-radius:3cqw;font-size:5cqw;background:#f1edfa;border:.6cqw solid #d8cfe8;
+  display:flex;align-items:center;justify-content:center}
+.ui-av.sel{border-color:#ff5c8a;background:#ffe9f1}
+.ui-av.none{font-size:2.6cqw;font-weight:800;color:#8a7fa8}
+.ui-prev{font-size:3.4cqw;font-weight:800;color:#39304f;background:#f4f0fc;border-radius:3cqw;padding:1.6cqw 4cqw}
+#uiOptRow{display:flex;align-items:flex-start;gap:2.4cqw;font-size:3.4cqw;font-weight:800;color:#39304f;
+  width:100%;background:#fff6dc;border:.6cqw solid #ecd9a0;border-radius:3cqw;padding:2.6cqw 3cqw}
+#uiOptRow small{font-weight:700;color:#8a7fa8;font-size:2.8cqw}
+#uiOptRow input{width:5cqw;height:5cqw;accent-color:#ff5c8a;flex:none;margin-top:.6cqw}
 </style>
 </head>
 <body>
@@ -347,7 +359,25 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
       <button class="mtab" data-tab="versus">⚔️ たいせん <span class="tcount" id="tcount-versus"></span></button>
     </div>
     <div id="cardList"></div>
-    <button class="text-btn" id="btnBackTitle">← タイトルへ</button>
+    <div id="selFoot">
+      <button class="text-btn" id="btnBackTitle">← タイトルへ</button>
+      <button class="text-btn" id="btnUserInfo">👤 なまえ・ランキング</button>
+    </div>
+    <!-- #14 ユーザー情報 (ニックネーム/アバター/ランキングオプトイン) -->
+    <div id="userInfo" class="overlay hidden">
+      <div id="userCard">
+        <div class="ol-title">👤 ユーザーじょうほう</div>
+        <div class="ol-field"><span class="ol-lbl">なまえ</span>
+          <input id="uiName" type="text" maxlength="12" autocomplete="off" spellcheck="false">
+          <button id="uiDice" class="ol-icon" title="なまえを ふりなおす">🎲</button>
+        </div>
+        <div class="ol-field"><span class="ol-lbl">アバター</span><div id="uiAvatars"></div></div>
+        <div id="uiPreview" class="ui-prev"></div>
+        <label id="uiOptRow"><input type="checkbox" id="uiOpt">
+          <span>せいせきを ランキングに おくる<br><small>なまえだけ そうしん・いつでも OFF にできるよ</small></span></label>
+        <button id="uiClose" class="ol-back">とじる</button>
+      </div>
+    </div>
   </section>
 
   <section id="scr-game" class="screen">
@@ -496,6 +526,22 @@ function setupAnalytics(){
     document.head.appendChild(s);
   }
 }
+/* ── PROFILE: ニックネーム/アバター/ランキングオプトインの一元管理 (#14) ──
+   オンライン対戦(makeOnlineNet)とランキング送信(#15)が共用する。localStorageのみ・PIIなし */
+const PROFILE=(()=>{
+  const NAME_KEY='pgp2_name',AV_KEY='pgp2_avatar',OPT_KEY='pgp2_rank_optin';
+  const ADJ=['あかい','あおい','きいろい','みどりの','しろい','むらさきの','ちゃいろい','オレンジの','ピンクの','きんいろの'];
+  const ANI=['キツネ','クマ','ウサギ','ネコ','イヌ','パンダ','ペンギン','ライオン','トラ','ゾウ','カエル','フクロウ','リス','イルカ','コアラ','ハリネズミ'];
+  const ri=n=>Math.floor(Math.random()*n);
+  const randName=()=>ADJ[ri(ADJ.length)]+ANI[ri(ANI.length)];
+  function getName(){let n=store.get(NAME_KEY,'');if(!n){n=randName();store.set(NAME_KEY,n);}return n;}
+  function setName(n){const v=String(n||'').replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,12);store.set(NAME_KEY,v||randName());}
+  return {randName,getName,setName,
+    getAvatar:()=>store.get(AV_KEY,''),setAvatar:a=>store.set(AV_KEY,a||''),
+    dispName:()=>store.get(AV_KEY,'')+getName(), // オンライン席の表示名 (アバター前置。サーバー側で12文字に丸め)
+    optIn:()=>store.get(OPT_KEY,'0')==='1',setOptIn:v=>store.set(OPT_KEY,v?'1':'0')};
+})();
+
 /* ランキングAPI: PGP_CONFIG.rankingBase 未設定なら no-op。
    実装は同リポジトリの ranking-worker/ (Cloudflare Workers + KV) を参照 */
 window.PGP_RANKING={
@@ -515,8 +561,25 @@ window.PGP_RANKING={
     opts=opts||{};
     const res=await fetch(`${base.replace(/\/$/,'')}/top?game=${encodeURIComponent(gameId)}&date=${opts.date||todaySeed()}&mode=${opts.mode||'daily'}`);
     return res.ok?res.json():null;
+  },
+  /* #15 トータル成績 (匿名オプトイン)。送信ゲートはここ1箇所: オプトインOFFなら一切送らない */
+  async submitTotal(game,value){
+    const base=(window.PGP_CONFIG||{}).rankingBase;
+    if(!base||!(value>0)||!PROFILE.optIn())return null;
+    const res=await fetch(base.replace(/\/$/,'')+'/total',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({game,nickname:PROFILE.getName(),value})});
+    return res.ok?res.json():null;
+  },
+  async fetchTotal(game,limit){
+    const base=(window.PGP_CONFIG||{}).rankingBase;
+    if(!base)return null;
+    const res=await fetch(`${base.replace(/\/$/,'')}/total?game=${encodeURIComponent(game)}&limit=${limit||50}`);
+    return res.ok?res.json():null;
   }
 };
+/* トータルランキング対象ゲーム (ranking-worker の TOTAL_METRICS と一致させる) */
+const RANK_TOTAL_GAMES=['tea','lane','spot'];
 
 function rr(g,x,y,w,h,r){
   g.beginPath();
@@ -1160,9 +1223,15 @@ function showResult(extra){
   (async()=>{
     try{
       const sub=await window.PGP_RANKING.submitScore(def.id,score,{daily:isDaily,seed,date:todaySeed()});
-      if(!isDaily)return;
-      const top=await window.PGP_RANKING.fetchTop(def.id,{mode:'daily'});
-      renderRank(top,sub,score);
+      const tsub=await window.PGP_RANKING.submitTotal(def.id,score); // #15 オプトインON時のみ送信
+      if(isDaily){
+        const top=await window.PGP_RANKING.fetchTop(def.id,{mode:'daily'});
+        renderRank(top,sub,score);
+      }
+      if(RANK_TOTAL_GAMES.includes(def.id)){ // #15 デイリーの近くに「トータル」
+        const tt=await window.PGP_RANKING.fetchTotal(def.id,5);
+        renderTotalRank(tt,tsub);
+      }
     }catch(e){}
   })();
   track('game_end',{game:def.id,score,daily:isDaily?1:0,record:isRec?1:0});
@@ -1187,6 +1256,75 @@ function renderRank(top,sub,myScore){
   });
   box.classList.remove('hidden');
 }
+/* #15 トータルランキング表示 (デイリー枠の下に追記。エントリが無ければ何も出さない) */
+function renderTotalRank(tt,tsub){
+  if(!tt||!tt.ok||!Array.isArray(tt.entries)||tt.entries.length===0)return;
+  const box=$('resRank');
+  const ttl=document.createElement('div');ttl.className='rttl';
+  ttl.textContent='🌏 トータルランキング'+(tsub&&tsub.rank?`　あなたは ${tsub.rank}い！`:'');
+  box.appendChild(ttl);
+  tt.entries.slice(0,5).forEach((e,i)=>{
+    const row=document.createElement('div');row.className='rrow';
+    if(tsub&&tsub.rank===i+1&&e.nickname===tsub.nickname)row.classList.add('you');
+    const a=document.createElement('span');a.className='rn';a.textContent=(i+1)+'い';
+    const b=document.createElement('span');b.textContent=e.nickname+'　'+e.value+'てん'; // nicknameはユーザー入力→textContent
+    row.appendChild(a);row.appendChild(b);box.appendChild(row);
+  });
+  box.classList.remove('hidden');
+}
+/* #14 ユーザー情報画面: PROFILE の編集UI (開くのは scr-select の「👤なまえ・ランキング」) */
+function setupUserInfo(){
+  const AVS=['','🦊','🐻','🐰','🐱','🐶','🐼','🐧','🦁','🐸','🦉','🐬'];
+  const box=$('uiAvatars');
+  const refresh=()=>{
+    $('uiName').value=PROFILE.getName();
+    $('uiOpt').checked=PROFILE.optIn();
+    box.querySelectorAll('.ui-av').forEach(b=>b.classList.toggle('sel',b.dataset.av===PROFILE.getAvatar()));
+    $('uiPreview').textContent='オンラインでの ひょうじ: '+PROFILE.dispName();
+  };
+  AVS.forEach(a=>{
+    const b=document.createElement('button');
+    b.className='ui-av'+(a?'':' none');b.dataset.av=a;b.textContent=a||'なし';
+    b.addEventListener('click',()=>{AudioKit.pop();PROFILE.setAvatar(a);refresh();});
+    box.appendChild(b);
+  });
+  $('btnUserInfo').addEventListener('click',()=>{AudioKit.ensure();AudioKit.pop();refresh();$('userInfo').classList.remove('hidden');});
+  $('uiClose').addEventListener('click',()=>{AudioKit.pop();$('userInfo').classList.add('hidden');});
+  $('uiDice').addEventListener('click',()=>{AudioKit.pop();PROFILE.setName(PROFILE.randName());refresh();});
+  $('uiName').addEventListener('change',()=>{PROFILE.setName($('uiName').value);refresh();});
+  $('uiOpt').addEventListener('change',()=>PROFILE.setOptIn($('uiOpt').checked));
+}
+/* #14/#15 セルフテスト: PROFILE と オプトイン送信ゲート (fetchモックで実送信なし) */
+function runProfileTests(){
+  const {ck,done}=makeTest('profile');
+  const saved=['pgp2_name','pgp2_avatar','pgp2_rank_optin'].map(k=>[k,store.get(k,'')]);
+  PROFILE.setName('てすと');ck('name-set',PROFILE.getName()==='てすと');
+  PROFILE.setName('   ');ck('name-empty-auto',PROFILE.getName().trim().length>0);
+  PROFILE.setName('あいうえおかきくけこさしすせそ');ck('name-cap12',PROFILE.getName().length<=12);
+  PROFILE.setAvatar('🦊');PROFILE.setName('ぷち');
+  ck('dispname-avatar',PROFILE.dispName()==='🦊ぷち');
+  PROFILE.setAvatar('');ck('dispname-noavatar',PROFILE.dispName()==='ぷち');
+  const realFetch=window.fetch;const calls=[];
+  window.fetch=(u,o)=>{calls.push({u,o});return Promise.resolve({ok:true,json:()=>Promise.resolve({ok:true})});};
+  return (async()=>{
+    try{
+      PROFILE.setOptIn(false);
+      await window.PGP_RANKING.submitTotal('tea',100);
+      ck('optout-never-sends',calls.length===0);
+      PROFILE.setOptIn(true);
+      await window.PGP_RANKING.submitTotal('tea',100);
+      ck('optin-sends-total',calls.length===1&&calls[0].u.indexOf('/total')>=0);
+      ck('optin-payload',calls.length===1&&JSON.parse(calls[0].o.body).nickname==='ぷち'&&JSON.parse(calls[0].o.body).value===100);
+      await window.PGP_RANKING.submitTotal('tea',0);
+      ck('zero-score-no-send',calls.length===1);
+    }finally{
+      window.fetch=realFetch;
+      saved.forEach(([k,v])=>store.set(k,v));
+    }
+    return done();
+  })();
+}
+SELFTESTS.push(runProfileTests);
 function confetti(){
   const stage=$('stage');
   const cols=['#ff5c8a','#ffd23f','#41d97c','#5fd0ff','#c39bff'];
@@ -1455,6 +1593,7 @@ function boot(){
     }).catch(()=>{});
   }
   setupOnlineUI();
+  setupUserInfo();
   // ?room=CODE[&g=<gameId>] で開いたら該当ゲームのオンライン対戦へ自動参加 (g省略=五目・従来互換)
   {const sp=new URLSearchParams(location.search),rp=sp.get('room'),gid=(sp.get('g')||'gomoku').toLowerCase();
    const net=gid==='othello'?OthelloNet:gid==='daifugo'?DaifugoNet:GomokuNet; // 部屋のparty空間を持つnetで可用性判定
@@ -2748,14 +2887,10 @@ SELFTESTS.push(runTicTacToeTests,runGomokuTests,runGomokuHintTests,runGomokuCpuT
    ============================================================ */
 function makeOnlineNet(opts){
   const {party,seatPrefix,gameLabel,gameId}=opts;
-  const NAME_KEY='pgp2_name'; // 名前はゲーム横断で共有
   const seatKey=code=>seatPrefix+code;
-  const ADJ=['あかい','あおい','きいろい','みどりの','しろい','むらさきの','ちゃいろい','オレンジの','ピンクの','きんいろの'];
-  const ANI=['キツネ','クマ','ウサギ','ネコ','イヌ','パンダ','ペンギン','ライオン','トラ','ゾウ','カエル','フクロウ','リス','イルカ','コアラ','ハリネズミ'];
+  // 名前/アバターは PROFILE (#14) に一元化。ここは参照するだけ
+  const {randName,getName,setName}=PROFILE;
   const ri=n=>Math.floor(Math.random()*n);
-  const randName=()=>ADJ[ri(ADJ.length)]+ANI[ri(ANI.length)];
-  function getName(){let n=store.get(NAME_KEY,'');if(!n){n=randName();store.set(NAME_KEY,n);}return n;}
-  function setName(n){const v=String(n||'').replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,12);store.set(NAME_KEY,v||randName());}
   const state={ws:null,code:'',status:'idle',seat:null,game:null,error:'',onChange:null,_left:false,_retry:0,toastSeq:0,toastMsg:'',_kicked:false};
   const host=()=>String((window.PGP_CONFIG||{}).partyHost||'').trim();
   const available=()=>!!host();
@@ -2772,7 +2907,7 @@ function makeOnlineNet(opts){
     try{ws=new WebSocket(`${base}/parties/${party}/${encodeURIComponent(code.toLowerCase())}`);}
     catch(e){state.status='error';state.error='せつぞく できません';emit();return;}
     state.ws=ws;
-    ws.onopen=()=>{ws.send(JSON.stringify({type:'hello',name:getName(),token:store.get(seatKey(code),'')||''}));};
+    ws.onopen=()=>{ws.send(JSON.stringify({type:'hello',name:PROFILE.dispName(),token:store.get(seatKey(code),'')||''}));};
     ws.onmessage=ev=>{let m;try{m=JSON.parse(ev.data);}catch{return;}
       if(m.type==='assigned'){state.seat=m.seat;if(m.token)store.set(seatKey(code),m.token);emit();}
       else if(m.type==='state'){state.game=m;
@@ -2794,7 +2929,7 @@ function makeOnlineNet(opts){
     raw:o=>send(o), // 汎用送信 (大富豪等、ゲーム固有メッセージ用)
     move:i=>send({type:'move',index:i}),
     undo:()=>send({type:'undo'}),
-    rename:n=>{setName(n);send({type:'rename',name:getName()});},
+    rename:n=>{setName(n);send({type:'rename',name:PROFILE.dispName()});},
     rematch:(on=true)=>send({type:'rematch',on}),
     rematchDecline:()=>send({type:'rematchDecline'}),
     kick:spid=>send({type:'kick',spid}),
