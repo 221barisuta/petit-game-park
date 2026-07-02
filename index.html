@@ -5726,8 +5726,10 @@ registerGame({
     startTurn();
     /* ---- 描画 (rr は共通ヘルパーを使用) ---- */
     const tile=(g,x,y,w,h,t,o)=>mjRenderTile(g,t,x,y,w,h,o&&o.dim?Object.assign({ghost:true},o):o);
-    function river(g,list,x0,y0){ // 河: 1行6枚で改行・最大24打=4段。座標を引数化 (将来の4人分表示用)
-      list.forEach((e,i)=>tile(g,x0+(i%6)*(RW+2),y0+((i/6)|0)*(RH+3),RW,RH,e.t,
+    function river(g,list,x0,y0){ // 河: 1行6枚で改行・表示は最新24枚(4段)まで。座標を引数化 (将来の4人分表示用)
+      const over=list.length-24, show=over>0?list.slice(-24):list; // 25打目以降は古い方から省略 (+N表示)
+      if(over>0)outlinedText(g,'+'+over,x0-8,y0+12,11,'#ffd77a','#12331f',3,1,'right');
+      show.forEach((e,i)=>tile(g,x0+(i%6)*(RW+2),y0+((i/6)|0)*(RH+3),RW,RH,e.t,
         tedashiShow&&!e.ted?{gray:true}:null)); // ツモぎりはグレーアウト (トグル可)
     }
     function drawLoupe(g){ // ルーペ: 選択牌を拡大表示 (スマホでの視認用)
