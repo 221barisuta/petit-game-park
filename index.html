@@ -1088,38 +1088,14 @@ function quitGame(){
   show('scr-select');
 }
 /* ---- 結果画面 ---- */
-/* ゲーム別「つぎのいって」: 判定内訳から弱点を1つ提案する (必ず文字列を返す) */
+/* ゲーム別「つぎのいって」: def.hint(counts,maxCombo) に移譲 (弱点を1つ提案。必ず文字列を返す) */
 function gameHint(def,c,mx){
-  c=c||{};
-  if(def.id==='tea'){
-    if((c.over||0)>=2)return '0.1びょう はやく はなして あふれゼロ';
-    if(!(c.perfect>0))return 'キンいろ どまんなかで PERFECT';
-    if((c.few||0)>=2)return 'ラインぎりぎりまで ねばろう';
-    return 'PERFECT を もう1かい';
-  }
-  if(def.id==='lane'){
-    if((mx||0)<3)return 'つづけて 3コンボ';
-    if((c.wrong||0)>=2)return 'おだい いがいは スルーしよう';
-    if(!(c.perfect>0))return 'まんなかゾーンで PERFECT';
-    return 'ジャストPERFECT を ふやそう';
-  }
-  if(def.id==='spot'){
-    const e=c.early||0,l=c.late||0;
-    if(e+l>0)return e>=l?'すこし まって EARLYをGOODに':'すこし はやめに LATEをGOODに';
-    if((c.miss||0)>=3)return 'ひかりが かさなるまで まとう';
-    if(!(c.perfect>0))return 'どまんなかで PERFECT';
-    return 'PERFECT を もう1かい';
-  }
-  return 'PERFECT を 1かい';
+  return (def.hint&&def.hint(c||{},mx))||'PERFECT を 1かい';
 }
 /* 結果画面の目標文言。0点どうし/ベストタイ/あと0点を明示的に処理 */
 function goalText(def,score,best,isRec,c,mx,last){
   const hint=gameHint(def,c,mx);
-  if(score===0&&best===0){
-    return {tea:'🍵 まずは1ぱい そそいでみよう！',
-            lane:'🍣 まずは1こ ゲットしてみよう！',
-            spot:'💡 まずは1かい あわせてみよう！'}[def.id]||'🎯 まずは1こ ゲットしよう！';
-  }
+  if(score===0&&best===0)return def.goal0||'🎯 まずは1こ ゲットしよう！'; // 0点目標も def 側で定義
   if(!isRec&&score===best&&score>0)return '🤝 ベストタイ！あと1てんで しんきろく！';
   if(isRec)return `🎉 しんきろく！つぎは「${hint}」`;
   if(best-score<=80)return `😆 おしい！あと${best-score}てん：${hint}`;
@@ -1510,6 +1486,13 @@ registerGame({
   id:'tea', emoji:'🍵', title:'おちゃそそぎ名人',
   desc:'ながおしで キンいろゾーンを ねらえ！',
   color:'#b7e4a0', duration:25,
+  goal0:'🍵 まずは1ぱい そそいでみよう！',
+  hint(c,mx){ // 結果画面「つぎのいって」(判定内訳から弱点を1つ)
+    if((c.over||0)>=2)return '0.1びょう はやく はなして あふれゼロ';
+    if(!(c.perfect>0))return 'キンいろ どまんなかで PERFECT';
+    if((c.few||0)>=2)return 'ラインぎりぎりまで ねばろう';
+    return 'PERFECT を もう1かい';
+  },
   howto:[
     ['🫖','ながおし（おしっぱなし）で おちゃをそそぐ'],
     ['🏆','キンいろゾーンで はなすと PERFECT 100てん！'],
@@ -1798,6 +1781,13 @@ registerGame({
   id:'lane', emoji:'🍣', title:'くるくるレーン',
   desc:'おだいのものを まんなかで 上フリック！',
   color:'#ffd6a5', duration:25,
+  goal0:'🍣 まずは1こ ゲットしてみよう！',
+  hint(c,mx){
+    if((mx||0)<3)return 'つづけて 3コンボ';
+    if((c.wrong||0)>=2)return 'おだい いがいは スルーしよう';
+    if(!(c.perfect>0))return 'まんなかゾーンで PERFECT';
+    return 'ジャストPERFECT を ふやそう';
+  },
   howto:[
     ['📋','うえの「おだい」に あうものだけ 上にフリック！'],
     ['🎯','まんなかの キンいろゾーンで とると PERFECT！'],
@@ -2055,6 +2045,14 @@ registerGame({
   id:'spot', emoji:'💡', title:'スポットライト☆ダンス',
   desc:'ひかりが かさなった しゅんかんに タップ！',
   color:'#cdb4f6', duration:null,
+  goal0:'💡 まずは1かい あわせてみよう！',
+  hint(c,mx){
+    const e=c.early||0,l=c.late||0;
+    if(e+l>0)return e>=l?'すこし まって EARLYをGOODに':'すこし はやめに LATEをGOODに';
+    if((c.miss||0)>=3)return 'ひかりが かさなるまで まとう';
+    if(!(c.perfect>0))return 'どまんなかで PERFECT';
+    return 'PERFECT を もう1かい';
+  },
   howto:[
     ['💡','スポットライトが ダンサーに ちかづいてくる！'],
     ['👆','わっかに ぴったり かさなった しゅんかんに タップ！'],
