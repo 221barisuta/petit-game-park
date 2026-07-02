@@ -541,6 +541,13 @@ function drawWinLine(g,a,b,col,w,base,amp,t){ // 勝ち筋の明滅ライン (�
   g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();g.restore();
 }
 const SELFTESTS=[]; // 各ゲームが純ロジックテストをpushし、?selftest起動時にbootが一括実行
+function makeTest(label){ // run*Tests の定型(集計・ck・出力)を共通化。ckr は引数逆順の旧suite互換
+  let pass=0,fail=0;const log=[];
+  const ck=(name,cond)=>{cond?pass++:fail++;if(!cond)log.push(name);};
+  return {ck,ckr:(cond,name)=>ck(name,cond),
+    done:()=>{console.log('['+label+' tests] pass='+pass+' / fail='+fail,log.length?log:'');
+      return {pass,fail,log};}};
+}
 function outlinedText(g,txt,x,y,size,fill,stroke,lw,alpha,align){
   g.save();
   g.globalAlpha*=(alpha==null?1:alpha);
@@ -2347,21 +2354,20 @@ function checkWin(board){
 function runTicTacToeTests(){
   const lines=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
   const mk=s=>s.split('').map(ch=>ch==='o'?'○':ch==='x'?'×':null); // 空セルは null 基準
-  let pass=0,fail=0;const log=[];
+  const {ck,done}=makeTest('checkWin');
   for(const ln of lines)for(const mark of ['○','×']){
     const b=Array(9).fill(null);ln.forEach(i=>b[i]=mark);
     const r=checkWin(b);
     const ok=r.winner===mark&&r.line&&r.line.join()===ln.join();
-    ok?pass++:fail++;if(!ok)log.push('win '+mark+' '+ln+' -> '+JSON.stringify(r));
+    ck('win '+mark+' '+ln+' -> '+JSON.stringify(r),ok);
   }
-  {const b=mk('oxooxxxoo');const r=checkWin(b);const ok=r.winner===null&&b.every(c=>c);ok?pass++:fail++;if(!ok)log.push('draw -> '+JSON.stringify(r));}
-  {const b=mk('ox    o  ');const r=checkWin(b);const ok=r.winner===null;ok?pass++:fail++;if(!ok)log.push('undecided -> '+JSON.stringify(r));}
-  {const r=checkWin(Array(9).fill(null));const ok=r.winner===null;ok?pass++:fail++;if(!ok)log.push('empty -> winner not null');}
+  {const b=mk('oxooxxxoo');const r=checkWin(b);const ok=r.winner===null&&b.every(c=>c);ck('draw -> '+JSON.stringify(r),ok);}
+  {const b=mk('ox    o  ');const r=checkWin(b);const ok=r.winner===null;ck('undecided -> '+JSON.stringify(r),ok);}
+  {const r=checkWin(Array(9).fill(null));const ok=r.winner===null;ck('empty -> winner not null',ok);}
   // line.slice() コピー返し検証: 返り値を破壊しても再判定が壊れない
   {const b=Array(9).fill(null);[0,1,2].forEach(i=>b[i]='○');const r=checkWin(b);r.line.push(99);const r2=checkWin(b);
-   const ok=r2.line.length===3&&r2.line.join()==='0,1,2';ok?pass++:fail++;if(!ok)log.push('slice-copy -> '+JSON.stringify(r2));}
-  console.log('[checkWin tests] pass='+pass+' / fail='+fail, log.length?log:'');
-  return {pass,fail,log};
+   const ok=r2.line.length===3&&r2.line.join()==='0,1,2';ck('slice-copy -> '+JSON.stringify(r2),ok);}
+  return done();
 }
 registerGame({
   id:'ox', emoji:'⭕', title:'まるばつ たいせん',
@@ -2512,8 +2518,7 @@ function checkGomoku(board,lastIndex){
 function runGomokuTests(){
   const N=GO_N, idx=(x,y)=>y*N+x, blank=()=>Array(N*N).fill(null);
   const fill=(cells,color)=>{const b=blank();for(const i of cells)b[i]=color;return b;};
-  let pass=0,fail=0;const log=[];
-  const ck=(name,cond)=>{cond?pass++:fail++;if(!cond)log.push(name);};
+  const {ck,done}=makeTest('checkGomoku');
   // 横5連 (黒)
   {const cells=[0,1,2,3,4].map(x=>idx(x,7));const b=fill(cells,'black');const r=checkGomoku(b,idx(2,7));
    ck('h5',r.winner==='black'&&r.line.length===5&&r.line.join()===cells.join());}
@@ -2543,8 +2548,7 @@ function runGomokuTests(){
   // コピー返し: 返り値lineを破壊しても再判定が壊れない
   {const cells=[0,1,2,3,4].map(x=>idx(x,1));const b=fill(cells,'black');const r=checkGomoku(b,idx(0,1));
    r.line.push(999);const r2=checkGomoku(b,idx(0,1));ck('slice-copy',r2.line.length===5);}
-  console.log('[checkGomoku tests] pass='+pass+' / fail='+fail, log.length?log:'');
-  return {pass,fail,log};
+  return done();
 }
 /* ============================================================
    getGomokuHint(board, mark) -> index   (純関数・副作用なし)
@@ -2628,8 +2632,7 @@ function getGomokuHint(board,mark){
 /* getGomokuHint 自動テスト: ①〜⑤の各優先度 + 空盤 + 終盤で例外なし。 */
 function runGomokuHintTests(){
   const N=GO_N, idx=(x,y)=>y*N+x, blank=()=>Array(N*N).fill(null);
-  let pass=0,fail=0;const log=[];
-  const ck=(name,cond)=>{cond?pass++:fail++;if(!cond)log.push(name);};
+  const {ck,done}=makeTest('getGomokuHint');
   // ① 自分が5を完成: 黒が横4連(2..5,行7) → 完成点は (1,7) か (6,7)
   {const b=blank();[2,3,4,5].forEach(x=>b[idx(x,7)]='black');const h=getGomokuHint(b,'black');
    ck('win5',h===idx(1,7)||h===idx(6,7));}
@@ -2652,8 +2655,7 @@ function runGomokuHintTests(){
   // 終盤(ほぼ埋まり)で例外なく空点を返す
   {const b=blank();for(let i=0;i<b.length;i++)b[i]=(i%2?'black':'white');b[idx(7,7)]=null;
    const h=getGomokuHint(b,'black');ck('endgame',h===idx(7,7));}
-  console.log('[getGomokuHint tests] pass='+pass+' / fail='+fail, log.length?log:'');
-  return {pass,fail,log};
+  return done();
 }
 /* ============================================================
    getGomokuCpuMove(board, mark, level) -> index   (純関数・副作用なし)
@@ -2714,8 +2716,7 @@ function getGomokuCpuMove(board,mark,level){
 /* getGomokuCpuMove 自動テスト: 各レベルの即詰み反応 + つよいの双方向脅威の創出/阻止 + よわいの候補範囲。 */
 function runGomokuCpuTests(){
   const N=GO_N, idx=(x,y)=>y*N+x, blank=()=>Array(N*N).fill(null);
-  let pass=0,fail=0;const log=[];
-  const ck=(name,cond)=>{cond?pass++:fail++;if(!cond)log.push(name);};
+  const {ck,done}=makeTest('getGomokuCpuMove');
   const inSet=(h,...s)=>s.includes(h);
   // 全レベル: 自分の4連→完成点を取る / 相手の4連→止める
   for(const lv of [1,2,3]){
@@ -2737,8 +2738,7 @@ function runGomokuCpuTests(){
   // 副作用なし: 呼び出し後に board が不変であること(つよいは仮置きする)
   {const b=blank();[[5,7],[6,7]].forEach(([x,y])=>b[idx(x,y)]='black');const snap=b.slice();
    getGomokuCpuMove(b,'black',3);ck('no-side-effect',b.every((v,i)=>v===snap[i]));}
-  console.log('[getGomokuCpuMove tests] pass='+pass+' / fail='+fail, log.length?log:'');
-  return {pass,fail,log};
+  return done();
 }
 SELFTESTS.push(runTicTacToeTests,runGomokuTests,runGomokuHintTests,runGomokuCpuTests);
 /* ============================================================
@@ -3324,8 +3324,7 @@ function hitHole(x,y,targets,r){
 }
 function runMoleTests(){
   const L=moleLayout();
-  let pass=0,fail=0;const log=[];
-  const ck=(cond,msg)=>{cond?pass++:fail++;if(!cond)log.push(msg)};
+  const {ckr:ck,done}=makeTest('mole'); // 旧ck(cond,msg)互換
   const NUL=()=>new Array(9).fill(null);
   // 形状
   ck(L.holes.length===9,'holes!=9 ('+L.holes.length+')');
@@ -3344,8 +3343,7 @@ function runMoleTests(){
    ck(hitHole(112,100,tg,L.r)===0,'nearest 0 -> '+hitHole(112,100,tg,L.r));
    ck(hitHole(288,100,tg,L.r)===8,'nearest 8 -> '+hitHole(288,100,tg,L.r));
    ck(hitHole(200,100,tg,L.r)===null,'between(far) -> '+hitHole(200,100,tg,L.r));}
-  console.log('[mole tests] pass='+pass+' / fail='+fail, log.length?log:'');
-  return {pass,fail,log};
+  return done();
 }
 registerGame({
   id:'mole', emoji:'🦫', title:'もぐらたたき',
@@ -3739,8 +3737,7 @@ function getOthelloCpuMove(board,color,level){
 }
 /* runOthelloCpuTests: 各レベル 合法手/副作用なし・手なし-1・唯一手・つよいは角優先・おに終盤完全読み。?selftest。 */
 function runOthelloCpuTests(){
-  let pass=0,fail=0;const log=[];
-  const ck=(n,c)=>{c?pass++:(fail++,log.push(n));};
+  const {ck,done}=makeTest('othello cpu');
   const b=othInitial();
   for(const lv of [1,2,3]){
     const snap=b.slice();const mv=getOthelloCpuMove(b,'black',lv);
@@ -3775,14 +3772,12 @@ function runOthelloCpuTests(){
   {const bd=Array(64).fill('black');bd[9]='white';bd[0]=null;let ok=true;
    try{othNegamax(bd,'white',2,-Infinity,Infinity,null);}catch(e){ok=false;}
    ck('pass-no-throw',ok);}
-  console.log('[othello cpu tests] pass='+pass+' / fail='+fail, log.length?log:'');
-  return {pass,fail,log};
+  return done();
 }
 /* runOthelloTests 自動テスト: 初期配置 / 基本反転 / 複数方向同時反転 / 入力不変 /
    非合法手 / パス(片側0手) / 終局 / 勝敗集計 / 引き分け。?selftest で実行。 */
 function runOthelloTests(){
-  let pass=0,fail=0;const log=[];
-  const ck=(name,cond)=>{cond?pass++:fail++;if(!cond)log.push(name);};
+  const {ck,done}=makeTest('othello');
   // 初期配置
   {const b=othInitial();const cs=countStones(b);
    ck('init-count',cs.black===2&&cs.white===2);
@@ -3826,14 +3821,12 @@ function runOthelloTests(){
   {const b=Array(64).fill('black');for(let i=0;i<32;i++)b[i]='white';
    ck('draw',getWinner(b)==='draw');}
   {const b=Array(64).fill('white');b[0]='black';ck('winner-white',getWinner(b)==='white');}
-  console.log('[othello tests] pass='+pass+' / fail='+fail, log.length?log:'');
-  return {pass,fail,log};
+  return done();
 }
 /* runOthelloHintTests 自動テスト: 角優先 / 最多反転(同点は最小index) / 非合法-∞ /
    手なし-1 / 初期盤の推奨手が合法手。?selftest で実行。 */
 function runOthelloHintTests(){
-  let pass=0,fail=0;const log=[];
-  const ck=(name,cond)=>{cond?pass++:fail++;if(!cond)log.push(name);};
+  const {ck,done}=makeTest('othello hint');
   // 角優先: 角(0)を取れる手(1反転) を、非角で反転数の多い手(2反転) より優先する
   {const b=Array(64).fill(null);b[1]='white';b[2]='black';           // 0に打つと[1]反転=角取り
    b[20]='white';b[21]='white';b[22]='black';                        // 19に打つと[20,21]反転=非角2反転
@@ -3850,8 +3843,7 @@ function runOthelloHintTests(){
   {const b=Array(64).fill('black');ck('no-moves-neg1',getOthelloHint(b,'white')===-1);}
   // 初期盤の推奨手は合法手のひとつ
   {const b=othInitial();ck('hint-is-valid',getValidMoves(b,'black').includes(getOthelloHint(b,'black')));}
-  console.log('[othello hint tests] pass='+pass+' / fail='+fail, log.length?log:'');
-  return {pass,fail,log};
+  return done();
 }
 registerGame({
   id:'othello', emoji:'🔴', title:'オセロ',
@@ -5742,8 +5734,7 @@ registerGame({
 
 /* ---- セルフテスト (?selftest で実行) ---- */
 function runMahjongTests(){
-  let pass=0,fail=0;const log=[];
-  const ck=(name,cond)=>{cond?pass++:fail++;if(!cond)log.push(name);};
+  const {ck,done}=makeTest('mahjong');
   // シャンテン数: 既知ベクタ
   for(const[s,want]of[
     ['123m456p789s11222z',-1],['123m456p789s1122z',0],
@@ -5837,8 +5828,7 @@ function runMahjongTests(){
     ck('round-rank#'+seed,['SS','S','A','B','C'].indexOf(rep.rank[1])>=0);
     ck('round-score#'+seed,rep.score>=0&&rep.score<=100);
   }
-  console.log('[mahjong tests] pass='+pass+' / fail='+fail,log.length?log:'');
-  return {pass,fail,log};
+  return done();
 }
 SELFTESTS.push(runMahjongTests);
 
@@ -5903,8 +5893,7 @@ function judgeMatch(results){
   return'draw';
 }
 function runChickenTests(){
-  let pass=0,fail=0;const log=[];
-  const ck=(c,m)=>{c?pass++:fail++;if(!c)log.push(m);};
+  const {ckr:ck,done}=makeTest('chicken'); // 旧ck(cond,msg)互換
   // 全 車種×坂 で grip>g (下り坂でも止まれる) を厳守
   for(const ckey in CARS)for(const skey in SLOPES)
     ck(CARS[ckey].grip>SLOPES[skey].g, 'grip<=g 破綻: '+ckey+'/'+skey);
@@ -5934,8 +5923,7 @@ function runChickenTests(){
   ck(judgeMatch([{winner:'p',pScore:1,cScore:0},{winner:'p',pScore:1,cScore:0},{winner:'c',pScore:0,cScore:1}])==='p','勝ち数多いp');
   ck(judgeMatch([{winner:'p',pScore:90,cScore:10},{winner:'c',pScore:10,cScore:90},{winner:'draw',pScore:50,cScore:40}])==='p','勝ち同数→得点合計p');
   ck(judgeMatch([{winner:'draw',pScore:50,cScore:50}])==='draw','完全同→引分');
-  console.log('[chicken tests] pass='+pass+' / fail='+fail, log.length?log:'');
-  return{pass,fail,log};
+  return done();
 }
 registerGame({
   id:'chicken', emoji:'🏁', title:'チキンレース',
