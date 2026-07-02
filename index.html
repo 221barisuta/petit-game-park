@@ -1219,7 +1219,7 @@ function showResult(extra){
   show('scr-result');
   game=null;
   // ランキング送信 → デイリーなら「きょうのトップ5」を表示 (rankingBase未設定ならno-op)
-  $('resRank').classList.add('hidden');
+  $('resRank').classList.add('hidden');$('resRank').innerHTML=''; // 前回のランキング行を必ずクリア (renderTotalRankはappendするため)
   (async()=>{
     try{
       const sub=await window.PGP_RANKING.submitScore(def.id,score,{daily:isDaily,seed,date:todaySeed()});
