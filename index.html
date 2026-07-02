@@ -2822,6 +2822,108 @@ function lineInvite(code){ // #6 LINEで しょうたい (お誘い文+部屋リ
   const text='「'+(activeNet.gameLabel||'ゲーム')+'」いっしょにやろ！ '+roomLink(code);
   window.open('https://line.me/R/msg/text/?'+encodeURIComponent(text),'_blank');
 }
+
+/* ── makeVsOnlineUI: 2人対戦ゲームのオンライン画面 共通部 (五目/オセロ) ──
+   入室/退室/サーバーstateミラー/ヒント/待った/再戦ボタン/盤タップ(2度タップ確定)の
+   状態機械を一元化。ゲーム差分は cfg のフックだけで表現する:
+     net: makeOnlineNet のインスタンス / btnL,btnR,btnExit(+exitSize): ボタン矩形 / hintCol: ヒント色
+     undoNeedsOppTurn: 待った条件に相手手番を要求(五目) / cellAt(x,y): 盤ヒット判定
+     enterReset/leaveReset/newGameReset(): 画面・演出状態のリセット
+     snapOf(ng): 仮置きクリア判定キー / applyState(ng): 盤面等のミラー反映
+     onResult(res): 決着演出(1回だけ) / hintIdx(ng,seat)→onHint(idx) / canPut(ng,c,seat): 合法判定
+   仮置き中のマスは st.pending として公開 (ゲーム側の描画が参照) */
+function makeVsOnlineUI(cfg){
+  const net=cfg.net,A=AudioKit;
+  const st={pending:-1,seenNo:-1,fxDone:false,snap:'',toastSeq:0};
+  function enter(){
+    if(!net.available())return;
+    activeNet=net; // オンラインバー(DOM)をこのゲームのnetへ束ねる
+    st.seenNo=-1;st.fxDone=false;st.pending=-1;st.toastSeq=net.state.toastSeq;st.snap='';
+    cfg.enterReset();
+    if(pendingOnlineRoom){const code=pendingOnlineRoom;pendingOnlineRoom='';   // ?room= 自動参加
+      net.connect(code);setRoomUrl(code);$('onlineBar').classList.remove('hidden');renderOnlineBar();}
+    else{$('olName').value=net.getName();$('olCode').value='';$('olSetupMsg').textContent='';
+      $('onlineSetup').classList.remove('hidden');}                            // 入室UI(DOM)を出す
+  }
+  function leave(){
+    net.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');
+    setRoomUrl('');st.pending=-1;cfg.leaveReset();A.pop();
+  }
+  function mirror(){ // サーバーstate→ローカル描画変数へ反映 (screen==='online' の毎フレーム)
+    if(net.state._kicked){net.state._kicked=false;banner('たいきょ させられました');A.bad();leave();return;}
+    const s=net.state,ng=s.game;if(!ng)return;
+    if(st.seenNo!==ng.gameNo){st.seenNo=ng.gameNo;st.fxDone=false;cfg.newGameReset();} // 新対局(初回/もう一局)
+    const snap=cfg.snapOf(ng); // 盤状態が変わったら仮置きをクリア (相手着手・待った・再戦など)
+    if(snap!==st.snap){st.snap=snap;st.pending=-1;}
+    cfg.applyState(ng);
+    if(ng.result){st.pending=-1;if(!st.fxDone){st.fxDone=true;cfg.onResult(ng.result);}}
+    if(s.toastSeq!==st.toastSeq){st.toastSeq=s.toastSeq;if(s.toastMsg){banner(s.toastMsg);A.bad();}} // 相手の待った等
+  }
+  function showHint(){ // 自席・自手番のみローカル計算でヒント (純関数・無害)
+    const s=net.state,ng=s.game;
+    if(!ng||ng.result||(s.seat!=='black'&&s.seat!=='white')||ng.turn!==s.seat){A.bad();return;}
+    const idx=cfg.hintIdx(ng,s.seat);
+    if(idx>=0){cfg.onHint(idx);A.coin();}else A.bad();
+  }
+  function undoOk(){ // 待った可否: 直前手が自分の石 (undoNeedsOppTurn: 相手応手前のみ)。厳密判定はサーバーが担保
+    const s=net.state,ng=s.game;
+    return !!(ng&&!ng.result&&(s.seat==='black'||s.seat==='white')&&ng.last>=0&&
+      ng.board[ng.last]===s.seat&&(!cfg.undoNeedsOppTurn||ng.turn!==s.seat));
+  }
+  function drawButtons(g){
+    const s=net.state,ng=s.game;
+    const seated=(s.seat==='black'||s.seat==='white');
+    const myTurn=seated&&ng&&!ng.result&&ng.turn===s.seat;
+    if(ng&&ng.result){
+      const opp=s.seat==='black'?'white':'black';
+      const meReq=seated&&ng.rematch&&ng.rematch[s.seat];
+      const oppReq=seated&&ng.rematch&&ng.rematch[opp];
+      if(oppReq&&!meReq){                                  // 相手から再戦リクエスト → うける/ことわる
+        drawBtn(g,cfg.btnL,'✅ うける','#39c06a',false);
+        drawBtn(g,cfg.btnR,'✖ ことわる','#a8704a',false);
+      }else if(meReq){                                     // 自分が希望済み → 返事まち(タップで取消)
+        drawBtn(g,cfg.btnL,'⏳ へんじまち','#7a6cc0',false);
+        drawBtn(g,cfg.btnR,'↩ まった','#7a6cc0',true);
+      }else{                                               // 再戦リクエストを送る
+        drawBtn(g,cfg.btnL,'🔄 もう一局','#ff4d94',!seated);
+        drawBtn(g,cfg.btnR,'↩ まった','#7a6cc0',true);
+      }
+    }else{
+      drawBtn(g,cfg.btnL,'↩ まった','#7a6cc0',!undoOk());  // 直前手の本人のみ
+      drawBtn(g,cfg.btnR,'💡 ヒント',cfg.hintCol,!myTurn);
+    }
+    drawBtn(g,cfg.btnExit,'🚪 たいきょ','#5a5278',false,cfg.exitSize);
+  }
+  function onTap(x,y){
+    if(hitBtn(cfg.btnExit,x,y)){leave();return;}
+    const s=net.state,ng=s.game;if(!ng)return;
+    const seated=(s.seat==='black'||s.seat==='white');
+    if(ng.result){
+      const opp=s.seat==='black'?'white':'black';
+      const meReq=seated&&ng.rematch&&ng.rematch[s.seat];
+      const oppReq=seated&&ng.rematch&&ng.rematch[opp];
+      if(hitBtn(cfg.btnL,x,y)){
+        if(!seated){A.bad();return;}
+        if(oppReq&&!meReq)net.rematch(true);   // うける → 両者合意で再開
+        else if(meReq)net.rematch(false);      // へんじまち → 取消
+        else net.rematch(true);                // もう一局リクエスト
+        A.pop();return;
+      }
+      if(hitBtn(cfg.btnR,x,y)){ if(oppReq&&!meReq){net.rematchDecline();A.pop();}else A.bad(); return; }
+      return;
+    }
+    if(hitBtn(cfg.btnR,x,y)){showHint();return;}
+    if(hitBtn(cfg.btnL,x,y)){ if(undoOk()){net.undo();st.pending=-1;A.pop();}else A.bad(); return; } // 待った
+    // 盤タップ: 自席・自手番・合法手のみ。仮置き→同じマスを再タップで確定(#5)
+    if(seated&&ng.turn===s.seat){
+      const c=cfg.cellAt(x,y);if(c<0)return;
+      if(!cfg.canPut(ng,c,s.seat)){A.bad();return;}
+      if(st.pending===c){net.move(c);st.pending=-1;A.pop();} // 同マス 再タップ=確定
+      else{st.pending=c;A.pop();}                            // 仮置き(別マスなら移動)
+    }else if(cfg.cellAt(x,y)>=0)A.bad();
+  }
+  return {st,enter,leave,mirror,showHint,undoOk,drawButtons,onTap};
+}
 /* オンライン情報バー(DOM)を現在のサーバー状態で更新 (activeNet=五目/オセロ 共用。大富豪は専用描画へ) */
 function renderOnlineBar(){
   const s=activeNet.state;if(s.status==='idle')return;
@@ -2945,8 +3047,6 @@ registerGame({
     let board=Array(N*N).fill(null); // 空セルは null 基準
     let turn=0,result=null,winLine=null,last=-1,t=0;
     let history=[],hint=-1,hintT=0,undoLock=false,cpuTimer=0; // 履歴 / ヒント / 連打防止 / CPU思考ディレイ
-    let onlineSeenNo=-1,onlineFxDone=false; // オンライン: 対局番号の変化検出 / 結果演出を1回だけ
-    let pendingMove=-1,onlineToastSeq=0,onlineSnap=''; // 仮置き(#5) / 相手通知の既読seq / 盤状態スナップ(変化検出)
     const parts=new Particles();
 
     function applyCfg(){ // cfg → players
@@ -3055,7 +3155,7 @@ registerGame({
         else if(it.kind==='levelL')cfg.levelL=it.val;
         else if(it.kind==='levelR')cfg.levelR=it.val;
         else if(it.kind==='hint'){hintOn=!hintOn;store.set('pgp2_gomoku_hint',hintOn?'1':'0');}
-        else if(it.kind==='online'){GomokuNet.available()?enterOnline():A.bad();}
+        else if(it.kind==='online'){GomokuNet.available()?OL.enter():A.bad();}
         else if(it.kind==='start')startGame();
         return;
       }
@@ -3077,110 +3177,34 @@ registerGame({
         drawBtn(g,it,it.label,col,false,it.kind==='start'?22:it.kind==='online'?17:16);
       }
     }
-    // ── オンライン対戦 (GomokuNetのサーバー権威stateをミラーして描画。盤上はcanvas/情報はDOMバー) ──
-    function enterOnline(){
-      if(!GomokuNet.available())return;
-      activeNet=GomokuNet; // オンラインバー(DOM)を五目netへ束ねる
-      screen='online';result=null;winLine=null;parts.list=[];hint=-1;hintT=0;onlineSeenNo=-1;onlineFxDone=false;
-      pendingMove=-1;onlineToastSeq=GomokuNet.state.toastSeq;onlineSnap='';
-      if(pendingOnlineRoom){const code=pendingOnlineRoom;pendingOnlineRoom='';   // ?room= 自動参加
-        GomokuNet.connect(code);setRoomUrl(code);$('onlineBar').classList.remove('hidden');renderOnlineBar();}
-      else{$('olName').value=GomokuNet.getName();$('olCode').value='';$('olSetupMsg').textContent='';
-        $('onlineSetup').classList.remove('hidden');}                            // 入室UI(DOM)を出す
-    }
-    function leaveOnline(){
-      GomokuNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');
-      setRoomUrl('');screen='setup';pendingMove=-1;A.pop();
-    }
+    // ── オンライン対戦 (共通状態機械は makeVsOnlineUI。ここはゲーム固有フックのみ) ──
     function fireResultFx(res){ // 勝敗演出 (place()と同等。1対局1回だけ)
       if(res.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
       else{banner((res.winner==='black'?'●':'○')+'の かち！');A.fever();vib([30,50,30,50,30]);
         if(winLine)for(const i of winLine){const c=center(i);parts.burst(c.x,c.y,8,{shape:'star',col:'#ffd23f',grav:160});}
         confetti();}
     }
-    function mirrorOnline(){ // サーバーstate→ローカル描画変数へ反映
-      const s=GomokuNet.state,ng=s.game;if(!ng)return;
-      if(onlineSeenNo!==ng.gameNo){onlineSeenNo=ng.gameNo;parts.list=[];hint=-1;hintT=0;onlineFxDone=false;} // 新対局(初回/もう一局)
-      // 盤状態(手番/直前手/局番号)が変わったら仮置きをクリア (相手着手・待った・再戦など)
-      const snap=ng.turn+'/'+ng.last+'/'+ng.gameNo;
-      if(snap!==onlineSnap){onlineSnap=snap;pendingMove=-1;}
-      for(let i=0;i<N*N;i++)board[i]=ng.board[i]||null;
-      turn=ng.turn==='black'?0:1;last=ng.last;
-      if(ng.result){pendingMove=-1;winLine=ng.result.line||null;result=ng.result.draw?{draw:true}:{winner:ng.result.winner};
-        if(!onlineFxDone){onlineFxDone=true;fireResultFx(result);}}
-      else{result=null;winLine=null;}
-      // 相手の待った等の通知トースト (新しいseqが来たらbanner表示)
-      if(s.toastSeq!==onlineToastSeq){onlineToastSeq=s.toastSeq;if(s.toastMsg){banner(s.toastMsg);A.bad();}}
-    }
-    function showHintOnline(){ // 自席・自手番のみローカル計算でヒント (純関数・無害)
-      const s=GomokuNet.state,ng=s.game;
-      if(!ng||ng.result||(s.seat!=='black'&&s.seat!=='white')||ng.turn!==s.seat){A.bad();return;}
-      const idx=getGomokuHint(board,s.seat);
-      if(idx>=0&&board[idx]===null){hint=idx;hintT=3.2;A.coin();}else A.bad();
-    }
-    // 待った可否(オンライン): 直前手が自分の石 かつ 自分の手番でない(=直前に打ったのが自分)= 相手応手前
-    function undoOnlineOk(){
-      const s=GomokuNet.state,ng=s.game;
-      return !!(ng&&!ng.result&&(s.seat==='black'||s.seat==='white')&&ng.last>=0&&ng.board[ng.last]===s.seat&&ng.turn!==s.seat);
-    }
-    function drawOnlineButtons(g){
-      const s=GomokuNet.state,ng=s.game;
-      const seated=(s.seat==='black'||s.seat==='white');
-      const myTurn=seated&&ng&&!ng.result&&ng.turn===s.seat;
-      if(ng&&ng.result){
-        const opp=s.seat==='black'?'white':'black';
-        const meReq=seated&&ng.rematch&&ng.rematch[s.seat];
-        const oppReq=seated&&ng.rematch&&ng.rematch[opp];
-        if(oppReq&&!meReq){                                  // 相手から再戦リクエスト → うける/ことわる
-          drawBtn(g,btnL,'✅ うける','#39c06a',false);
-          drawBtn(g,btnR,'✖ ことわる','#a8704a',false);
-        }else if(meReq){                                     // 自分が希望済み → 返事まち(タップで取消)
-          drawBtn(g,btnL,'⏳ へんじまち','#7a6cc0',false);
-          drawBtn(g,btnR,'↩ まった','#7a6cc0',true);
-        }else{                                               // 再戦リクエストを送る
-          drawBtn(g,btnL,'🔄 もう一局','#ff4d94',!seated);
-          drawBtn(g,btnR,'↩ まった','#7a6cc0',true);
-        }
-      }else{
-        drawBtn(g,btnL,'↩ まった','#7a6cc0',!undoOnlineOk());  // 直前手の本人・相手応手前のみ
-        drawBtn(g,btnR,'💡 ヒント','#3a9bdc',!myTurn);
-      }
-      drawBtn(g,setBtn,'🚪 たいきょ','#5a5278',false,15);
-    }
-    function onOnlineTap(x,y){
-      if(hitBtn(setBtn,x,y)){leaveOnline();return;}
-      const s=GomokuNet.state,ng=s.game;if(!ng)return;
-      const seated=(s.seat==='black'||s.seat==='white');
-      if(ng.result){
-        const opp=s.seat==='black'?'white':'black';
-        const meReq=seated&&ng.rematch&&ng.rematch[s.seat];
-        const oppReq=seated&&ng.rematch&&ng.rematch[opp];
-        if(hitBtn(btnL,x,y)){
-          if(!seated){A.bad();return;}
-          if(oppReq&&!meReq)GomokuNet.rematch(true);   // うける → 両者合意で再開
-          else if(meReq)GomokuNet.rematch(false);      // へんじまち → 取消
-          else GomokuNet.rematch(true);                // もう一局リクエスト
-          A.pop();return;
-        }
-        if(hitBtn(btnR,x,y)){ if(oppReq&&!meReq){GomokuNet.rematchDecline();A.pop();}else A.bad(); return; }
-        return;
-      }
-      if(hitBtn(btnR,x,y)){showHintOnline();return;}
-      if(hitBtn(btnL,x,y)){ if(undoOnlineOk()){GomokuNet.undo();pendingMove=-1;A.pop();}else A.bad(); return; } // 待った
-      // 盤タップ: 自席・自手番のみ。仮置き→同じ交点を再タップで確定(#5)
-      if(seated&&ng.turn===s.seat){
-        const c=cellAt(x,y);if(c<0)return;
-        if(ng.board[c]!==null){A.bad();return;}
-        if(pendingMove===c){GomokuNet.move(c);pendingMove=-1;A.pop();} // 同交点 再タップ=確定
-        else{pendingMove=c;A.pop();}                                   // 仮置き(別交点なら移動)
-      }else if(cellAt(x,y)>=0)A.bad();
-    }
-    if(pendingOnlineRoom)enterOnline(); // ?room= で開かれた場合は即オンラインへ
+    const OL=makeVsOnlineUI({net:GomokuNet,btnL,btnR,btnExit:setBtn,exitSize:15,hintCol:'#3a9bdc',
+      undoNeedsOppTurn:true,cellAt,onResult:fireResultFx,
+      enterReset(){screen='online';result=null;winLine=null;parts.list=[];hint=-1;hintT=0;},
+      leaveReset(){screen='setup';},
+      newGameReset(){parts.list=[];hint=-1;hintT=0;},
+      snapOf:ng=>ng.turn+'/'+ng.last+'/'+ng.gameNo,
+      applyState(ng){
+        for(let i=0;i<N*N;i++)board[i]=ng.board[i]||null;
+        turn=ng.turn==='black'?0:1;last=ng.last;
+        if(ng.result){winLine=ng.result.line||null;result=ng.result.draw?{draw:true}:{winner:ng.result.winner};}
+        else{result=null;winLine=null;}
+      },
+      hintIdx(ng,seat){const i=getGomokuHint(board,seat);return (i>=0&&board[i]===null)?i:-1;},
+      onHint(i){hint=i;hintT=3.2;},
+      canPut:(ng,c)=>ng.board[c]===null});
+    if(pendingOnlineRoom)OL.enter(); // ?room= で開かれた場合は即オンラインへ
 
     return {
       onDown(x,y){
         if(screen==='setup'){onSetupTap(x,y);return}
-        if(screen==='online'){onOnlineTap(x,y);return}
+        if(screen==='online'){OL.onTap(x,y);return}
         // 2段目ボタンは決着前後どちらでも有効
         if(hitBtn(togBtn,x,y)){
           if(cfg.mode==='cvc'){A.bad();return}
@@ -3200,8 +3224,7 @@ registerGame({
       update(dt){
         t+=dt;parts.update(dt);
         if(screen==='online'){
-          if(GomokuNet.state._kicked){GomokuNet.state._kicked=false;banner('たいきょ させられました');A.bad();leaveOnline();return;}
-          mirrorOnline();if(hintT>0){hintT-=dt;if(hintT<=0){hintT=0;hint=-1;}}return;}
+          OL.mirror();if(hintT>0){hintT-=dt;if(hintT<=0){hintT=0;hint=-1;}}return;} // 退席通知はOL.mirror内
         if(screen!=='play')return;
         if(hintOn)hint=hintApplicable()?getGomokuHint(board,players[turn].mark):-1; // 常時ヒント
         else if(hintT>0){hintT-=dt;if(hintT<=0){hintT=0;hint=-1;}}                  // オンデマンドの減衰
@@ -3246,8 +3269,8 @@ registerGame({
         const sr=CELL*0.46;
         for(let i=0;i<board.length;i++)if(board[i])drawStone(g,board[i],center(i),sr);
         // 仮置きプレビュー (#5 オンライン: 半透明の自色石 + シアンの確定リング)
-        if(online&&pendingMove>=0&&!board[pendingMove]){
-          const ms=GomokuNet.state.seat,mk=(ms==='black'||ms==='white')?ms:'black',pc=center(pendingMove);
+        if(online&&OL.st.pending>=0&&!board[OL.st.pending]){
+          const ms=GomokuNet.state.seat,mk=(ms==='black'||ms==='white')?ms:'black',pc=center(OL.st.pending);
           g.save();g.globalAlpha=0.4;drawStone(g,mk,pc,sr);g.restore();
           g.save();g.globalAlpha=0.5+0.5*Math.sin(t*9);g.strokeStyle='#21e6c1';g.lineWidth=3;
           g.beginPath();g.arc(pc.x,pc.y,sr+2,0,TAU);g.stroke();g.restore();
@@ -3268,7 +3291,7 @@ registerGame({
           g.restore();
         }
         parts.draw(g);
-        if(online){ drawOnlineButtons(g); }
+        if(online){ OL.drawButtons(g); }
         else{
           // 1段目ボタン (プレイ時=[まった][ヒント] / 決着時=[もういちど][まった])
           const hintDisabled=hintOn||cfg.mode==='cvc'||players[turn].type==='cpu'; // 常時ON/CPU手番では💡無効
@@ -3883,8 +3906,6 @@ registerGame({
     let oniJustUnlocked=false;  // 直近の勝利で解放したか(結果画面の通知用)
     let cpuTimer=0;            // CPU思考ディレイ(update で減算→0で着手。UIブロック回避)
     // #11 オンライン対戦(OthelloNetのサーバー権威stateをミラー): screen='online'
-    let onlineSeenNo=-1,onlineFxDone=false; // 対局番号の変化検出 / 結果演出を1回だけ
-    let pendingMove=-1,onlineToastSeq=0,onlineSnap=''; // 仮置き(#5) / 相手通知の既読seq / 盤状態スナップ
     const FLIP_DUR=0.30, PLACE_DUR=0.16;
 
     function center(idx){
@@ -4016,113 +4037,38 @@ registerGame({
         if(b.kind==='mode'){cfg.mode=b.val;store.set('pgp2_othello_mode',b.val);A.pop();}
         else if(b.kind==='first'){cfg.humanFirst=!!b.val;store.set('pgp2_othello_first',b.val?'1':'0');A.pop();}
         else if(b.kind==='level'){cfg.level=b.val;store.set('pgp2_othello_lv',String(b.val));A.pop();}
-        else if(b.kind==='online'){OthelloNet.available()?enterOnline():A.bad();} // #11
+        else if(b.kind==='online'){OthelloNet.available()?OL.enter():A.bad();} // #11
         else if(b.kind==='start'){startPlay();}
         return;
       }
     }
-    // ── #11 オンライン対戦 (OthelloNetのサーバー権威stateをミラー。盤上はcanvas/情報はDOMバー) ──
-    function enterOnline(){
-      if(!OthelloNet.available())return;
-      activeNet=OthelloNet; // オンラインバー(DOM)をオセロnetへ束ねる
-      screen='online';result=null;last=-1;lastPass=null;flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;
-      onlineSeenNo=-1;onlineFxDone=false;pendingMove=-1;onlineToastSeq=OthelloNet.state.toastSeq;onlineSnap='';
-      if(pendingOnlineRoom){const code=pendingOnlineRoom;pendingOnlineRoom='';   // ?room=&g=othello 自動参加
-        OthelloNet.connect(code);setRoomUrl(code);$('onlineBar').classList.remove('hidden');renderOnlineBar();}
-      else{$('olName').value=OthelloNet.getName();$('olCode').value='';$('olSetupMsg').textContent='';
-        $('onlineSetup').classList.remove('hidden');}                            // 入室UI(DOM)を出す
-    }
-    function leaveOnline(){
-      OthelloNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');
-      setRoomUrl('');screen='setup';pendingMove=-1;A.pop();
-    }
+    // ── #11 オンライン対戦 (共通状態機械は makeVsOnlineUI。ここはゲーム固有フックのみ) ──
     function fireOnlineResultFx(res){ // 勝敗演出 (endGameと同等。1対局1回だけ)
       if(res.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
       else{banner(SYM[res.winner]+'の かち！');A.fever();vib([30,50,30,50,30]);confetti();}
     }
-    function mirrorOnline(){ // サーバーstate→ローカル描画変数へ反映
-      const s=OthelloNet.state,ng=s.game;if(!ng)return;
-      if(onlineSeenNo!==ng.gameNo){onlineSeenNo=ng.gameNo;onlineFxDone=false;flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;} // 新対局(初回/もう一局)
-      // 盤状態(手番/直前手/局番号/自動パス)が変わったら仮置きをクリア
-      const snap=ng.turn+'/'+ng.last+'/'+ng.gameNo+'/'+(ng.pass||'');
-      if(snap!==onlineSnap){onlineSnap=snap;pendingMove=-1;}
-      for(let i=0;i<N*N;i++)board[i]=ng.board[i]||null;
-      turn=ng.turn==='black'?0:1;last=ng.last;lastPass=ng.pass||null;
-      if(ng.result){pendingMove=-1;result=ng.result.draw?{draw:true}:{winner:ng.result.winner};
-        if(!onlineFxDone){onlineFxDone=true;fireOnlineResultFx(result);}}
-      else{result=null;}
-      // 相手の待った等の通知トースト (新しいseqが来たらbanner表示)
-      if(s.toastSeq!==onlineToastSeq){onlineToastSeq=s.toastSeq;if(s.toastMsg){banner(s.toastMsg);A.bad();}}
-    }
-    function showHintOnline(){ // 自席・自手番のみローカル計算でヒント (純関数・無害)
-      const s=OthelloNet.state,ng=s.game;
-      if(!ng||ng.result||(s.seat!=='black'&&s.seat!=='white')||ng.turn!==s.seat){A.bad();return;}
-      const idx=getOthelloHint(ng.board,s.seat);
-      if(idx>=0){hint=idx;hintT=3.2;A.coin();}else A.bad();
-    }
-    // 待った可否(オンライン): 直前に置かれた石が自分の色(=直前手が自分・相手未応手)。厳密判定はサーバーが担保
-    function undoOnlineOk(){
-      const s=OthelloNet.state,ng=s.game;
-      return !!(ng&&!ng.result&&(s.seat==='black'||s.seat==='white')&&ng.last>=0&&ng.board[ng.last]===s.seat);
-    }
-    function drawOnlineButtons(g){
-      const s=OthelloNet.state,ng=s.game;
-      const seated=(s.seat==='black'||s.seat==='white');
-      const myTurn=seated&&ng&&!ng.result&&ng.turn===s.seat;
-      if(ng&&ng.result){
-        const opp=s.seat==='black'?'white':'black';
-        const meReq=seated&&ng.rematch&&ng.rematch[s.seat];
-        const oppReq=seated&&ng.rematch&&ng.rematch[opp];
-        if(oppReq&&!meReq){                                  // 相手から再戦リクエスト → うける/ことわる
-          drawBtn(g,btnL,'✅ うける','#39c06a',false);
-          drawBtn(g,btnR,'✖ ことわる','#a8704a',false);
-        }else if(meReq){                                     // 自分が希望済み → 返事まち(タップで取消)
-          drawBtn(g,btnL,'⏳ へんじまち','#7a6cc0',false);
-          drawBtn(g,btnR,'↩ まった','#7a6cc0',true);
-        }else{                                               // 再戦リクエストを送る
-          drawBtn(g,btnL,'🔄 もう一局','#ff4d94',!seated);
-          drawBtn(g,btnR,'↩ まった','#7a6cc0',true);
-        }
-      }else{
-        drawBtn(g,btnL,'↩ まった','#7a6cc0',!undoOnlineOk());  // 直前手の本人・相手応手前のみ
-        drawBtn(g,btnR,'💡 ヒント','#f2a541',!myTurn);
-      }
-      drawBtn(g,togBtn,'🚪 たいきょ','#5a5278',false);
-    }
-    function onOnlineTap(x,y){
-      if(hitBtn(togBtn,x,y)){leaveOnline();return;}
-      const s=OthelloNet.state,ng=s.game;if(!ng)return;
-      const seated=(s.seat==='black'||s.seat==='white');
-      if(ng.result){
-        const opp=s.seat==='black'?'white':'black';
-        const meReq=seated&&ng.rematch&&ng.rematch[s.seat];
-        const oppReq=seated&&ng.rematch&&ng.rematch[opp];
-        if(hitBtn(btnL,x,y)){
-          if(!seated){A.bad();return;}
-          if(oppReq&&!meReq)OthelloNet.rematch(true);   // うける → 両者合意で再開
-          else if(meReq)OthelloNet.rematch(false);      // へんじまち → 取消
-          else OthelloNet.rematch(true);                // もう一局リクエスト
-          A.pop();return;
-        }
-        if(hitBtn(btnR,x,y)){ if(oppReq&&!meReq){OthelloNet.rematchDecline();A.pop();}else A.bad(); return; }
-        return;
-      }
-      if(hitBtn(btnR,x,y)){showHintOnline();return;}
-      if(hitBtn(btnL,x,y)){ if(undoOnlineOk()){OthelloNet.undo();pendingMove=-1;A.pop();}else A.bad(); return; } // 待った
-      // 盤タップ: 自席・自手番・合法手のみ。仮置き→同じマスを再タップで確定(#5)
-      if(seated&&ng.turn===s.seat){
-        const c=cellAt(x,y);if(c<0)return;
-        if(ng.board[c]!==null||!getFlips(ng.board,c,s.seat).length){A.bad();return;} // 占有/非合法(反転なし)
-        if(pendingMove===c){OthelloNet.move(c);pendingMove=-1;A.pop();} // 同マス 再タップ=確定
-        else{pendingMove=c;A.pop();}                                    // 仮置き(別マスなら移動)
-      }else if(cellAt(x,y)>=0)A.bad();
-    }
-    if(pendingOnlineRoom)enterOnline(); // ?room=&g=othello で開かれた場合は即オンラインへ
+    const OL=makeVsOnlineUI({net:OthelloNet,btnL,btnR,btnExit:togBtn,hintCol:'#f2a541',
+      cellAt,onResult:fireOnlineResultFx,
+      enterReset(){screen='online';result=null;last=-1;lastPass=null;flipMap=null;flipT=0;
+        placedAt=-1;placeT=0;hint=-1;hintT=0;},
+      leaveReset(){screen='setup';},
+      newGameReset(){flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;},
+      snapOf:ng=>ng.turn+'/'+ng.last+'/'+ng.gameNo+'/'+(ng.pass||''),
+      applyState(ng){
+        for(let i=0;i<N*N;i++)board[i]=ng.board[i]||null;
+        turn=ng.turn==='black'?0:1;last=ng.last;lastPass=ng.pass||null;
+        if(ng.result)result=ng.result.draw?{draw:true}:{winner:ng.result.winner};
+        else result=null;
+      },
+      hintIdx:(ng,seat)=>getOthelloHint(ng.board,seat),
+      onHint(i){hint=i;hintT=3.2;},
+      canPut:(ng,c,seat)=>ng.board[c]===null&&getFlips(ng.board,c,seat).length>0});
+    if(pendingOnlineRoom)OL.enter(); // ?room=&g=othello で開かれた場合は即オンラインへ
 
     return {
       onDown(x,y){
         if(screen==='setup'){onSetupTap(x,y);return} // #10 あいて選択
-        if(screen==='online'){onOnlineTap(x,y);return} // #11 オンライン
+        if(screen==='online'){OL.onTap(x,y);return} // #11 オンライン
         if(hitBtn(togBtn,x,y)){assistOn=!assistOn;store.set('pgp2_othello_assist',assistOn?'1':'0');A.pop();return} // #8 アシスト切替(常時)
         if(result){
           if(hitBtn(btnR,x,y)){undo();return}  // 決着後: まった(pvpのみ・誤タップ救済)
@@ -4139,8 +4085,7 @@ registerGame({
         if(placeT>0)placeT=Math.max(0,placeT-dt);
         if(hintT>0)hintT=Math.max(0,hintT-dt);
         if(screen==='online'){ // #11 サーバーstateをミラー
-          if(OthelloNet.state._kicked){OthelloNet.state._kicked=false;banner('たいきょ させられました');A.bad();leaveOnline();return;}
-          mirrorOnline();return;
+          OL.mirror();return; // 退席通知はOL.mirror内
         }
         // #10 CPU思考: ディレイ経過で着手(同期探索だが おに は時間キャップで凍結回避)
         if(screen==='play'&&!result&&players[turn].type==='cpu'&&cpuTimer>0){
@@ -4234,14 +4179,14 @@ registerGame({
         if(last>=0){const c=center(last);
           g.save();g.strokeStyle='#ff4d94';g.lineWidth=2.5;g.beginPath();g.arc(c.x,c.y,sr+3,0,TAU);g.stroke();g.restore();}
         // #5 仮置きプレビュー(オンライン): 半透明の自色石 + シアンの確定リング
-        if(online&&pendingMove>=0&&!board[pendingMove]){
-          const ms=OthelloNet.state.seat,mk=(ms==='black'||ms==='white')?ms:'black',pc=center(pendingMove);
+        if(online&&OL.st.pending>=0&&!board[OL.st.pending]){
+          const ms=OthelloNet.state.seat,mk=(ms==='black'||ms==='white')?ms:'black',pc=center(OL.st.pending);
           g.save();g.globalAlpha=0.4;drawStone(g,mk,pc,sr,1,1);g.restore();
           g.save();g.globalAlpha=0.5+0.5*Math.sin(t*9);g.strokeStyle='#21e6c1';g.lineWidth=3;
           g.beginPath();g.arc(pc.x,pc.y,sr+2,0,TAU);g.stroke();g.restore();
         }
         // ボタン
-        if(online){ drawOnlineButtons(g); return; } // #11 オンラインは専用ボタン(まった/ヒント/再戦/たいきょ)
+        if(online){ OL.drawButtons(g); return; } // #11 オンラインは専用ボタン(まった/ヒント/再戦/たいきょ)
         const undoDis=cfg.mode!=='pvp'||!history.length; // まったはpvpのみ(CPU対戦では無効)
         if(result){
           drawBtn(g,btnL,'▶ もう いちど','#ff4d94',false);
