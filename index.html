@@ -4287,6 +4287,783 @@ if(typeof window!=='undefined'){
 
 // ▼ 新しいミニゲームは registerGame({...}) をここに追加 ▼
 
+/* =========================================================================
+   🀄 まーじゃん なぜきり道場 — 打牌理由コーチング (1人用)
+   牌表現: int[34] 枚数配列 (0-8:萬 9-17:筒 18-26:索 27-33:東南西北白發中)
+   設計方針: シャンテンはスート別メモ化DP / 役・安全度・押し引きは全てテーブル駆動 /
+             河の情報は増分更新。if分岐の羅列を避けコード量を圧縮する。
+   ========================================================================= */
+const MJ=(()=>{
+  const HONOR=27;
+  const NAMES=(()=>{const n=[];for(const[suf,b]of[['萬',0],['筒',9],['索',18]])
+    for(let i=1;i<=9;i++)n[b+i-1]=i+suf;
+    ['東','南','西','北','白','發','中'].forEach((z,i)=>n[HONOR+i]=z);return n;})();
+  const YAOCHU=(()=>{const y=new Array(34).fill(false);
+    [0,8,9,17,18,26].forEach(t=>y[t]=true);
+    for(let t=HONOR;t<34;t++)y[t]=true;return y;})();
+  function parse(str){ // "123m45p6z"→int[34] (テスト用)
+    const h=new Array(34).fill(0);let d=[];
+    for(const ch of str){
+      if(ch>='1'&&ch<='9')d.push(+ch);
+      else{const b={m:0,p:9,s:18,z:HONOR}[ch];if(b!==undefined){d.forEach(x=>h[b+x-1]++);d=[];}}
+    }
+    return h;
+  }
+  /* --- シャンテンDP: スート9種ベクトル→(面子,塔子)パレート集合をメモ化。
+         手牌が1枚変わっても残り2スート+字牌はキャッシュヒット=実質差分計算 --- */
+  const suitMemo=new Map();
+  function pPush(list,m,t){
+    for(let i=0;i<list.length;i++){const p=list[i];
+      if(p[0]>=m&&p[1]>=t)return;
+      if(m>=p[0]&&t>=p[1])list.splice(i--,1);
+    }
+    list.push([m,t]);
+  }
+  function enumSuit(c,i,out,m,t){
+    while(i<9&&c[i]===0)i++;
+    if(i>=9){pPush(out,m,t);return;}
+    c[i]--;enumSuit(c,i,out,m,t);c[i]++;                                   // 孤立牌として除外
+    if(c[i]>=3){c[i]-=3;enumSuit(c,i,out,m+1,t);c[i]+=3;}                  // 刻子
+    if(i<=6&&c[i+1]>0&&c[i+2]>0){c[i]--;c[i+1]--;c[i+2]--;
+      enumSuit(c,i,out,m+1,t);c[i]++;c[i+1]++;c[i+2]++;}                   // 順子
+    if(c[i]>=2){c[i]-=2;enumSuit(c,i,out,m,t+1);c[i]+=2;}                  // 対子
+    if(i<=7&&c[i+1]>0){c[i]--;c[i+1]--;enumSuit(c,i,out,m,t+1);c[i]++;c[i+1]++;} // 両面/辺張
+    if(i<=6&&c[i+2]>0){c[i]--;c[i+2]--;enumSuit(c,i,out,m,t+1);c[i]++;c[i+2]++;} // 嵌張
+  }
+  function suitPat(c9){
+    const key=c9.join('');let v=suitMemo.get(key);
+    if(!v){v=[];enumSuit(c9.slice(),0,v,0,0);suitMemo.set(key,v);}
+    return v;
+  }
+  function bestMT(h){ // ブロック数(面子+塔子)≤4 で 2m+t 最大
+    const hon=[[0,0]];let hm=0,ht=0;
+    for(let i=HONOR;i<34;i++){if(h[i]>=3)hm++;else if(h[i]===2)ht++;}
+    hon[0]=[hm,ht];
+    let acc=[[0,0]];
+    for(const list of[suitPat(h.slice(0,9)),suitPat(h.slice(9,18)),suitPat(h.slice(18,27)),hon]){
+      const next=[];
+      for(const a of acc)for(const b of list){
+        const m=a[0]+b[0];if(m>4)continue;
+        pPush(next,m,Math.min(a[1]+b[1],4-m));
+      }
+      acc=next;
+    }
+    let best=0;for(const[m,t]of acc)best=Math.max(best,2*m+t);
+    return best;
+  }
+  const shCache=new Map(); // 手牌ハッシュ→シャンテン数
+  function shanten(h){
+    const key=h.join('');const hit=shCache.get(key);
+    if(hit!==undefined)return hit;
+    let std=8-bestMT(h);
+    for(let hd=0;hd<34;hd++){ // 雀頭を固定して再計算
+      if(h[hd]<2)continue;
+      h[hd]-=2;std=Math.min(std,7-bestMT(h));h[hd]+=2;
+    }
+    let pairs=0,kinds=0,yK=0,yP=0;
+    for(let i=0;i<34;i++){
+      if(h[i]>0){kinds++;if(YAOCHU[i]){yK++;if(h[i]>=2)yP=1;}}
+      if(h[i]>=2)pairs++;
+    }
+    const s=Math.min(std,6-pairs+Math.max(0,7-kinds),13-yK-yP); // 七対子/国士
+    shCache.set(key,s);
+    return s;
+  }
+  function ukeire(h,vis){ // 13枚手牌の有効牌: {shanten,tiles:[{tile,left}],count,kinds}
+    const s0=shanten(h);const tiles=[];let count=0;
+    for(let t=0;t<34;t++){
+      const left=4-h[t]-(vis?vis[t]:0);
+      if(left<=0)continue;
+      h[t]++;
+      if(shanten(h)<s0){tiles.push({tile:t,left});count+=left;}
+      h[t]--;
+    }
+    return {shanten:s0,tiles,count,kinds:tiles.length};
+  }
+  function winTiles(h13){ // 和了牌リスト (聴牌でなければ空)
+    const out=[];
+    for(let t=0;t<34;t++){
+      if(h13[t]>=4)continue;
+      h13[t]++;if(shanten(h13)===-1)out.push(t);h13[t]--;
+    }
+    return out;
+  }
+  /* --- 和了形分解 (役判定用: 雀頭+面子の全分解と七対子) --- */
+  function decompose(h){
+    const res=[];
+    let pr=0;for(let i=0;i<34;i++)if(h[i]===2)pr++;
+    if(pr===7)res.push({chiitoi:true,pair:-1,sets:[]});
+    for(let hd=0;hd<34;hd++){
+      if(h[hd]<2)continue;
+      h[hd]-=2;
+      const sets=[];
+      (function rec(i){
+        while(i<34&&h[i]===0)i++;
+        if(i>=34){res.push({pair:hd,sets:sets.slice()});return;}
+        if(h[i]>=3){h[i]-=3;sets.push({type:'tri',tile:i});rec(i);sets.pop();h[i]+=3;}
+        if(i<HONOR&&i%9<=6&&h[i+1]>0&&h[i+2]>0){
+          h[i]--;h[i+1]--;h[i+2]--;sets.push({type:'run',tile:i});rec(i);
+          sets.pop();h[i]++;h[i+1]++;h[i+2]++;}
+      })(0);
+      h[hd]+=2;
+    }
+    return res;
+  }
+  /* --- 役テーブル: 宣言的な条件記述子のみ。judgeOne 1関数で全役を評価 --- */
+  const YAKU=[
+    {name:'リーチ',han:1,menzenOnly:true,flag:'riichi'},
+    {name:'門前清自摸和',han:1,menzenOnly:true,flag:'tsumo'},
+    {name:'断幺九',han:1,tileTest:t=>!YAOCHU[t]},
+    {name:'平和',han:1,menzenOnly:true,pinfu:true},
+    {name:'役牌(白)',han:1,tripletOf:31},
+    {name:'役牌(發)',han:1,tripletOf:32},
+    {name:'役牌(中)',han:1,tripletOf:33},
+    {name:'場風牌',han:1,tripletOf:'roundWind'},
+    {name:'自風牌',han:1,tripletOf:'seatWind'},
+    {name:'七対子',han:2,menzenOnly:true,chiitoi:true},
+    {name:'対々和',han:2,setType:'tri'},
+    {name:'一盃口',han:1,menzenOnly:true,iipeiko:true},
+    {name:'混一色',han:3,suitLimit:'half'},
+    {name:'清一色',han:6,suitLimit:'full'},
+  ];
+  function judgeOne(y,ctx,d){
+    if(y.menzenOnly&&!ctx.menzen)return false;
+    if(y.flag)return !!ctx[y.flag];
+    if(y.chiitoi)return !!d.chiitoi;
+    if(d.chiitoi&&(y.pinfu||y.setType||y.iipeiko||y.tripletOf!==undefined))return false;
+    if(y.tileTest){for(let t=0;t<34;t++)if(ctx.hand[t]>0&&!y.tileTest(t))return false;return true;}
+    if(y.tripletOf!==undefined){
+      const tg=typeof y.tripletOf==='number'?y.tripletOf:ctx[y.tripletOf];
+      return d.sets.some(s=>s.type==='tri'&&s.tile===tg);
+    }
+    if(y.setType)return d.sets.every(s=>s.type===y.setType);
+    if(y.iipeiko){const r=d.sets.filter(s=>s.type==='run').map(s=>s.tile);
+      return r.some((t,i)=>r.indexOf(t)<i);}
+    if(y.suitLimit){
+      const su=new Set();let hon=false;
+      for(let i=0;i<34;i++)if(ctx.hand[i]>0){if(i<HONOR)su.add(i/9|0);else hon=true;}
+      return su.size===1&&(y.suitLimit==='full'?!hon:hon);
+    }
+    if(y.pinfu){
+      if(d.sets.length!==4||!d.sets.every(s=>s.type==='run'))return false;
+      const p=d.pair;
+      if(p>=31||p===ctx.seatWind||p===ctx.roundWind)return false;
+      const w=ctx.winTile; // 両面待ち(辺張123の3/789の7を除外)
+      return d.sets.some(s=>(w===s.tile&&s.tile%9<=5)||(w===s.tile+2&&s.tile%9>=1));
+    }
+    return false;
+  }
+  function judgeYaku(ctx){ // 全分解を試し最大翻の役リスト
+    let best={han:0,yaku:[]};
+    for(const d of decompose(ctx.hand)){
+      const yaku=[];let han=0;
+      for(const y of YAKU)if(judgeOne(y,ctx,d)){yaku.push(y);han+=y.han;}
+      if(han>best.han)best={han,yaku,decomp:d};
+    }
+    return best;
+  }
+  return {HONOR,NAMES,YAOCHU,parse,shanten,ukeire,winTiles,decompose,YAKU,judgeYaku,
+    clearCache(){suitMemo.clear();shCache.clear();}};
+})();
+
+/* ---- 河の情報 (現物・スジ・壁): 捨て牌1枚ごとの増分更新 ---- */
+function mjRiverNew(){return {visible:new Array(34).fill(0),genbutsu:new Array(34).fill(false)};}
+function mjSee(S,t){S.visible[t]++;}                 // 見えた牌を数えるだけ O(1)
+function mjThreatDiscard(S,t){S.genbutsu[t]=true;mjSee(S,t);} // 警戒対象の捨て牌 O(1)
+const mjSuji=(S,t)=>{ // スジ判定: 4切り→1・7 が通りやすい
+  const n=t%9,b=t-n,g=k=>k>=0&&k<=8&&S.genbutsu[b+k];
+  if(n<=2)return g(n+3);
+  if(n>=6)return g(n-3);
+  return g(n-3)&&g(n+3); // 4-6は中スジ(両側必要)
+};
+const mjWallCnt=(S,h,t)=>4-S.visible[t]-h[t];        // 自分から見えない残り枚数
+const mjNoChance=(S,h,t)=>{ // 両面待ちが構成不能(壁): 下側・上側とも塔子が枯れている
+  const n=t%9,b=t-n,dead=k=>k<0||k>8||mjWallCnt(S,h,b+k)<=0;
+  return (dead(n-2)||dead(n-1))&&(dead(n+1)||dead(n+2));
+};
+/* 安全度テーブル: 上から順に最初に一致した行を採用 (現物100〜無スジ中央22) */
+const MJ_SAFETY=[
+  {label:'現物',pts:100,hit:(S,h,t)=>S.genbutsu[t]},
+  {label:'字牌3枚見え',pts:90,hit:(S,h,t)=>t>=MJ.HONOR&&S.visible[t]+h[t]>=3},
+  {label:'壁(ノーチャンス)',pts:80,hit:(S,h,t)=>t<MJ.HONOR&&mjNoChance(S,h,t)},
+  {label:'スジの1・9',pts:75,hit:(S,h,t)=>t<MJ.HONOR&&(t%9===0||t%9===8)&&mjSuji(S,t)},
+  {label:'字牌2枚見え',pts:70,hit:(S,h,t)=>t>=MJ.HONOR&&S.visible[t]+h[t]>=2},
+  {label:'スジの2・8',pts:65,hit:(S,h,t)=>t<MJ.HONOR&&(t%9===1||t%9===7)&&mjSuji(S,t)},
+  {label:'中スジ',pts:55,hit:(S,h,t)=>t<MJ.HONOR&&mjSuji(S,t)},
+  {label:'生牌の字牌',pts:45,hit:(S,h,t)=>t>=MJ.HONOR},
+  {label:'端の1・9',pts:40,hit:(S,h,t)=>t%9===0||t%9===8},
+  {label:'2・8',pts:32,hit:(S,h,t)=>t%9===1||t%9===7},
+  {label:'中央3-7(無スジ)',pts:22,hit:()=>true},
+];
+function mjSafety(S,h,t){for(const e of MJ_SAFETY)if(e.hit(S,h,t))return e;}
+
+/* 役の芽テーブル: 13枚時点で「どの役に向かえるか」を宣言的に判定 */
+const MJ_YAKU_EYES=[
+  {label:'タンヤオ形',pts:8,hit:h=>{for(let t=0;t<34;t++)if(h[t]>0&&MJ.YAOCHU[t])return false;return true;}},
+  {label:'役牌対子',pts:7,hit:(h,c)=>[31,32,33,c.seatWind,c.roundWind].some(t=>h[t]>=2)},
+  {label:'七対子ねらい',pts:6,hit:h=>{let p=0;for(let t=0;t<34;t++)if(h[t]>=2)p++;return p>=4;}},
+  {label:'ピンフ形',pts:5,hit:h=>{let tri=0;for(let t=0;t<34;t++)if(h[t]>=3)tri++;
+    for(let t=MJ.HONOR;t<34;t++)if(h[t]>0&&t>=31)return false;return tri===0;}},
+  {label:'染め手みこみ',pts:6,hit:h=>{const c=[0,0,0];let hon=0;
+    for(let t=0;t<34;t++)if(h[t]>0){if(t<MJ.HONOR)c[t/9|0]+=h[t];else hon+=h[t];}
+    return Math.max(...c)+hon>=11&&c.filter(x=>x>0).length<3;}},
+];
+function mjYakuEyes(h13,c){const out=[];let pts=0;
+  for(const e of MJ_YAKU_EYES)if(e.hit(h13,c)){out.push(e.label);pts+=e.pts;}
+  return {labels:out,pts};
+}
+
+/* 押し引きテーブル: 自シャンテン×脅威(リーチ有無)×巡目→効率/安全の重み */
+const MJ_PUSH=[
+  [{eff:1,safe:0},{eff:.65,safe:.35}], // 聴牌
+  [{eff:1,safe:0},{eff:.35,safe:.65}], // 1シャンテン
+  [{eff:1,safe:0},{eff:.12,safe:.88}], // 2シャンテン以上
+];
+function mjPushW(sh,threat,turn){
+  const w=Object.assign({},MJ_PUSH[Math.min(Math.max(sh,0),2)][threat?1:0]);
+  if(threat&&turn>=12){w.safe=Math.min(1,w.safe+.1);w.eff=1-w.safe;} // 終盤は降り寄り
+  return w;
+}
+
+/* ---- 打牌候補の分析: 14枚→全候補の {効率/安全/役} スコアと理由 ---- */
+function mjAnalyze(h14,S,c){ // c:{threat,turn,seatWind,roundWind}
+  const cands=[];
+  for(let t=0;t<34;t++){
+    if(h14[t]===0)continue;
+    h14[t]--;
+    const u=MJ.ukeire(h14,S.visible);
+    const eyes=mjYakuEyes(h14,c);
+    cands.push({tile:t,sh:u.shanten,uke:u,eyes,safe:mjSafety(S,h14,t)});
+    h14[t]++;
+  }
+  const shMin=Math.min(...cands.map(x=>x.sh));
+  // 受け入れ枚数はシャンテン数が同じ候補どうしでしか比較できない(浅いほど母数が減る)。
+  // 同一シャンテン帯内で正規化し、後退は1段ごとに-70点(帯内順位は保って理由説明に使う)
+  const maxBySh={};
+  for(const x of cands)maxBySh[x.sh]=Math.max(maxBySh[x.sh]||1,x.uke.count);
+  const pw=mjPushW(shMin,c.threat,c.turn);
+  for(const x of cands){
+    x.eff=Math.max(0,Math.round(100*x.uke.count/maxBySh[x.sh]-70*(x.sh-shMin)));
+    x.total=Math.round(pw.eff*x.eff+pw.safe*x.safe.pts+Math.min(12,x.eyes.pts)*.01*x.eff);
+  }
+  cands.sort((a,b)=>b.total-a.total||b.eff-a.eff);
+  return {cands,shMin,maxBySh,weights:pw};
+}
+/* 理由テキスト: 出力例「①受け入れ6種18枚(最大) ②現物で安全 ③タンヤオ形を維持」 */
+function mjReason(x,an,threat){
+  const r=['①受け入れ'+x.uke.kinds+'種'+x.uke.count+'枚'+
+    (x.sh>an.shMin?'(シャンテン後退!)':x.uke.count>=an.maxBySh[x.sh]?'(最大)':'')];
+  if(threat)r.push('②'+x.safe.label+(x.safe.pts>=65?'で安全':x.safe.pts>=45?'(やや危険)':'(危険!)'));
+  r.push((threat?'③':'②')+(x.eyes.labels.length?x.eyes.labels.slice(0,2).join('・')+'を維持':'役の芽なし(リーチ頼み)'));
+  return r;
+}
+
+/* ---- CPU打牌 (B-8): プレイヤーと同じ分析器を使い、判断根拠もログに残す ---- */
+function mjCpuDiscard(h14,S,c){
+  const an=mjAnalyze(h14,S,c);
+  const top=an.cands[0];
+  const why=c.threat?(top.safe.pts>=65?'あんぜんな'+MJ.NAMES[top.tile]+'からきるよ'
+      :'おりたいけど…'+MJ.NAMES[top.tile]+'がいちばんマシ')
+    :'うけいれ'+top.uke.count+'まいで最大の'+MJ.NAMES[top.tile]+'をきるよ';
+  return {tile:top.tile,why,an};
+}
+
+/* ---- 採点 (A-6): 1打ごとのロス→局全体をSS/S/A/B/Cへ (titleForと同形式のテーブル) ---- */
+const MJ_RANKS=[[0,'C','#aab0c8'],[45,'B','#8fd0ff'],[65,'A','#7cf29c'],[80,'S','#ffb0d8'],[92,'SS','#ffd23f']];
+function mjRankFor(score){let r=MJ_RANKS[0];for(const e of MJ_RANKS)if(score>=e[0])r=e;return r;}
+function mjTurnScore(chosen,an){ // その巡の打牌採点 0-100
+  return Math.max(0,100-(an.cands[0].total-chosen.total)*3);
+}
+function mjJudgeKind(chosen,an){ // コア共通JUDGE(スコア/コンボ)への写像
+  const loss=an.cands[0].total-chosen.total;
+  return loss<=0?'perfect':loss<=4?'great':loss<=12?'good':'miss';
+}
+
+/* ---- 局の進行 (UI非依存: セルフテストでヘッドレス実行できる) ---- */
+function mjRoundNew(rng){
+  const wall=[];
+  for(let t=0;t<34;t++)for(let k=0;k<4;k++)wall.push(t);
+  for(let i=wall.length-1;i>0;i--){const j=Math.floor(rng()*(i+1));
+    [wall[i],wall[j]]=[wall[j],wall[i]];}
+  const my=new Array(34).fill(0),cp=new Array(34).fill(0);
+  for(let i=0;i<13;i++){my[wall.pop()]++;cp[wall.pop()]++;}
+  return {wall,my,cp,myRiver:[],cpRiver:[],
+    S:mjRiverNew(),   // 自分視点: genbutsu=CPUの河
+    Sc:mjRiverNew(),  // CPU視点: genbutsu=自分の河
+    turn:1,myRiichi:0,cpRiichi:0,cpWin:[],end:null,log:[],hintsUsed:0,noYaku:0,
+    seatWind:27,roundWind:27};
+}
+const mjWinCtx=(R,hand,winTile,riichi,tsumo)=>({hand,winTile,menzen:true,
+  riichi:!!riichi,tsumo,seatWind:R.seatWind,roundWind:R.roundWind});
+function mjDrawSelf(R){ // 自分のツモ → {tile,win:{han,yaku}|null}
+  const t=R.wall.pop();R.my[t]++;
+  if(MJ.shanten(R.my)===-1){
+    const w=MJ.judgeYaku(mjWinCtx(R,R.my,t,R.myRiichi,true));
+    if(w.han>0){R.end='tsumo';return {tile:t,win:w};}
+    R.noYaku++; // 役なし: あがれない教材ポイント
+  }
+  return {tile:t,win:null};
+}
+function mjPlayerDiscard(R,t){ // 打牌の共通処理 → 'dealin'|null
+  R.my[t]--;R.myRiver.push(t);
+  mjSee(R.S,t);mjThreatDiscard(R.Sc,t);
+  if(R.cpRiichi&&R.cpWin.indexOf(t)>=0){R.end='dealin';R.dealinTile=t;return 'dealin';}
+  return null;
+}
+function mjCpuTurn(R){ // CPUのツモ〜打牌 → {cut,why,declared,win,ron}
+  const t=R.wall.pop();R.cp[t]++;
+  if(MJ.shanten(R.cp)===-1){
+    const w=MJ.judgeYaku(mjWinCtx(R,R.cp,t,R.cpRiichi,true));
+    if(w.han>0){R.end='cpuTsumo';return {win:w,cut:-1};}
+  }
+  let cut=t,why='リーチちゅうはツモぎり！';
+  if(!R.cpRiichi){
+    const d=mjCpuDiscard(R.cp,R.Sc,{threat:!!R.myRiichi,turn:R.turn,
+      seatWind:R.seatWind,roundWind:R.roundWind});
+    cut=d.tile;why=d.why;
+  }
+  R.cp[cut]--;R.cpRiver.push(cut);
+  mjThreatDiscard(R.S,cut);mjSee(R.Sc,cut);
+  let declared=false;
+  if(!R.cpRiichi&&MJ.shanten(R.cp)===0){R.cpRiichi=R.turn;declared=true;why='テンパイ！リーチ！';}
+  if(R.cpRiichi)R.cpWin=MJ.winTiles(R.cp);
+  // 自分のロン判定 (フリテンなし・役ありのみ)
+  let ron=null;
+  if(MJ.shanten(R.my)===0){
+    const myWin=MJ.winTiles(R.my);
+    const furiten=myWin.some(w=>R.myRiver.indexOf(w)>=0);
+    if(!furiten&&myWin.indexOf(cut)>=0){
+      R.my[cut]++;
+      const w=MJ.judgeYaku(mjWinCtx(R,R.my,cut,R.myRiichi,false));
+      if(w.han>0){R.end='ron';ron=w;}else R.my[cut]--;
+    }
+  }
+  return {cut,why,declared,win:null,ron};
+}
+/* ---- 局後レポート (A-6) ---- */
+const MJ_ADJ=[ // 加減点テーブル
+  {label:'和了ボーナス',pts:6,count:R=>R.end==='tsumo'||R.end==='ron'?1:0},
+  {label:'流局時テンパイ',pts:3,count:R=>R.end==='ryuukyoku'&&MJ.shanten(R.my)===0?1:0},
+  {label:'ほうじゅう',pts:-6,count:R=>R.end==='dealin'?1:0},
+  {label:'リーチみのがし',pts:-3,count:R=>Math.min(3,R.log.filter(l=>l.couldRiichi&&!l.riichied&&!l.auto).length)},
+  {label:'ヒントにたよった',pts:-1,count:R=>Math.min(5,R.hintsUsed)},
+];
+function mjReport(R){
+  const judged=R.log.filter(l=>!l.auto);
+  const opt=judged.filter(l=>l.kind==='perfect').length;
+  let sc=judged.length?judged.reduce((a,l)=>a+l.tscore,0)/judged.length:70;
+  const adj=[];
+  for(const a of MJ_ADJ){const n=a.count(R);
+    if(n){adj.push({label:a.label,pts:a.pts*n});sc+=a.pts*n;}}
+  sc=clamp(Math.round(sc),0,100);
+  const worst=judged.filter(l=>l.kind!=='perfect')
+    .sort((a,b)=>a.tscore-b.tscore).slice(0,4);
+  return {score:sc,rank:mjRankFor(sc),opt,total:judged.length,adj,worst,
+    optRate:judged.length?opt/judged.length:1};
+}
+/* 成長トラッキング (B-9): 直近の局から弱点を1つ提案 (gameHintと同じ思想のテーブル) */
+const MJ_WEAK=[
+  {hit:h=>h.avgOpt<0.45,label:'きるまえに「うけいれ何枚?」をくらべるクセをつけよう'},
+  {hit:h=>h.lateRi>=2,label:'テンパイしたら まずリーチをけんとうしよう'},
+  {hit:h=>h.dealin>=2,label:'リーチには 現物→スジ のじゅんでおりよう'},
+  {hit:()=>true,label:'この調子！SSランクをめざそう'},
+];
+function mjWeakness(hist){
+  const h5=hist.slice(-5);
+  if(!h5.length)return MJ_WEAK[MJ_WEAK.length-1].label;
+  const agg={avgOpt:h5.reduce((a,x)=>a+x.opt,0)/h5.length,
+    lateRi:h5.reduce((a,x)=>a+(x.lateRi||0),0),
+    dealin:h5.reduce((a,x)=>a+(x.dealin||0),0)};
+  for(const w of MJ_WEAK)if(w.hit(agg))return w.label;
+}
+
+/* ---- ここからUI ---- */
+registerGame({
+  id:'mahjong',emoji:'🀄',title:'なぜきり麻雀どうじょう',
+  desc:'「なぜその牌をきる？」りゆうを学べる1人用コーチ',
+  color:'#b8e0d2',duration:null,
+  howto:[
+    ['🀄','ツモって1まいすてる をくりかえそう'],
+    ['🎯','コーチが1打ごとに「なぜ？」を採点してくれる'],
+    ['💡','まよったらヒントで受け入れ枚数をみられる'],
+    ['🤖','CPUがリーチしたら 現物・スジでおりるれんしゅう！'],
+    ['📊','局がおわると SS〜C の添削レポート！'],
+  ],
+  create(ctx){
+    const A=ctx.audio,RNG=ctx.rng;
+    const R=mjRoundNew(RNG);
+    let mjPhase='draw',sel=-1,an=null,drawn=-1,fb=null,timer=0;
+    let hintOn=ctx.rookie,riichiArm=false,endInfo=null,rep=null,page=0,cpuWhy='はじめよう！';
+    const TW=27,TH=40,HX=8,HY=572;                       // 手牌レイアウト
+    const RW=18,RH=24;                                   // 河レイアウト (12枚×2段=最大24打)
+    const BTNS=[ // 画面下ボタン (onDownでヒットテスト)
+      {id:'hint',x:8,y:626,w:128,h:44,label:()=>hintOn?'💡ヒント中':'💡ヒント',
+        on:()=>{if(!hintOn){hintOn=true;R.hintsUsed++;A.pop();}else{hintOn=false;A.tick();}}},
+      {id:'riichi',x:146,y:626,w:128,h:44,label:()=>riichiArm?'リーチやめる':'リーチ！',
+        able:()=>mjPhase==='select'&&!R.myRiichi&&an&&an.cands.some(c=>c.sh===0),
+        on:()=>{riichiArm=!riichiArm;sel=-1;A.go();}},
+    ];
+    const handTiles=()=>{const o=[];for(let t=0;t<34;t++)for(let k=0;k<R.my[t];k++)o.push(t);return o;};
+    function startTurn(){
+      if(R.wall.length<=14){R.end='ryuukyoku';finishRound();return;}
+      const d=mjDrawSelf(R);
+      drawn=d.tile;sel=-1;riichiArm=false;
+      if(R.end){endInfo=d.win;finishRound();return;}
+      an=mjAnalyze(R.my,R.S,{threat:!!R.cpRiichi,turn:R.turn,
+        seatWind:R.seatWind,roundWind:R.roundWind});
+      if(R.myRiichi){ // リーチ後はツモぎり
+        doDiscard(drawn,true);
+        return;
+      }
+      mjPhase='select';
+    }
+    function doDiscard(t,auto){
+      const chosen=an.cands.find(c=>c.tile===t);
+      const kind=mjJudgeKind(chosen,an);
+      const couldRiichi=!R.myRiichi&&an.cands.some(c=>c.sh===0);
+      if(!auto){
+        ctx.judge(kind,HX+7+handTiles().indexOf(t)*(TW+2),HY,
+          kind==='perfect'?{sub:'さいてき！'}:undefined);
+      }
+      R.log.push({n:R.turn,cut:t,kind,auto:!!auto,tscore:mjTurnScore(chosen,an),
+        best:an.cands[0].tile,threat:!!R.cpRiichi,couldRiichi,
+        riichied:riichiArm||!!R.myRiichi,
+        myReason:mjReason(chosen,an,!!R.cpRiichi),
+        bestReason:mjReason(an.cands[0],an,!!R.cpRiichi)});
+      if(riichiArm&&chosen.sh===0){R.myRiichi=R.turn;A.fever();}
+      riichiArm=false;sel=-1;
+      const res=mjPlayerDiscard(R,t);
+      if(res==='dealin'){finishRound();return;}
+      fb={chosen,an:an,auto:!!auto};
+      mjPhase='fb';timer=auto?.55:0;
+    }
+    function cpuStep(){
+      if(R.wall.length<=14){R.end='ryuukyoku';finishRound();return;}
+      const r=mjCpuTurn(R);
+      if(R.end){endInfo=r.win||r.ron;finishRound();return;}
+      cpuWhy=r.why;
+      if(r.declared)A.bad();
+      R.turn++;
+      startTurn();
+    }
+    function finishRound(){
+      rep=mjReport(R);page=0;
+      rep.finalSh=MJ.shanten(R.my);sel=-1;
+      // 成長履歴 (直近20局)
+      let hist=[];try{hist=JSON.parse(store.get('pgp2_mj_hist','[]'))||[];}catch(e){}
+      hist.push({r:rep.rank[1],opt:rep.optRate,
+        lateRi:R.log.filter(l=>l.couldRiichi&&!l.riichied&&!l.auto).length?1:0,
+        dealin:R.end==='dealin'?1:0});
+      store.set('pgp2_mj_hist',JSON.stringify(hist.slice(-20)));
+      rep.weak=mjWeakness(hist);rep.hist=hist;
+      mjPhase='end';timer=0;
+      const msg={tsumo:'ツモ和了！🎉',ron:'ロン和了！🎉',dealin:'ほうじゅう…！💥',
+        cpuTsumo:'CPUのツモ和了…',ryuukyoku:MJ.shanten(R.my)<=0?'流局(テンパイ)':'流局'}[R.end];
+      banner(msg);
+      (R.end==='tsumo'||R.end==='ron')?A.record():A.miss();
+    }
+    startTurn();
+    /* ---- 描画 ---- */
+    function rr(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);
+      g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();}
+    const SUIT_COL=['#c0392b','#2166ac','#2a7a3a'];
+    function tile(g,x,y,w,h,t,o){
+      o=o||{};
+      g.save();if(o.dim)g.globalAlpha=.38;
+      rr(g,x,y,w,h,Math.min(5,w*.18));
+      g.fillStyle=o.sel?'#fff3c4':'#fffdf5';g.fill();
+      g.strokeStyle=o.sel?'#e5a000':'#b9ac96';g.lineWidth=o.sel?2:1;g.stroke();
+      if(t>=MJ.HONOR){
+        g.fillStyle=t===33?'#c0392b':t===32?'#2a7a3a':'#3a3f52';
+        g.font=`bold ${h*.5}px ${FONT}`;g.textAlign='center';g.textBaseline='middle';
+        g.fillText(MJ.NAMES[t],x+w/2,y+h/2+1);
+      }else{
+        const su=t/9|0;
+        g.fillStyle=SUIT_COL[su];
+        g.font=`bold ${h*.44}px ${FONT}`;g.textAlign='center';g.textBaseline='middle';
+        g.fillText(String(t%9+1),x+w/2,y+h*.32);
+        g.font=`bold ${h*.3}px ${FONT}`;
+        g.fillText(['萬','筒','索'][su],x+w/2,y+h*.73);
+      }
+      g.restore();
+    }
+    function river(g,list,x0,y0){
+      list.forEach((t,i)=>tile(g,x0+(i%12)*(RW+2),y0+((i/12)|0)*(RH+3),RW,RH,t));
+    }
+    function text(g,s,x,y,px,col,align){
+      g.fillStyle=col||'#3a3f52';g.font=`bold ${px}px ${FONT}`;
+      g.textAlign=align||'left';g.textBaseline='middle';g.fillText(s,x,y);
+    }
+    function panel(g,x,y,w,h){rr(g,x,y,w,h,12);g.fillStyle='rgba(255,255,255,.88)';g.fill();
+      g.strokeStyle='#d8ceba';g.lineWidth=1.5;g.stroke();}
+    function candRow(g,x,y,c,idx,threat){
+      tile(g,x,y,24,33,c.tile);
+      const bx=x+32;
+      text(g,['◎','○','△'][idx]||'△',bx,y+8,15,['#e5a000','#7a9a3a','#888'][idx]||'#888');
+      g.fillStyle='#eee6d6';g.fillRect(bx+20,y+2,120,11);
+      g.fillStyle=['#ffd23f','#7cf29c','#8fd0ff'][idx]||'#8fd0ff';
+      g.fillRect(bx+20,y+2,120*clamp(c.total,0,100)/100,11);
+      text(g,mjReason(c,an,threat).join(' '),bx,y+26,10.5,'#555');
+    }
+    return {
+      update(dt){
+        if(mjPhase==='fb'&&fb.auto){timer-=dt;if(timer<=0){fb=null;mjPhase='cpu';timer=.45;}}
+        else if(mjPhase==='cpu'){timer-=dt;if(timer<=0)cpuStep();}
+      },
+      draw(g){
+        g.fillStyle='#e7f2ec';g.fillRect(0,0,W,H);
+        // 情報行 (中央はコアHUDのスコアが占有するので左右端のみ使う)
+        text(g,R.turn+'じゅんめ',12,52,15,'#3a3f52');
+        text(g,'のこり'+Math.max(0,R.wall.length-14)+'牌',W-12,52,13,'#7a806f','right');
+        // CPUゾーン
+        text(g,'🤖コーチ',12,74,14,'#3a3f52');
+        if(R.cpRiichi){rr(g,80,64,64,20,10);g.fillStyle='#e5578a';g.fill();
+          text(g,'リーチ！',112,74,12,'#fff','center');}
+        river(g,R.cpRiver,112,84);
+        text(g,'🤖「'+cpuWhy+'」',12,152,11.5,'#5a7a6a');
+        // コーチパネル
+        panel(g,8,164,W-16,292);
+        const px=20,py=180;
+        if(an&&!R.end)text(g,(an.shMin===0?'テンパイ！':an.shMin+'シャンテン'),W-28,py+4,14,
+          an.shMin===0?'#e5578a':'#5a7a6a','right');
+        if(mjPhase==='select'){
+          if(riichiArm){
+            text(g,'リーチ宣言！テンパイをたもつ牌をえらぼう',px,py+4,13.5,'#e5578a');
+          }else{
+            text(g,'どれをきる？(2回タップでけってい)',px,py+4,14,'#3a3f52');
+          }
+          if(R.cpRiichi)text(g,'⚠️リーチ警戒中: 安全度も考えよう',px,py+24,12.5,'#c0392b');
+          if(R.noYaku)text(g,'※役がないと和了できないよ',px,py+42,11.5,'#8a6a2a');
+          if(hintOn&&an){
+            text(g,'💡コーチのおすすめ:',px,py+66,12.5,'#7a6a3a');
+            an.cands.slice(0,3).forEach((c,i)=>candRow(g,px,py+80+i*44,c,i,!!R.cpRiichi));
+            text(g,'総合 = 効率'+Math.round(an.weights.eff*100)+'% + 安全'+
+              Math.round(an.weights.safe*100)+'% (押し引き表より)',px,py+218,10.5,'#999');
+          }else{
+            text(g,'💡ヒントで受け入れ枚数と理由がみられる',px,py+70,12,'#999');
+          }
+          if(sel>=0){
+            text(g,'えらんだ牌: ',px,py+250,13,'#3a3f52');
+            tile(g,px+82,py+236,24,32,sel);
+            text(g,'もういちどタップできる！',px+118,py+250,12,'#7a6a3a');
+          }
+        }else if(mjPhase==='fb'&&fb){
+          const c=fb.chosen,b=fb.an.cands[0];
+          if(fb.auto){text(g,'リーチちゅう: ツモぎり',px,py+8,14,'#e5578a');}
+          else{
+            text(g,'あなた: '+MJ.NAMES[c.tile]+'ぎり',px,py+8,15,'#3a3f52');
+            mjReason(c,fb.an,!!R.cpRiichi).forEach((s,i)=>text(g,s,px+8,py+34+i*20,12.5,'#555'));
+            const same=c.tile===b.tile;
+            text(g,same?'◎これが最適打！':'◎最適は '+MJ.NAMES[b.tile]+'ぎりだった',
+              px,py+110,15,same?'#e5a000':'#c0392b');
+            if(!same)mjReason(b,fb.an,!!R.cpRiichi).forEach((s,i)=>
+              text(g,s,px+8,py+136+i*20,12.5,'#7a5a2a'));
+            text(g,'タップですすむ ▶',W-30,440,13,'#999','right');
+          }
+        }else if(mjPhase==='end'&&rep){
+          text(g,'きょくしゅうりょう！',px,py+10,16,'#3a3f52');
+          text(g,'タップでレポートへ ▶',W/2,py+120,14,'#7a6a3a','center');
+        }else if(mjPhase==='report'&&rep){
+          drawReport(g,px,py);
+        }
+        // 自分の河
+        text(g,'じぶんの河',12,470,11,'#7a806f');
+        river(g,R.myRiver,112,462);
+        if(R.myRiichi){rr(g,12,480,64,20,10);g.fillStyle='#e5578a';g.fill();
+          text(g,'リーチ！',44,490,12,'#fff','center');}
+        // 手牌
+        if(!R.end){
+          const tiles=handTiles();
+          tiles.forEach((t,i)=>{
+            const isDrawn=mjPhase==='select'&&i===tiles.lastIndexOf(drawn);
+            const keep=an&&an.cands.find(c=>c.tile===t);
+            tile(g,HX+i*(TW+2)+(isDrawn?3:0),HY-(sel===t?8:0),TW,TH,t,
+              {sel:sel===t,dim:riichiArm&&keep&&keep.sh!==0}); // リーチ時: 聴牌が崩れる牌は暗転
+          });
+        }
+        // ボタン
+        if(mjPhase==='select'){
+          for(const b of BTNS){
+            if(b.able&&!b.able())continue;
+            rr(g,b.x,b.y,b.w,b.h,12);
+            g.fillStyle=b.id==='riichi'?(riichiArm?'#e5578a':'#ff8fb8'):'#ffd77a';g.fill();
+            g.strokeStyle='rgba(0,0,0,.14)';g.stroke();
+            text(g,b.label(),b.x+b.w/2,b.y+b.h/2,14,'#4a3a2a','center');
+          }
+        }
+      },
+      onDown(x,y){
+        if(mjPhase==='fb'&&!fb.auto){fb=null;mjPhase='cpu';timer=.4;A.tick();return;}
+        if(mjPhase==='end'){mjPhase='report';A.pop();return;}
+        if(mjPhase==='report'){reportTap(x,y);return;}
+        if(mjPhase!=='select')return;
+        for(const b of BTNS)
+          if(!(b.able&&!b.able())&&x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h){b.on();return;}
+        if(y>=HY-14&&y<=HY+TH+6){
+          const tiles=handTiles();
+          const i=Math.floor((x-HX)/(TW+2));
+          if(i>=0&&i<tiles.length){
+            const t=tiles[i];
+            if(riichiArm){const c=an.cands.find(c=>c.tile===t);
+              if(!c||c.sh!==0){A.bad();return;}}
+            if(sel===t)doDiscard(t,false);
+            else{sel=t;A.tick();}
+          }
+        }
+      },
+      /* レポート描画とタップ */
+      finish(){
+        const label={tsumo:'ツモ和了🎉',ron:'ロン和了🎉',dealin:'ほうじゅう💥',
+          cpuTsumo:'CPUの和了',ryuukyoku:'流局'}[R.end]||'-';
+        return {banner:'コーチランク '+rep.rank[1]+'！',
+          stats:[['🀄 けっか',label],['📊 コーチランク',rep.rank[1]],
+            ['⭕ さいてき打',rep.opt+'/'+rep.total],
+            ['💡 つぎの目標',rep.weak]]};
+      },
+      destroy(){},
+    };
+    function drawReport(g,px,py){
+      if(page===0){
+        text(g,'📊 コーチレポート',px,py+6,15,'#3a3f52');
+        g.fillStyle=rep.rank[2];g.font=`bold 58px ${FONT}`;g.textAlign='center';
+        g.fillText(rep.rank[1],px+60,py+70);
+        text(g,rep.score+'てん',px+60,py+104,13,'#7a806f','center');
+        const L=[['さいてき打',rep.opt+'/'+rep.total+'回'],
+          ['最終形',rep.finalSh<0?'和了！':rep.finalSh===0?'テンパイ':rep.finalSh+'シャンテン']];
+        for(const a of rep.adj)L.push([a.label,(a.pts>0?'+':'')+a.pts+'てん']);
+        L.forEach(([k,v],i)=>{text(g,k,px+140,py+40+i*24,12.5,'#555');
+          text(g,v,px+380,py+40+i*24,12.5,'#3a3f52','right');});
+        text(g,'💡 '+rep.weak,px,py+200,12.5,'#7a5a2a');
+        text(g,'直近の成績: '+rep.hist.slice(-5).map(h=>h.r).join(' → '),px,py+224,12,'#999');
+      }else{
+        text(g,'📝 みなおしポイント',px,py+6,15,'#3a3f52');
+        if(!rep.worst.length)text(g,'ミスなし！かんぺき！',px,py+40,14,'#e5a000');
+        rep.worst.forEach((l,i)=>{
+          const y=py+34+i*52;
+          text(g,l.n+'じゅんめ: '+MJ.NAMES[l.cut]+'ぎり → 最適は'+MJ.NAMES[l.best],px,y,13,'#c0392b');
+          text(g,l.bestReason.join(' '),px+8,y+19,11,'#555');
+        });
+      }
+      // ページャ+終了ボタン
+      text(g,(page+1)+'/2',px+185,py+250,12,'#999');
+      [['◀',px+130],['▶',px+220]].forEach(([s,x])=>{
+        rr(g,x,py+236,36,28,8);g.fillStyle='#eee6d6';g.fill();text(g,s,x+18,py+250,13,'#555','center');});
+      rr(g,px+270,py+232,110,36,12);g.fillStyle='#ff8fb8';g.fill();
+      text(g,'おわる',px+325,py+250,14,'#fff','center');
+    }
+    function reportTap(x,y){
+      const px=20,py=180;
+      if(y>=py+228&&y<=py+272){
+        if(x>=px+130&&x<=px+166){page=0;A.tick();return;}
+        if(x>=px+220&&x<=px+256){page=1;A.tick();return;}
+        if(x>=px+270){ctx.finishGame({banner:'コーチランク '+rep.rank[1]+'！'});return;}
+      }
+    }
+  }
+});
+
+/* ---- セルフテスト (?selftest で実行) ---- */
+function runMahjongTests(){
+  let pass=0,fail=0;const log=[];
+  const ck=(name,cond)=>{cond?pass++:fail++;if(!cond)log.push(name);};
+  // シャンテン数: 既知ベクタ
+  for(const[s,want]of[
+    ['123m456p789s11222z',-1],['123m456p789s1122z',0],
+    ['19m19p19s1234567z',0],['19m19p19s12345677z',-1],
+    ['1122334455667m',0],['1112345678999m',0],
+    ['147m258p369s1234z',6],['1199m1199p1199s1z',0]])
+    ck('sh:'+s,MJ.shanten(MJ.parse(s))===want);
+  // 受け入れ: 一貫性 (挙げた牌は必ずシャンテンが進み、他は進まない)
+  {const rng=mulberry32(42);
+   for(let n=0;n<12;n++){
+     const wall=[];for(let t=0;t<34;t++)for(let k=0;k<4;k++)wall.push(t);
+     for(let i=wall.length-1;i>0;i--){const j=Math.floor(rng()*(i+1));[wall[i],wall[j]]=[wall[j],wall[i]];}
+     const h=new Array(34).fill(0);
+     for(let i=0;i<13;i++)h[wall[i]]++;
+     const u=MJ.ukeire(h,null),s0=u.shanten;let good=true;
+     for(let t=0;t<34;t++){
+       if(h[t]>=4)continue;
+       h[t]++;
+       if((MJ.shanten(h)<s0)!==u.tiles.some(x=>x.tile===t))good=false;
+       h[t]--;
+     }
+     ck('ukeire#'+n,good);
+   }}
+  // 役判定 (テーブル駆動)
+  const yk=(hand,opts)=>MJ.judgeYaku(Object.assign({hand:MJ.parse(hand),menzen:true,
+    riichi:false,tsumo:false,seatWind:27,roundWind:27,winTile:-1},opts))
+    .yaku.map(y=>y.name).sort().join(',');
+  ck('yaku:pinfu+tanyao',yk('234567m234p56788s',{winTile:24})===['断幺九','平和'].sort().join(','));
+  ck('yaku:kanchan-no-pinfu',yk('234567m234p56788s',{winTile:23})==='断幺九');
+  ck('yaku:haku',yk('123m456p78999s555z',{winTile:25})==='役牌(白)');
+  ck('yaku:chiitoi',yk('1122m3344p5566s77z',{})==='七対子');
+  ck('yaku:toitoi',yk('111m222p333s44455z',{})==='対々和');
+  ck('yaku:honitsu-winds',yk('123m789m11122233z',{roundWind:27,seatWind:28})
+    ===['場風牌','混一色','自風牌'].sort().join(','));
+  ck('yaku:iipeiko-pinfu',yk('112233m456p789s99s',{winTile:26})===['一盃口','平和'].sort().join(','));
+  ck('yaku:chinitsu',yk('111222333789m99m',{})===['一盃口','清一色'].sort().join(','));
+  // 安全度テーブル (現物>スジ>無スジ、壁)
+  {const S=mjRiverNew(),h=new Array(34).fill(0);
+   mjThreatDiscard(S,12);            // 4p切り → 1p/7pがスジ
+   ck('safe:genbutsu',mjSafety(S,h,12).pts===100);
+   ck('safe:suji19',mjSafety(S,h,9).label==='スジの1・9');
+   ck('safe:suji-not-mid',mjSafety(S,h,13).pts<50); // 5pは中スジ未成立
+   ck('safe:order',mjSafety(S,h,12).pts>mjSafety(S,h,9).pts&&
+     mjSafety(S,h,9).pts>mjSafety(S,h,4).pts);      // 現物>スジ>無スジ中央
+   for(let k=0;k<4;k++)mjSee(S,2);   // 3m4枚見え → 1m壁(ノーチャンス)
+   ck('safe:kabe',mjSafety(S,h,0).label==='壁(ノーチャンス)');
+   for(let k=0;k<3;k++)mjSee(S,27);  // 東3枚見え
+   ck('safe:honor3',mjSafety(S,h,27).pts===90);}
+  // 押し引きテーブル: 脅威で安全重み増、シャンテン深いほど降り
+  ck('push:no-threat',mjPushW(1,false,5).eff===1);
+  ck('push:threat-deep',mjPushW(2,true,5).safe>mjPushW(0,true,5).safe);
+  // 分析: 聴牌を保つ打牌が最上位に来る
+  {const h=MJ.parse('1112345678999m1z');
+   const an=mjAnalyze(h,mjRiverNew(),{threat:false,turn:5,seatWind:27,roundWind:27});
+   ck('analyze:best-keeps-tenpai',an.cands[0].tile===27&&an.cands[0].sh===0);
+   ck('analyze:judge-perfect',mjJudgeKind(an.cands[0],an)==='perfect');
+   ck('analyze:reason-text',mjReason(an.cands[0],an,false)[0].indexOf('受け入れ')>=0);}
+  // 回帰: 脅威なしでは最上位候補が必ずシャンテン最小を保つ (受け入れ枚数は帯内比較)
+  {const rng=mulberry32(9);let good=true;
+   for(let n=0;n<10;n++){
+     const R=mjRoundNew(rng);
+     R.my[R.wall.pop()]++; // 14枚目
+     const an=mjAnalyze(R.my,R.S,{threat:false,turn:3,seatWind:27,roundWind:27});
+     if(an.cands[0].sh!==an.shMin)good=false;
+   }
+   ck('analyze:top-is-min-shanten',good);}
+  // 採点ランク境界
+  ck('rank:SS',mjRankFor(95)[1]==='SS');
+  ck('rank:C',mjRankFor(10)[1]==='C');
+  // 局を通しでヘッドレス実行 (両者CPUポリシー) → 必ず終局しレポートが出る
+  for(const seed of[7,99,2024]){
+    const R=mjRoundNew(mulberry32(seed));
+    let guard=0;
+    while(!R.end&&guard++<60){
+      if(R.wall.length<=14){R.end='ryuukyoku';break;}
+      mjDrawSelf(R);
+      if(R.end)break;
+      const an=mjAnalyze(R.my,R.S,{threat:!!R.cpRiichi,turn:R.turn,seatWind:27,roundWind:27});
+      const top=an.cands[0];
+      R.log.push({n:R.turn,cut:top.tile,kind:mjJudgeKind(top,an),auto:false,
+        tscore:mjTurnScore(top,an),best:top.tile,threat:!!R.cpRiichi,
+        couldRiichi:an.cands.some(c=>c.sh===0),riichied:!!R.myRiichi,
+        myReason:[],bestReason:mjReason(top,an,!!R.cpRiichi)});
+      if(!R.myRiichi&&top.sh===0)R.myRiichi=R.turn;
+      if(mjPlayerDiscard(R,top.tile))break;
+      mjCpuTurn(R);
+      R.turn++;
+    }
+    ck('round-ends#'+seed,!!R.end);
+    const rep=mjReport(R);
+    ck('round-rank#'+seed,['SS','S','A','B','C'].indexOf(rep.rank[1])>=0);
+    ck('round-score#'+seed,rep.score>=0&&rep.score<=100);
+  }
+  console.log('[mahjong tests] pass='+pass+' / fail='+fail,log.length?log:'');
+  return {pass,fail,log};
+}
+if(/[?&]selftest/.test(location.search)){runMahjongTests();}
+
 /* ============================================================
    ゲームF: チキンレース ～崖っぷちの勇気～ (versus / 対CPU・スコア無し)
    ------------------------------------------------------------
