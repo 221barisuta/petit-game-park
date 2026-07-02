@@ -745,7 +745,7 @@ function registerGame(def){GAMES.push(def)}
 // メニュー分類: versus=たいせん / それ以外=ひとり (新規ゲームも type で自動振り分け)
 const soloGames=()=>GAMES.filter(g=>g.type!=='versus');
 // たいせんの表示順 (#7 まるばつ→オセロ→五目→チキン。方針: マス目が多いほど下)。未定義idは末尾。
-const VS_ORDER=['ox','othello','gomoku','chicken'];
+const VS_ORDER=['ox','othello','gomoku','chicken','daifugo'];
 const vsOrder=id=>{const i=VS_ORDER.indexOf(id);return i<0?99:i;};
 const versusGames=()=>GAMES.filter(g=>g.type==='versus').sort((a,b)=>vsOrder(a.id)-vsOrder(b.id));
 // デイリー抽選は「ひとり(非versus)」プールのみから選ぶ (versusはスコア競争にならないため除外)
@@ -1458,7 +1458,7 @@ function boot(){
   setupOnlineUI();
   // ?room=CODE[&g=<gameId>] で開いたら該当ゲームのオンライン対戦へ自動参加 (g省略=五目・従来互換)
   {const sp=new URLSearchParams(location.search),rp=sp.get('room'),gid=(sp.get('g')||'gomoku').toLowerCase();
-   const net=gid==='othello'?OthelloNet:GomokuNet; // 部屋のparty空間を持つnetで可用性判定
+   const net=gid==='othello'?OthelloNet:gid==='daifugo'?DaifugoNet:GomokuNet; // 部屋のparty空間を持つnetで可用性判定
    if(rp&&net.available()){const def=GAMES.find(g=>g.id===gid)||GAMES.find(g=>g.id==='gomoku');
      if(def){pendingOnlineRoom=rp.toUpperCase();openGame(def,{});}}}
   window.__PGP={
@@ -2766,7 +2766,8 @@ function makeOnlineNet(opts){
     ws.onmessage=ev=>{let m;try{m=JSON.parse(ev.data);}catch{return;}
       if(m.type==='assigned'){state.seat=m.seat;if(m.token)store.set(seatKey(code),m.token);emit();}
       else if(m.type==='state'){state.game=m;
-        state.status=m.result?'ended':((m.seats.black&&m.seats.white)?'playing':'waiting');emit();}
+        // status はサーバー明示(m.status: 大富豪等の多人数ゲーム)を優先。無ければ2人対戦の従来判定
+        state.status=m.status||(m.result?'ended':((m.seats&&m.seats.black&&m.seats.white)?'playing':'waiting'));emit();}
       else if(m.type==='error'){state.error=m.msg||'';emit();}
       else if(m.type==='toast'){state.toastSeq++;state.toastMsg=m.msg||'';emit();} // 相手の待った通知など
       else if(m.type==='kicked'){state._kicked=true;state._left=true;disconnect();state.status='idle';state.code='';state.seat=null;state.game=null;emit();} // 着席者に退出させられた
@@ -2780,6 +2781,7 @@ function makeOnlineNet(opts){
   function leave(){state._left=true;disconnect();state.status='idle';state.code='';state.seat=null;state.game=null;emit();}
   const send=o=>{if(state.ws&&state.ws.readyState===1)state.ws.send(JSON.stringify(o));};
   return {state,available,host,getName,setName,randName,genCode,connect,disconnect,leave,seatKey,gameLabel,gameId,
+    raw:o=>send(o), // 汎用送信 (大富豪等、ゲーム固有メッセージ用)
     move:i=>send({type:'move',index:i}),
     undo:()=>send({type:'undo'}),
     rename:n=>{setName(n);send({type:'rename',name:getName()});},
@@ -2791,6 +2793,7 @@ function makeOnlineNet(opts){
 }
 const GomokuNet=makeOnlineNet({party:'main',seatPrefix:'pgp2_gomoku_seat_',gameLabel:'五目並べ',gameId:'gomoku'});
 const OthelloNet=makeOnlineNet({party:'othello',seatPrefix:'pgp2_othello_seat_',gameLabel:'オセロ',gameId:'othello'});
+const DaifugoNet=makeOnlineNet({party:'daifugo',seatPrefix:'pgp2_daifugo_seat_',gameLabel:'大富豪',gameId:'daifugo'});
 let activeNet=GomokuNet; // オンライン画面に入ったゲームの net を指す (renderOnlineBar/setupOnlineUI 共用)
 let pendingOnlineRoom=''; // ?room=CODE 自動参加用 (boot→gomoku create で消費)
 function roomLink(code,gameId){
@@ -2807,9 +2810,10 @@ function lineInvite(code){ // #6 LINEで しょうたい (お誘い文+部屋リ
   const text='「'+(activeNet.gameLabel||'ゲーム')+'」いっしょにやろ！ '+roomLink(code);
   window.open('https://line.me/R/msg/text/?'+encodeURIComponent(text),'_blank');
 }
-/* オンライン情報バー(DOM)を現在のサーバー状態で更新 (activeNet=五目/オセロ 共用) */
+/* オンライン情報バー(DOM)を現在のサーバー状態で更新 (activeNet=五目/オセロ 共用。大富豪は専用描画へ) */
 function renderOnlineBar(){
   const s=activeNet.state;if(s.status==='idle')return;
+  if(activeNet.gameId==='daifugo'){renderDaifugoBar(s);return;} // 多人数stateは2人対戦バーと形が違う
   const g=s.game,me=s.seat;
   $('olRoomCode').textContent=s.code||'—';
   const setSeat=(el,mark,sym)=>{const o=g&&g.seats[mark];
@@ -2868,10 +2872,13 @@ function renderOnlineBar(){
     seriesBtn.classList.remove('hidden');
   }else{seriesBtn.classList.add('hidden');seriesList.classList.add('hidden');}
 }
+/* 大富豪は canvas 側が 部屋コード/メンバー/状態 を全て描画するため、共有DOMバーは隠す
+   (2人対戦用の座席バーとレイアウトが噛み合わず重なるのを防ぐ) */
+function renderDaifugoBar(){ $('onlineBar').classList.add('hidden'); }
 function hideOnlineUI(){$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');}
 /* boot から1回だけ呼ぶ: オンライン入室UIのDOMハンドラを束ねる (activeNet=五目/オセロ 共用) */
 function setupOnlineUI(){
-  GomokuNet.state.onChange=renderOnlineBar;OthelloNet.state.onChange=renderOnlineBar; // 両netの変化を同じバーへ
+  GomokuNet.state.onChange=renderOnlineBar;OthelloNet.state.onChange=renderOnlineBar;DaifugoNet.state.onChange=renderOnlineBar; // 各netの変化を同じバーへ
   const commitName=()=>{activeNet.setName($('olName').value);$('olName').value=activeNet.getName();};
   const start=code=>{commitName();activeNet.connect(code);setRoomUrl(code);
     $('onlineSetup').classList.add('hidden');$('onlineBar').classList.remove('hidden');renderOnlineBar();};
@@ -4284,6 +4291,791 @@ if(typeof window!=='undefined'){
   window.evalOthelloMove=evalOthelloMove;
   if(/[?&]selftest/.test(location.search)){runOthelloTests();runOthelloHintTests();runOthelloCpuTests();}
 }
+
+/* ============================================================
+   ゲームH: 大富豪 (versus / 3〜6人 CPU対戦・オンライン対戦)
+   ------------------------------------------------------------
+   優先度S: ルールは RULE_DEFS + rules 設定オブジェクトで一元管理し、
+   localStorage(pgp2_daifugo_rules) へ永続化(起動時復元・変更で即上書き)。
+   役判定/強弱/合法手/進行は下の DAIFUGO-CORE の純関数群(rulesを引数に取る)。
+   オンラインはサーバー権威 (手札は自分の分のみ受信=チート防止)。
+   ============================================================ */
+/* DAIFUGO-CORE-BEGIN (party/daifugo-core.js と verbatim 一致・exportを外しただけ。正本=この index.html) */
+/* 大富豪 共有コアロジック (クライアント=index.html / サーバー=party/daifugo-server.js で一致させる)
+   ──────────────────────────────────────────────────────────
+   設計方針(優先度S):
+   - ルールは RULE_DEFS(定義テーブル)+rules(設定オブジェクト)で一元管理。
+     ロジックは rules を引数に取る純関数で、個別ルールの if-else を各所に散在させない。
+   - 特殊効果(8切り/革命/11バック/5飛び/9リバース)は EFFECT_DEFS の
+     宣言的パイプラインで適用する (ルール追加=テーブルに1行追加)。
+   - 強弱比較は strengthOf() 1箇所のみ。革命/11バックは inverted フラグ(XOR)で反転。
+   - index.html を正本とし、本ファイルへ verbatim でコピーする。
+     一致は party/daifugo-parity.test.mjs が機械的に検証する。
+
+   カード表現: {id:number, r:number, s:number}
+     r: 3..10, 11=J, 12=Q, 13=K, 14=A, 15=2, 99=ジョーカー
+     s: 0=♠ 1=♥ 2=♦ 3=♣, ジョーカーは -1
+   役(analyzeHand の戻り): {type:'single'|'set'|'stairs', n, rank, suits, jokers, ranks}
+     rank=比較用の代表ランク(階段は最上位) / ranks=実カードのランク(効果判定用。ジョーカー除く)
+     suits=非ジョーカーのスート配列(縛り判定用) */
+
+// ── ルール定義テーブル (設定UI・正規化・デフォルトの単一ソース) ──
+const RULE_DEFS = [
+  { key: 'revolution',   label: 'かくめい',       type: 'bool',   def: true },
+  { key: 'eightCut',     label: '8ぎり',          type: 'bool',   def: true },
+  { key: 'shibari',      label: 'しばり',         type: 'bool',   def: true },
+  { key: 'stairs',       label: 'かいだん',       type: 'bool',   def: false },
+  { key: 'spade3Return', label: 'スペ3がえし',    type: 'bool',   def: false },
+  { key: 'elevenBack',   label: '11バック',       type: 'bool',   def: false },
+  { key: 'fiveSkip',     label: '5とび',          type: 'bool',   def: false },
+  { key: 'reverse',      label: '9リバース',      type: 'bool',   def: false },
+  { key: 'cardExchange', label: 'カードこうかん', type: 'bool',   def: true },
+  { key: 'fillWithCPU',  label: 'あきせきCPU',    type: 'bool',   def: true },
+  { key: 'jokerCount',   label: 'ジョーカー',     type: 'select', opts: [0, 1, 2], def: 1 },
+  { key: 'deckCount',    label: 'トランプ',       type: 'select', opts: [1, 2], def: 1 },
+  { key: 'playerCount',  label: 'プレイ人数',     type: 'select', opts: [3, 4, 5, 6], def: 5 },
+];
+function defaultRules() {
+  const o = {};
+  for (const d of RULE_DEFS) o[d.key] = d.def;
+  return o;
+}
+// 保存データ/受信データを検証付きで正規化 (不正値はデフォルトへ)。副作用なし
+function normalizeRules(src) {
+  const o = defaultRules();
+  if (!src || typeof src !== 'object') return o;
+  for (const d of RULE_DEFS) {
+    const v = src[d.key];
+    if (v === undefined) continue;
+    if (d.type === 'bool') o[d.key] = !!v;
+    else if (d.type === 'select' && d.opts.includes(v)) o[d.key] = v;
+  }
+  return o;
+}
+
+// ── 山札 ─────────────────────────────────────────────────
+function makeDeck(rules) {
+  const deck = []; let id = 0;
+  for (let dk = 0; dk < rules.deckCount; dk++)
+    for (let s = 0; s < 4; s++)
+      for (let r = 3; r <= 15; r++) deck.push({ id: id++, r, s });
+  for (let j = 0; j < rules.jokerCount * rules.deckCount; j++) deck.push({ id: id++, r: 99, s: -1 });
+  return deck;
+}
+// Fisher-Yates。rand は 0<=x<1 の注入可能な乱数 (テスト決定化用)
+function shuffle(arr, rand) {
+  const a = arr.slice(); rand = rand || Math.random;
+  for (let i = a.length - 1; i > 0; i--) { const k = Math.floor(rand() * (i + 1)); const t = a[i]; a[i] = a[k]; a[k] = t; }
+  return a;
+}
+function dealHands(deck, n) {
+  const hands = Array.from({ length: n }, () => []);
+  deck.forEach((c, i) => hands[i % n].push(c));
+  return hands;
+}
+
+// ── 強弱 (唯一の比較点) ──────────────────────────────────
+// inverted = 革命 XOR 11バック。ジョーカーは常に最強 (スペ3返しは canFollow の特例)
+function strengthOf(r, inverted) {
+  if (r === 99) return 99;
+  return inverted ? 18 - r : r; // 3..15 ⇔ 15..3
+}
+function isInverted(st) { return !!st.revolution !== !!st.elevenBack; }
+// 手札の表示順ソート (弱→強)。同ランクはスート順
+function sortHand(cards, inverted) {
+  return cards.slice().sort((a, b) =>
+    strengthOf(a.r, inverted) - strengthOf(b.r, inverted) || a.s - b.s || a.id - b.id);
+}
+
+// ── 役判定 (純関数) ──────────────────────────────────────
+function analyzeHand(cards, rules) {
+  if (!Array.isArray(cards) || !cards.length) return null;
+  const n = cards.length;
+  const jokers = cards.filter(c => c.r === 99);
+  const normals = cards.filter(c => c.r !== 99).slice().sort((a, b) => a.r - b.r);
+  const ranks = normals.map(c => c.r), suits = normals.map(c => c.s);
+  if (n === 1) {
+    const c = cards[0];
+    return { type: 'single', n: 1, rank: c.r, suits: c.r === 99 ? [] : [c.s], jokers: jokers.length, ranks };
+  }
+  // セット: 同ランク複数 (ジョーカーはワイルド補充。全ジョーカーは rank=99)
+  if (normals.every(c => c.r === normals[0].r)) {
+    const rank = normals.length ? normals[0].r : 99;
+    return { type: 'set', n, rank, suits, jokers: jokers.length, ranks };
+  }
+  // 階段: 同スート連番 n>=3 (ジョーカーが隙間を埋める。余りは上へ延長、上限15を超えたら下へ)
+  if (rules.stairs && n >= 3 && normals.length && suits.every(s => s === suits[0])) {
+    const uq = [...new Set(ranks)];
+    if (uq.length !== ranks.length) return null;             // 同ランク重複は階段不可
+    const min = uq[0], max = uq[uq.length - 1];
+    const gaps = (max - min + 1) - uq.length;
+    if (gaps > jokers.length) return null;
+    let extra = jokers.length - gaps;
+    const up = Math.min(extra, 15 - max), top = max + up, bottom = min - (extra - up);
+    if (bottom < 3) return null;
+    return { type: 'stairs', n, rank: top, suits: [suits[0]], jokers: jokers.length, ranks };
+  }
+  return null;
+}
+
+// ── 特殊効果パイプライン (宣言的テーブル。ルール追加はここに1行) ──
+// when(hand) が真なら apply(fx,hand)。rules[rule] が OFF なら評価しない
+const EFFECT_DEFS = [
+  { rule: 'eightCut',   when: h => h.ranks.includes(8),  apply: fx => { fx.flow = true; } },
+  { rule: 'revolution', when: h => h.type === 'set' && h.n >= 4, apply: fx => { fx.revolution = true; } },
+  { rule: 'elevenBack', when: h => h.ranks.includes(11), apply: fx => { fx.elevenBack = true; } },
+  { rule: 'fiveSkip',   when: h => h.ranks.includes(5),  apply: (fx, h) => { fx.skip += h.ranks.filter(r => r === 5).length; } },
+  { rule: 'reverse',    when: h => h.ranks.includes(9),  apply: fx => { fx.reverse = true; } },
+];
+// 着手の発動効果を返す (盤面は変更しない純関数)
+// flow=場流れ / revolution=革命トグル / elevenBack=場が流れるまで逆転 / skip=n人飛ばし / reverse=場が流れるまで逆回り
+function playEffects(hand, rules) {
+  const fx = { flow: false, revolution: false, elevenBack: false, skip: 0, reverse: false };
+  for (const d of EFFECT_DEFS) if (rules[d.rule] && d.when(hand)) d.apply(fx, hand);
+  return fx;
+}
+
+// ── 追従判定 (純関数) ─────────────────────────────────────
+// top=場の役(null=場が空) / next=出す役 / ctx={inverted,lock}
+function canFollow(top, next, ctx, rules) {
+  if (!next) return false;
+  if (!suitsOkForLock(next, ctx.lock)) return false;
+  if (!top) return true; // 場が空なら任意の役
+  // スペ3返し: 単騎ジョーカーに ♠3 単騎で勝てる (強弱の特例)
+  if (rules.spade3Return && top.type === 'single' && top.rank === 99
+    && next.type === 'single' && next.rank === 3 && next.suits[0] === 0) return true;
+  if (top.type !== next.type || top.n !== next.n) return false;
+  return strengthOf(next.rank, ctx.inverted) > strengthOf(top.rank, ctx.inverted);
+}
+// 縛り: lock(スート多重集合)へ非ジョーカーのスートが全て収まるか (ジョーカーはワイルド)
+function suitsOkForLock(hand, lock) {
+  if (!lock) return true;
+  const need = lock.slice();
+  for (const s of hand.suits) { const i = need.indexOf(s); if (i < 0) return false; need.splice(i, 1); }
+  return true;
+}
+// 縛りの成立/維持: 直前役と同スート構成が連続したら lock 成立。成立後は場が流れるまで維持
+function nextLock(prevTop, played, lock, rules) {
+  if (!rules.shibari) return null;
+  if (lock) return lock;
+  if (!prevTop) return null;
+  const a = prevTop.suits.slice().sort(), b = played.suits.slice().sort();
+  if (a.length && a.length === b.length && a.every((v, i) => v === b[i])) return b;
+  return null;
+}
+
+// ── 合法手生成 (CPU/アシスト/サーバー検証用。純関数) ─────
+function legalMoves(hand, top, ctx, rules) {
+  const cand = [];
+  const jokers = hand.filter(c => c.r === 99);
+  const byRank = new Map();
+  for (const c of hand) if (c.r !== 99) { if (!byRank.has(c.r)) byRank.set(c.r, []); byRank.get(c.r).push(c); }
+  for (const c of hand) cand.push([c]); // シングル
+  // セット: 自然札prefix+ジョーカー補充 (スート組合せの全列挙はしない=CPU用途に十分)
+  for (const cs of byRank.values())
+    for (let k = 2; k <= cs.length + jokers.length; k++) {
+      const take = Math.min(k, cs.length), need = k - take;
+      if (need > jokers.length) continue;
+      cand.push([...cs.slice(0, take), ...jokers.slice(0, need)]);
+    }
+  if (jokers.length >= 2) cand.push(jokers.slice(0, 2)); // ジョーカーペア
+  // 階段: スートごとの窓走査+ジョーカー補充
+  if (rules.stairs) {
+    const bySuit = new Map();
+    for (const c of hand) if (c.r !== 99) { if (!bySuit.has(c.s)) bySuit.set(c.s, []); bySuit.get(c.s).push(c); }
+    for (const cs0 of bySuit.values()) {
+      const cs = [...new Map(cs0.map(c => [c.r, c])).values()].sort((a, b) => a.r - b.r);
+      for (let i = 0; i < cs.length; i++) for (let j = i; j < cs.length; j++) {
+        const seg = cs.slice(i, j + 1);
+        const span = seg[seg.length - 1].r - seg[0].r + 1, need = span - seg.length;
+        if (need > jokers.length) continue;
+        for (let extra = 0; need + extra <= jokers.length; extra++) {
+          if (span + extra < 3) continue;
+          cand.push([...seg, ...jokers.slice(0, need + extra)]);
+        }
+      }
+    }
+  }
+  const seen = new Set(), out = [];
+  for (const mv of cand) {
+    const key = mv.map(c => c.id).sort((x, y) => x - y).join(',');
+    if (seen.has(key)) continue; seen.add(key);
+    const a = analyzeHand(mv, rules);
+    if (a && canFollow(top, a, ctx, rules)) out.push({ cards: mv, hand: a });
+  }
+  return out;
+}
+
+// ── CPU (ルールベース簡易戦略) ────────────────────────────
+// 弱い手から出す / ジョーカーは温存 / 場が空なら多枚数の弱い役で手札を減らす。手なし/温存判断は null(=パス)
+function cpuChoose(hand, top, ctx, rules) {
+  const ms = legalMoves(hand, top, ctx, rules);
+  if (!ms.length) return null;
+  ms.sort((A, B) =>
+    A.hand.jokers - B.hand.jokers
+    || strengthOf(A.hand.rank, ctx.inverted) - strengthOf(B.hand.rank, ctx.inverted)
+    || B.hand.n - A.hand.n);
+  const best = ms[0];
+  if (top && best.hand.jokers > 0 && hand.length > 4) return null; // ジョーカー温存パス
+  return best;
+}
+
+// ── 称号 (上がり順→大富豪..大貧民) ───────────────────────
+function titlesFor(n) {
+  const t = {
+    3: ['大富豪', '平民', '大貧民'],
+    4: ['大富豪', '富豪', '貧民', '大貧民'],
+    5: ['大富豪', '富豪', '平民', '貧民', '大貧民'],
+    6: ['大富豪', '富豪', '平民', '平民', '貧民', '大貧民'],
+  };
+  return t[n] || t[5];
+}
+// カード交換の枚数ペア: [[与える側(上位), 受ける側(下位), 枚数], ...]
+function exchangePairs(n) {
+  return n >= 4 ? [[0, n - 1, 2], [1, n - 2, 1]] : [[0, n - 1, 2]];
+}
+
+/* ── ラウンド進行エンジン (サーバー権威/ローカルCPU対戦で共用する純関数群) ──
+   g(ラウンド状態) = {
+     n, hands:[[card]..], field:{top,cards,owner,lock}, st:{revolution,elevenBack,reverse},
+     turn, passes(連続パス数), passed:[bool](表示用), finished:[seat..], ended
+   }
+   パスは「一時パス」方式: 誰かが着手すると解除。連続パスが(親以外の)全生存者に達したら場流れ。
+   9リバース/11バックは場が流れるまで。革命は永続(再革命で戻る)。 */
+function newRound(rules, deck, leader) {
+  const n = rules.playerCount;
+  const hands = dealHands(deck, n).map(h => sortHand(h, false));
+  let turn = leader;
+  if (turn == null || turn < 0 || turn >= n) { // 初回は ♦3 保持者が親 (いなければ席0)
+    turn = 0;
+    for (let i = 0; i < n; i++) if (hands[i].some(c => c.r === 3 && c.s === 2)) { turn = i; break; }
+  }
+  return {
+    n, hands,
+    field: { top: null, cards: [], owner: null, lock: null },
+    st: { revolution: false, elevenBack: false, reverse: false },
+    turn, passes: 0, passed: Array(n).fill(false), finished: [], ended: false,
+  };
+}
+function ctxOf(g) { return { inverted: isInverted(g.st), lock: g.field.lock }; }
+function aliveList(g) { const a = []; for (let i = 0; i < g.n; i++) if (!g.finished.includes(i)) a.push(i); return a; }
+// from から steps 人ぶん、生存席だけを回して進める (dir は 9リバース反映)
+function nextAliveSeat(g, from, steps) {
+  const dir = g.st.reverse ? -1 : 1;
+  let i = from, guard = 0;
+  while (steps > 0 && guard++ < 200) {
+    i = (i + dir + g.n) % g.n;
+    if (!g.finished.includes(i)) steps--;
+  }
+  return i;
+}
+function flowField(g) {
+  g.field = { top: null, cards: [], owner: null, lock: null };
+  g.st.elevenBack = false; g.st.reverse = false;   // 場が流れるまでの効果を解除
+  g.passes = 0; g.passed = g.passed.map(() => false);
+}
+// 着手(cards)/パス(cards=null)を適用。戻り {ok, error?, fx?, flowed, finishedSeat?, ended}
+function applyAction(g, seat, cards, rules) {
+  if (g.ended) return { ok: false, error: 'すでに しゅうりょう しています' };
+  if (seat !== g.turn) return { ok: false, error: 'あなたの ばんでは ありません' };
+  // ── パス ──
+  if (!cards || !cards.length) {
+    if (!g.field.top) return { ok: false, error: 'おやは パスできません' };
+    g.passes++; g.passed[seat] = true;
+    const ownerAlive = g.field.owner != null && !g.finished.includes(g.field.owner);
+    const threshold = aliveList(g).length - (ownerAlive ? 1 : 0);
+    if (g.passes >= threshold) { // 親以外の全生存者がパス → 場流れ。親(上がり済なら次の生存者)が親に
+      const leader = ownerAlive ? g.field.owner : nextAliveSeat(g, g.field.owner, 1);
+      flowField(g); g.turn = leader;
+      return { ok: true, fx: null, flowed: true, ended: false };
+    }
+    g.turn = nextAliveSeat(g, seat, 1);
+    return { ok: true, fx: null, flowed: false, ended: false };
+  }
+  // ── 着手 (権威検証: 手札に実在 / 役成立 / 追従可能) ──
+  const hand = g.hands[seat];
+  if (!cards.every(c => hand.some(h => h.id === c.id))) return { ok: false, error: 'てふだに ない カードです' };
+  const a = analyzeHand(cards, rules);
+  if (!a) return { ok: false, error: 'その くみあわせは だせません' };
+  if (!canFollow(g.field.top, a, ctxOf(g), rules)) return { ok: false, error: 'その てでは かてません' };
+  g.hands[seat] = hand.filter(h => !cards.some(c => c.id === h.id));
+  const fx = playEffects(a, rules);
+  g.field = { top: a, cards: cards.slice(), owner: seat, lock: nextLock(g.field.top, a, g.field.lock, rules) };
+  if (fx.revolution) g.st.revolution = !g.st.revolution;
+  if (fx.elevenBack) g.st.elevenBack = true;
+  if (fx.reverse) g.st.reverse = !g.st.reverse;
+  g.passes = 0; g.passed = g.passed.map(() => false); // 着手でパスは解除(一時パス方式)
+  // ── 上がり判定 ──
+  let finishedSeat;
+  if (!g.hands[seat].length) {
+    g.finished.push(seat); finishedSeat = seat;
+    if (g.finished.length >= g.n - 1) { // 残り1人 → 終局。最後の1人を末尾に
+      for (let i = 0; i < g.n; i++) if (!g.finished.includes(i)) g.finished.push(i);
+      g.ended = true;
+      return { ok: true, fx, flowed: false, finishedSeat, ended: true };
+    }
+  }
+  // ── 手番送り: 8切り=流して同じ人が親 / 5飛びは生存席を余分に進める ──
+  if (fx.flow) {
+    flowField(g);
+    g.turn = g.finished.includes(seat) ? nextAliveSeat(g, seat, 1) : seat;
+    return { ok: true, fx, flowed: true, finishedSeat, ended: false };
+  }
+  g.turn = nextAliveSeat(g, seat, 1 + fx.skip);
+  return { ok: true, fx, flowed: false, finishedSeat, ended: false };
+}
+// CPUの1手 (cpuChoose→applyAction)。戻りは applyAction と同じ
+function cpuAct(g, rules) {
+  const mv = cpuChoose(g.hands[g.turn], g.field.top, ctxOf(g), rules);
+  return applyAction(g, g.turn, mv ? mv.cards : null, rules);
+}
+// カード交換 (2局目以降・自動): 下位は最強k枚を上位へ、上位は最弱k枚を下位へ。prevOrder=前局のfinished
+function applyExchange(g, prevOrder, rules) {
+  if (!rules.cardExchange || !prevOrder || prevOrder.length !== g.n) return [];
+  const moves = [];
+  for (const [hi, lo, k] of exchangePairs(g.n)) {
+    const rich = prevOrder[hi], poor = prevOrder[lo];
+    if (rich == null || poor == null || rich === poor) continue;
+    const give = sortHand(g.hands[poor], false).slice(-k);          // 下位→最強k枚
+    const back = sortHand(g.hands[rich], false).slice(0, k);        // 上位→最弱k枚 (簡易自動)
+    g.hands[poor] = g.hands[poor].filter(c => !give.includes(c)).concat(back);
+    g.hands[rich] = g.hands[rich].filter(c => !back.includes(c)).concat(give);
+    moves.push({ rich, poor, k });
+  }
+  for (let i = 0; i < g.n; i++) g.hands[i] = sortHand(g.hands[i], false);
+  return moves;
+}
+/* DAIFUGO-CORE-END */
+registerGame({
+  id:'daifugo', emoji:'🃏', title:'だいふごう',
+  desc:'3〜6人の 大富豪 (CPU/オンライン)',
+  color:'#8e6cc0', type:'versus',   // duration は付けない (タイマー無し)
+  howto:[
+    ['👆','カードを えらんで「だす」！'],
+    ['🏆','てふだを はやく なくした 人から 大富豪'],
+    ['⚙','ローカルルールは じゆうに カスタマイズ'],
+  ],
+  create(ctx){
+    const A=ctx.audio;
+    /* ── S2: ルール設定の永続化 ──
+       localStorage(pgp2_daifugo_rules) に JSON 保存。起動時に復元(なければデフォルト)、変更で即時上書き。
+       ロジックは rules を引数に取る DAIFUGO-CORE の純関数のみ参照 (UI側にルールの if-else を置かない) */
+    const RULES_KEY='pgp2_daifugo_rules';
+    function loadRules(){let o=null;try{o=JSON.parse(store.get(RULES_KEY,'')||'null');}catch(e){}return normalizeRules(o);}
+    let rules=loadRules();
+    const prevSnapshot=JSON.stringify(rules);       // 「前回の設定を使う」= ゲーム起動時点の保存値へ戻す
+    const saveRules=()=>store.set(RULES_KEY,JSON.stringify(rules));
+
+    // ── 画面状態 ──
+    let screen='setup';   // 'setup' | 'play'(ローカルCPU対戦) | 'online'
+    let L=null;           // ローカルのラウンド状態 (newRound)
+    let sel=new Set();    // 選択中カードid (ローカル/オンライン共用)
+    let cpuTimer=0,t=0,gameNo=1,lastRanks=null;
+    let olRuleEdit=false; // オンラインロビーでホストがルール編集中
+    let onlineToastSeq=DaifugoNet.state.toastSeq,olErr='';
+    const NAMES=['あなた','CPU 1','CPU 2','CPU 3','CPU 4','CPU 5'];
+
+    // ── カード描画 ──
+    const SUITS=['♠','♥','♦','♣'];
+    const RANKL={11:'J',12:'Q',13:'K',14:'A',15:'2'};
+    const rankLabel=r=>RANKL[r]||String(r);
+    const suitRed=s=>s===1||s===2;
+    function drawCard(g,c,x,y,w,h,seld){
+      g.save();
+      g.fillStyle='#fdfaf2';rr(g,x,y,w,h,Math.min(8,w*0.16));g.fill();
+      g.lineWidth=seld?3:1.5;g.strokeStyle=seld?'#21e6c1':'#9a917c';rr(g,x,y,w,h,Math.min(8,w*0.16));g.stroke();
+      if(c.r===99){
+        g.font='800 '+Math.floor(w*0.52)+'px '+FONT;g.textAlign='center';g.textBaseline='middle';
+        g.fillText('🃏',x+w/2,y+h*0.42);
+        g.fillStyle='#8e6cc0';g.font='800 '+Math.max(9,Math.floor(w*0.18))+'px '+FONT;
+        g.fillText('JOKER',x+w/2,y+h-10);
+      }else{
+        const col=suitRed(c.s)?'#d8375a':'#26243c';
+        g.fillStyle=col;g.textAlign='left';g.textBaseline='top';
+        g.font='800 '+Math.floor(w*0.38)+'px '+FONT;g.fillText(rankLabel(c.r),x+5,y+3);
+        g.font='800 '+Math.floor(w*0.30)+'px '+FONT;g.fillText(SUITS[c.s],x+5,y+4+w*0.38);
+        g.font='800 '+Math.floor(w*0.50)+'px '+FONT;g.textAlign='center';g.textBaseline='middle';
+        g.fillText(SUITS[c.s],x+w/2,y+h*0.66);
+      }
+      g.restore();
+    }
+    // ── ボタン ──
+    const btnPass={x:36,y:664,w:160,h:52},btnPlay={x:224,y:664,w:160,h:52},btnCorner={x:8,y:120,w:48,h:32};
+    const hitBtn=(b,x,y)=>x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h;
+    function drawBtn(g,b,label,col,disabled,size){
+      g.save();g.fillStyle=disabled?'#6b6480':col;rr(g,b.x,b.y,b.w,b.h,12);g.fill();
+      if(!disabled){g.fillStyle='rgba(255,255,255,.22)';rr(g,b.x+6,b.y+4,b.w-12,7,4);g.fill();}
+      g.restore();
+      outlinedText(g,label,b.x+b.w/2,b.y+b.h/2+1,size||17,'#fff','rgba(0,0,0,.4)',4,disabled?0.55:1);
+    }
+
+    /* ── S3: 設定画面 (RULE_DEFS からデータ駆動で行を生成。ルール追加=テーブルに1行) ── */
+    const fmtSel={jokerCount:v=>v+'まい',deckCount:v=>v+'くみ',playerCount:v=>v+'にん'};
+    function ruleRows(rsrc,y0){ // rsrc=表示元rules (ローカル設定/オンラインロビー編集で共用)
+      const rows=[];const bools=RULE_DEFS.filter(d=>d.type==='bool'),sels=RULE_DEFS.filter(d=>d.type==='select');
+      bools.forEach((d,i)=>{const cx=i%2,cy=Math.floor(i/2);
+        rows.push({x:22+cx*192,y:y0+cy*46,w:184,h:40,kind:'bool',key:d.key,label:d.label,active:!!rsrc[d.key]});});
+      let y=y0+Math.ceil(bools.length/2)*46+4;
+      for(const d of sels){rows.push({x:22,y,w:376,h:40,kind:'select',key:d.key,label:d.label,opts:d.opts,val:rsrc[d.key]});y+=46;}
+      rows._endY=y;return rows;
+    }
+    const cycleOpt=(d,cur)=>d.opts[(d.opts.indexOf(cur)+1)%d.opts.length];
+    function drawRuleRows(g,rows){
+      for(const b of rows){
+        if(b.kind==='bool')drawBtn(g,b,b.label+'：'+(b.active?'ON':'OFF'),b.active?'#39c06a':'#4a4170',false,14);
+        else drawBtn(g,b,b.label+'： '+fmtSel[b.key](b.val)+' ▸','#4d6cae',false,15);
+      }
+    }
+    function setupBtns(){
+      const rows=ruleRows(rules,124);let y=rows._endY+2;
+      rows.push({x:22,y,w:184,h:40,kind:'prev',label:'↩ 前回の せってい'});
+      rows.push({x:214,y,w:184,h:40,kind:'default',label:'⟲ デフォルト'});y+=50;
+      rows.push({x:48,y,w:324,h:50,kind:'start',label:'▶ CPUと たいせん'});y+=58;
+      rows.push({x:48,y,w:324,h:44,kind:'online',label:DaifugoNet.available()?'🌐 オンライン たいせん':'🌐 オンライン (じゅんびちゅう)'});
+      return rows;
+    }
+    function drawSetup(g){
+      g.fillStyle='#33254e';g.fillRect(0,0,W,H);
+      outlinedText(g,'だいふごう',W/2,56,26,'#fff','#221737',7);
+      outlinedText(g,'ルールは じどうで おぼえるよ（CPUのかず＝人数−1）',W/2,92,12,'#cfc0ee','#221737',4);
+      const btns=setupBtns();
+      drawRuleRows(g,btns.filter(b=>b.kind==='bool'||b.kind==='select'));
+      for(const b of btns){
+        if(b.kind==='prev'||b.kind==='default')drawBtn(g,b,b.label,'#5a5278',false,14);
+        else if(b.kind==='start')drawBtn(g,b,b.label,'#ff4d94',false,19);
+        else if(b.kind==='online')drawBtn(g,b,b.label,DaifugoNet.available()?'#4d8cff':'#6b6480',false,15);
+      }
+    }
+    function onSetupTap(x,y){
+      for(const b of setupBtns()){
+        if(!hitBtn(b,x,y))continue;
+        if(b.kind==='bool'){rules[b.key]=!rules[b.key];saveRules();A.pop();}
+        else if(b.kind==='select'){rules[b.key]=cycleOpt(RULE_DEFS.find(d=>d.key===b.key),rules[b.key]);saveRules();A.pop();}
+        else if(b.kind==='prev'){try{rules=normalizeRules(JSON.parse(prevSnapshot));}catch(e){rules=defaultRules();}saveRules();banner('前回の せっていに もどしたよ');A.pop();}
+        else if(b.kind==='default'){rules=defaultRules();saveRules();banner('デフォルトに もどしたよ');A.pop();}
+        else if(b.kind==='start'){gameNo=1;lastRanks=null;startLocal();}
+        else if(b.kind==='online'){DaifugoNet.available()?enterOnline():A.bad();}
+        return;
+      }
+    }
+
+    /* ── A5-A6: ローカル対戦 (進行は DAIFUGO-CORE の applyAction/cpuChoose に委譲) ── */
+    function startLocal(){
+      const leader=(gameNo>1&&lastRanks&&lastRanks.length===rules.playerCount)?lastRanks[lastRanks.length-1]:null;
+      L=newRound(rules,shuffle(makeDeck(rules)),leader);
+      if(gameNo>1&&lastRanks&&lastRanks.length===rules.playerCount&&applyExchange(L,lastRanks,rules).length)
+        banner('カードこうかん！');
+      sel.clear();screen='play';A.pop();scheduleCpu();
+    }
+    function scheduleCpu(){cpuTimer=(L&&!L.ended&&L.turn!==0)?0.55+Math.random()*0.5:0;}
+    function feedback(r,name){ // applyAction結果の共通演出
+      if(r.fx&&r.fx.revolution){banner('かくめい！');A.fever();vib([30,50,30]);confetti();}
+      else if(r.fx&&r.fx.flow){banner('8ぎり！');A.coin();}
+      if(r.finishedSeat!=null&&!r.ended){banner(name+' あがり！');A.ok();}
+      if(r.ended){A.fever();confetti();vib([30,50,30,50,30]);}
+    }
+
+    /* ── 描画/入力の統一ビュー (ローカルL / オンラインstate を同じ形に正規化) ── */
+    function curRules(){const g=DaifugoNet.state.game;return (screen==='online'&&g&&g.rules)?g.rules:rules;}
+    function view(){
+      if(screen==='play'&&L)return {
+        n:L.n,you:0,names:NAMES.slice(0,L.n),cpu:NAMES.slice(0,L.n).map((_,i)=>i>0),conn:NAMES.slice(0,L.n).map(()=>true),
+        counts:L.hands.map(h=>h.length),passed:L.passed,finishedArr:L.finished,turn:L.turn,
+        field:L.field,st:L.st,hand:L.hands[0],ended:L.ended,phase:L.ended?'ended':'playing',host:true};
+      if(screen==='online'){
+        const g=DaifugoNet.state.game;if(!g||!g.rules||g.phase==='lobby')return null;
+        return {
+          n:g.rules.playerCount,you:g.youSeat,
+          names:g.seatsPub.map(o=>o?o.name:'—'),cpu:g.seatsPub.map(o=>!!(o&&o.cpu)),conn:g.seatsPub.map(o=>!!(o&&o.connected)),
+          counts:g.counts,passed:g.passed,finishedArr:g.finished,turn:g.turn,
+          field:g.field,st:g.st,hand:g.hand||[],ended:g.phase==='ended',phase:g.phase,host:g.youSeat===g.hostSeat};
+      }
+      return null;
+    }
+    const invOf=v=>!!v.st.revolution!==!!v.st.elevenBack;
+
+    /* ── A7: 卓の描画 (相手列/場札/効果チップ/手札/ボタン。ローカル・オンライン共用) ── */
+    function drawTable(g,v){
+      g.fillStyle='#2e4a35';g.fillRect(0,0,W,H);
+      // 相手列 (自分以外を席順に。観戦時は全席)
+      const others=[];
+      if(v.you>=0){for(let i=1;i<v.n;i++)others.push((v.you+i)%v.n);}
+      else for(let i=0;i<v.n;i++)others.push(i);
+      const m=others.length,bw=Math.min(96,(W-16-(m-1)*6)/m),bx0=(W-(bw*m+6*(m-1)))/2;
+      others.forEach((seat,k)=>{
+        const x=bx0+k*(bw+6),y=40;
+        const isTurn=!v.ended&&v.turn===seat;
+        g.save();g.fillStyle=isTurn?'#5a4a8a':'rgba(0,0,0,.28)';rr(g,x,y,bw,66,10);g.fill();
+        if(isTurn){g.strokeStyle='#ffd23f';g.lineWidth=2.5;rr(g,x,y,bw,66,10);g.stroke();}
+        g.restore();
+        const o=v.names[seat]||'—';
+        outlinedText(g,(v.cpu[seat]?'🤖':'')+o,x+bw/2,y+15,10,'#fff','rgba(0,0,0,.5)',3);
+        const fi=v.finishedArr.indexOf(seat);
+        if(fi>=0)outlinedText(g,titlesFor(v.n)[fi],x+bw/2,y+44,12,'#ffd23f','#5a3a10',3);
+        else{
+          outlinedText(g,'🂠'+v.counts[seat],x+bw/2,y+42,16,'#fff','rgba(0,0,0,.5)',4);
+          if(v.passed[seat])outlinedText(g,'パス',x+bw/2,y+59,10,'#ffb0c8','rgba(0,0,0,.5)',3);
+        }
+        if(!v.conn[seat]&&!v.cpu[seat]&&screen==='online')outlinedText(g,'⚠',x+bw-10,y+12,11,'#ffd23f','#000',2);
+      });
+      // 手番/状態
+      const myTurn=!v.ended&&v.you>=0&&v.turn===v.you;
+      outlinedText(g,v.ended?'けっか はっぴょう！':(myTurn?'あなたの ばん！':(v.names[v.turn]||'')+'の ばん…'),
+        W/2,136,19,myTurn?'#ffe93d':'#fff','rgba(0,0,0,.5)',5);
+      // 効果チップ
+      const chips=[];
+      if(v.st.revolution)chips.push(['♻ かくめい','#ff4d94']);
+      if(v.st.elevenBack)chips.push(['11バック','#4d8cff']);
+      if(v.field.lock)chips.push(['しばり'+v.field.lock.map(s=>SUITS[s]).join(''),'#b8860b']);
+      if(v.st.reverse)chips.push(['↩ぎゃく回り','#39c06a']);
+      const chw=92,cx0=W/2-(chips.length*(chw+6)-6)/2;
+      chips.forEach(([txt,col],i)=>{
+        const x=cx0+i*(chw+6);
+        g.save();g.fillStyle=col;rr(g,x,152,chw,22,10);g.fill();g.restore();
+        outlinedText(g,txt,x+chw/2,164,11,'#fff','rgba(0,0,0,.4)',3);
+      });
+      // 場札
+      const fc=v.field.cards||[];
+      if(fc.length){
+        const cw=Math.min(60,(W-100)/fc.length),chh=cw*1.45,fx0=(W-(cw*fc.length+4*(fc.length-1)))/2,fy=206;
+        fc.forEach((c,i)=>drawCard(g,c,fx0+i*(cw+4),fy,cw,chh,false));
+        if(v.field.owner!=null)
+          outlinedText(g,(v.names[v.field.owner]||'')+' が だした',W/2,206+chh+16,11,'#cfe0cf','rgba(0,0,0,.5)',3);
+      }else{
+        outlinedText(g,'あたらしい 場（すきな 役を だせるよ）',W/2,268,13,'#a8c8a8','rgba(0,0,0,.4)',3);
+      }
+      // 自分の手札 (選択で持ち上がる)
+      const hand=sortHand(v.hand,invOf(v));
+      const hm=hand.length,cw=58,chh=84;
+      const sp=hm>1?Math.min(42,(W-24-cw)/(hm-1)):0,hx0=(W-(cw+sp*(hm-1)))/2,hy=560;
+      hand.forEach((c,i)=>drawCard(g,c,hx0+i*sp,hy-(sel.has(c.id)?18:0),cw,chh,sel.has(c.id)));
+      const myFi=v.you>=0?v.finishedArr.indexOf(v.you):-1;
+      if(v.you<0)outlinedText(g,'かんせんちゅう',W/2,600,16,'#fff','rgba(0,0,0,.5)',4);
+      else if(myFi>=0&&!v.ended)outlinedText(g,'あなたは '+titlesFor(v.n)[myFi]+'！',W/2,600,17,'#ffd23f','#5a3a10',5);
+      // ボタン (決着時は結果パネル)
+      if(v.ended){drawEndPanel(g,v);return;}
+      const cs=hand.filter(c=>sel.has(c.id));
+      const a=cs.length?analyzeHand(cs,curRules()):null;
+      const ok=myTurn&&a&&canFollow(v.field.top,a,{inverted:invOf(v),lock:v.field.lock},curRules());
+      drawBtn(g,btnPass,'パス','#7a6cc0',!(myTurn&&v.field.top));
+      drawBtn(g,btnPlay,'だす！','#ff4d94',!ok);
+    }
+    function drawEndPanel(g,v){
+      g.save();g.fillStyle='rgba(20,14,40,.88)';rr(g,36,196,W-72,58+v.n*38,16);g.fill();g.restore();
+      outlinedText(g,'🏆 けっか',W/2,228,21,'#ffd23f','#5a3a10',6);
+      const ttl=titlesFor(v.n);
+      v.finishedArr.forEach((seat,i)=>{
+        const y=262+i*38,me=seat===v.you;
+        outlinedText(g,ttl[i],108,y,15,i===0?'#ffe93d':i===v.n-1?'#ff9bb5':'#fff','rgba(0,0,0,.5)',4,1,'left');
+        outlinedText(g,(me?'★ ':'')+(v.names[seat]||'—'),222,y,14,me?'#21e6c1':'#fff','rgba(0,0,0,.5)',4,1,'left');
+      });
+      if(screen==='play'){
+        drawBtn(g,btnPass,'⚙ せってい','#5a5278',false);
+        drawBtn(g,btnPlay,'▶ つぎの ラウンド','#ff4d94',false,15);
+      }else{
+        drawBtn(g,btnPass,'🚪 たいきょ','#a8704a',false);
+        drawBtn(g,btnPlay,v.host?'▶ もういちど':'ホストを まつ…','#ff4d94',!v.host,15);
+      }
+    }
+    function handCardAt(v,x,y){
+      const hand=sortHand(v.hand,invOf(v));
+      const hm=hand.length;if(!hm)return null;
+      const cw=58,chh=84,sp=hm>1?Math.min(42,(W-24-cw)/(hm-1)):0,hx0=(W-(cw+sp*(hm-1)))/2,hy=560;
+      for(let i=hm-1;i>=0;i--){
+        const cx=hx0+i*sp,cy=hy-(sel.has(hand[i].id)?18:0);
+        if(x>=cx&&x<=cx+cw&&y>=cy&&y<=cy+chh)return hand[i];
+      }
+      return null;
+    }
+
+    /* ── A8-A10: オンライン (サーバー権威。手札は自分の分のみ受信) ── */
+    function enterOnline(){
+      if(!DaifugoNet.available())return;
+      activeNet=DaifugoNet; // 共有オンラインUI(DOM)を大富豪netへ束ねる
+      screen='online';sel.clear();olRuleEdit=false;onlineToastSeq=DaifugoNet.state.toastSeq;olErr='';
+      if(pendingOnlineRoom){const code=pendingOnlineRoom;pendingOnlineRoom='';   // ?room=&g=daifugo 自動参加
+        DaifugoNet.connect(code);setRoomUrl(code);$('onlineBar').classList.remove('hidden');renderOnlineBar();}
+      else{$('olName').value=DaifugoNet.getName();$('olCode').value='';$('olSetupMsg').textContent='';
+        $('onlineSetup').classList.remove('hidden');}
+    }
+    function leaveOnline(){
+      DaifugoNet.raw({type:'leave'});DaifugoNet.leave();
+      $('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');
+      setRoomUrl('');screen='setup';sel.clear();A.pop();
+    }
+    function shareInvite(){ // Web Share API (#8)。非対応はURLコピーへフォールバック
+      const url=roomLink(DaifugoNet.state.code);
+      if(navigator.share)navigator.share({title:'だいふごう であそぼ！',text:'「だいふごう」いっしょにやろ！',url}).catch(()=>{});
+      else{copyText(url);banner('リンクを コピーしました');}
+    }
+    const sendRule=(key,val)=>DaifugoNet.raw({type:'setRule',key,val});
+    function lobbyBtns(g){
+      const isHost=g.youSeat===g.hostSeat;
+      return [
+        {x:26,y:150,w:116,h:40,kind:'copy',label:'📋 コード'},
+        {x:152,y:150,w:116,h:40,kind:'link',label:'🔗 リンク'},
+        {x:278,y:150,w:116,h:40,kind:'share',label:'📤 きょうゆう'},
+        {x:26,y:566,w:180,h:44,kind:'rules',on:isHost,label:'⚙ ルールへんこう'},
+        {x:214,y:566,w:180,h:44,kind:'leave',on:true,label:'🚪 たいきょ'},
+        {x:48,y:620,w:324,h:52,kind:'start',on:isHost&&g.canStart,label:isHost?'▶ ゲーム かいし':'ホストの かいしを まつ…'},
+      ];
+    }
+    function drawOnline(g2){
+      const s=DaifugoNet.state,g=s.game;
+      if(!g||!g.rules){
+        g2.fillStyle='#2e4a35';g2.fillRect(0,0,W,H);
+        outlinedText(g2,s.status==='error'?(s.error||'エラー'):'せつぞくちゅう…',W/2,320,18,'#fff','rgba(0,0,0,.5)',5);
+        drawBtn(g2,btnCorner,'🚪','#5a5278',false,14);
+        return;
+      }
+      if(g.phase==='lobby'){
+        if(olRuleEdit){ // ホストのルール編集 (変更は setRule でサーバーへ→全員に配信)
+          g2.fillStyle='#33254e';g2.fillRect(0,0,W,H);
+          outlinedText(g2,'ルールへんこう（みんなに すぐ はんえい）',W/2,70,15,'#fff','#221737',4);
+          const rows=ruleRows(g.rules,124);
+          drawRuleRows(g2,rows);
+          drawBtn(g2,{x:48,y:rows._endY+8,w:324,h:44},'← ロビーへ もどる','#5a5278',false,15);
+          return;
+        }
+        g2.fillStyle='#2e4a35';g2.fillRect(0,0,W,H);
+        outlinedText(g2,'🃏 オンライン だいふごう',W/2,58,21,'#fff','#221737',6);
+        outlinedText(g2,'あいことば',W/2,96,12,'#cfe0cf','#221737',3);
+        outlinedText(g2,s.code||'—',W/2,126,30,'#ffd23f','#5a3a10',7);
+        for(const b of lobbyBtns(g))
+          drawBtn(g2,b,b.label,b.kind==='start'?'#ff4d94':b.kind==='leave'?'#a8704a':'#4d8cff',b.on===false,b.kind==='start'?17:13);
+        outlinedText(g2,'メンバー（'+g.joined+'/'+g.rules.playerCount+'）',W/2,222,15,'#fff','rgba(0,0,0,.5)',4);
+        for(let i=0;i<g.rules.playerCount;i++){
+          const y=240+i*34,o=g.seatsPub[i];
+          g2.save();g2.fillStyle='rgba(0,0,0,.25)';rr(g2,40,y,W-80,28,8);g2.fill();g2.restore();
+          const nm=o?((o.cpu?'🤖':'')+o.name+(o.connected===false&&!o.cpu?'⚠':'')):(g.rules.fillWithCPU?'（あき → CPUが はいるよ）':'（あき）');
+          outlinedText(g2,(i===g.hostSeat?'👑 ':'')+nm,W/2,y+15,12,o?'#fff':'#9ab09a','rgba(0,0,0,.5)',3);
+          if(i===g.youSeat)outlinedText(g2,'あなた',W-70,y+15,10,'#21e6c1','rgba(0,0,0,.5)',3,1,'left');
+        }
+        const onRules=RULE_DEFS.filter(d=>d.type==='bool'&&g.rules[d.key]).map(d=>d.label).join('・');
+        outlinedText(g2,'ルール: '+(onRules||'なし'),W/2,478,11,'#cfe0cf','rgba(0,0,0,.4)',3);
+        outlinedText(g2,'ジョーカー'+g.rules.jokerCount+'まい・トランプ'+g.rules.deckCount+'くみ',W/2,498,11,'#cfe0cf','rgba(0,0,0,.4)',3);
+        outlinedText(g2,'リンクを おくって ともだちを まとう！',W/2,532,12,'#a8c8a8','rgba(0,0,0,.4)',3);
+        return;
+      }
+      const v=view();if(!v)return;
+      drawTable(g2,v);
+      drawBtn(g2,btnCorner,'🚪','#5a5278',false,14);
+    }
+    function onOnlineTap(x,y){
+      const s=DaifugoNet.state,g=s.game;
+      if(!g||!g.rules){if(hitBtn(btnCorner,x,y))leaveOnline();return;}
+      if(g.phase==='lobby'){
+        if(olRuleEdit){
+          const rows=ruleRows(g.rules,124);
+          for(const b of rows){
+            if(!hitBtn(b,x,y))continue;
+            if(b.kind==='bool'){sendRule(b.key,!g.rules[b.key]);A.pop();}
+            else sendRule(b.key,cycleOpt(RULE_DEFS.find(d=>d.key===b.key),g.rules[b.key])),A.pop();
+            return;
+          }
+          if(hitBtn({x:48,y:rows._endY+8,w:324,h:44},x,y)){olRuleEdit=false;A.pop();}
+          return;
+        }
+        for(const b of lobbyBtns(g)){
+          if(!hitBtn(b,x,y))continue;
+          if(b.kind==='copy'){copyText(s.code);banner('あいことばを コピー');A.pop();}
+          else if(b.kind==='link'){copyText(roomLink(s.code));banner('リンクを コピー');A.pop();}
+          else if(b.kind==='share')shareInvite();
+          else if(b.kind==='rules'&&b.on){olRuleEdit=true;A.pop();}
+          else if(b.kind==='start'&&b.on){DaifugoNet.raw({type:'start'});A.pop();}
+          else if(b.kind==='leave')leaveOnline();
+          else A.bad();
+          return;
+        }
+        return;
+      }
+      const v=view();if(!v)return;
+      if(hitBtn(btnCorner,x,y)){leaveOnline();return}
+      if(v.ended){
+        if(hitBtn(btnPlay,x,y)){if(v.host){DaifugoNet.raw({type:'again'});A.pop();}else A.bad();return}
+        if(hitBtn(btnPass,x,y)){leaveOnline();return}
+        return;
+      }
+      if(hitBtn(btnPass,x,y)){
+        if(v.you>=0&&v.turn===v.you&&v.field.top){DaifugoNet.raw({type:'pass'});A.pop();}else A.bad();
+        return;
+      }
+      if(hitBtn(btnPlay,x,y)){
+        if(v.you<0||v.turn!==v.you){A.bad();return}
+        const ids=[...sel];if(!ids.length){A.bad();return}
+        DaifugoNet.raw({type:'play',ids});sel.clear();A.pop();return;
+      }
+      const c=handCardAt(v,x,y);
+      if(c){sel.has(c.id)?sel.delete(c.id):sel.add(c.id);A.pop();}
+    }
+    if(pendingOnlineRoom)enterOnline(); // ?room=&g=daifugo で開かれた場合は即オンラインへ
+
+    return {
+      onDown(x,y){
+        if(screen==='setup'){onSetupTap(x,y);return}
+        if(screen==='online'){onOnlineTap(x,y);return}
+        const v=view();if(!v)return;
+        if(hitBtn(btnCorner,x,y)){screen='setup';A.pop();return}   // ⚙ せっていへ
+        if(v.ended){
+          if(hitBtn(btnPlay,x,y)){lastRanks=L.finished.slice();gameNo++;startLocal();return}
+          if(hitBtn(btnPass,x,y)){screen='setup';A.pop();return}
+          return;
+        }
+        if(hitBtn(btnPass,x,y)){ // パス
+          if(v.turn!==0){A.bad();return}
+          const r=applyAction(L,0,null,rules);
+          if(!r.ok){banner(r.error);A.bad();return}
+          if(r.flowed)banner('ながれた');
+          A.pop();scheduleCpu();return;
+        }
+        if(hitBtn(btnPlay,x,y)){ // だす (権威=applyAction の検証に委譲)
+          if(v.turn!==0){A.bad();return}
+          const cards=L.hands[0].filter(c=>sel.has(c.id));
+          if(!cards.length){A.bad();return}
+          const r=applyAction(L,0,cards,rules);
+          if(!r.ok){banner(r.error);A.bad();return}
+          sel.clear();A.pop();vib(8);feedback(r,'あなた');scheduleCpu();return;
+        }
+        const c=handCardAt(v,x,y);
+        if(c){sel.has(c.id)?sel.delete(c.id):sel.add(c.id);A.pop();}
+      },
+      update(dt){
+        t+=dt;
+        if(screen==='play'&&L&&!L.ended&&L.turn!==0&&cpuTimer>0){ // CPU思考ディレイ→1手
+          cpuTimer-=dt;
+          if(cpuTimer<=0){
+            const seat=L.turn;
+            const mv=cpuChoose(L.hands[seat],L.field.top,ctxOf(L),rules);
+            const r=applyAction(L,seat,mv?mv.cards:null,rules);
+            if(r.ok)feedback(r,NAMES[seat]);
+            scheduleCpu();
+          }
+        }
+        if(screen==='online'){
+          const s=DaifugoNet.state;
+          if(s.toastSeq!==onlineToastSeq){onlineToastSeq=s.toastSeq;if(s.toastMsg){banner(s.toastMsg);A.coin();}}
+          if(s.error&&s.error!==olErr){olErr=s.error;banner(s.error);A.bad();}
+        }
+      },
+      draw(g){
+        if(screen==='setup'){drawSetup(g);return}
+        if(screen==='online'){drawOnline(g);return}
+        const v=view();
+        if(!v){g.fillStyle='#2e4a35';g.fillRect(0,0,W,H);return;}
+        drawTable(g,v);
+        if(!v.ended)drawBtn(g,btnCorner,'⚙','#5a5278',false,15);
+      },
+      hudInfo(){
+        if(screen==='setup')return 'ルールを えらぶ';
+        if(screen==='online')return ''; // 上部DOMバーが状態表示
+        if(!L)return '';
+        return L.ended?'けっか はっぴょう':'てふだ '+L.hands[0].length+'まい';
+      },
+      onlineBack(){screen='setup';setRoomUrl('');},      // 入室UIの「もどる」から
+      destroy(){DaifugoNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');setRoomUrl('');},
+    };
+  }
+});
 
 // ▼ 新しいミニゲームは registerGame({...}) をここに追加 ▼
 

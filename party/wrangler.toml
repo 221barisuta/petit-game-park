@@ -27,3 +27,12 @@ new_sqlite_classes = ["Gomoku"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["Othello"]
+
+# 大富豪: バインディング名 "Daifugo" → party "daifugo" (/parties/daifugo/<code>)
+[[durable_objects.bindings]]
+name = "Daifugo"
+class_name = "Daifugo"
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["Daifugo"]
