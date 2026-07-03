@@ -1440,6 +1440,8 @@ document.addEventListener('keydown',e=>{
   AudioKit.ensure();
   if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter'].includes(e.code))e.preventDefault();
   if(e.code==='Escape'){
+    // play中のゲームが true を返したら Escape を消費したとみなし、既定の退出はしない (例: 麻雀のルーペ解除)
+    if(phase==='play'&&game&&game.onKey&&game.onKey('Escape',true)===true)return;
     if($('scr-game').classList.contains('active'))quitGame();
     else if($('scr-result').classList.contains('active'))show('scr-select');
     return;
@@ -5449,12 +5451,13 @@ function mjRoundNew(rng){
     S:mjRiverNew(),   // 自分視点: genbutsu=CPUの河
     Sc:mjRiverNew(),  // CPU視点: genbutsu=自分の河
     turn:1,myRiichi:0,cpRiichi:0,cpWin:[],end:null,log:[],hintsUsed:0,noYaku:0,
+    lastDraw:-1, // 直前の自摸牌 (手出し/ツモぎり判定用)
     seatWind:27,roundWind:27};
 }
 const mjWinCtx=(R,hand,winTile,riichi,tsumo)=>({hand,winTile,menzen:true,
   riichi:!!riichi,tsumo,seatWind:R.seatWind,roundWind:R.roundWind});
 function mjDrawSelf(R){ // 自分のツモ → {tile,win:{han,yaku}|null}
-  const t=R.wall.pop();R.my[t]++;
+  const t=R.wall.pop();R.my[t]++;R.lastDraw=t;
   if(MJ.shanten(R.my)===-1){
     const w=MJ.judgeYaku(mjWinCtx(R,R.my,t,R.myRiichi,true));
     if(w.han>0){R.end='tsumo';return {tile:t,win:w};}
@@ -5463,7 +5466,7 @@ function mjDrawSelf(R){ // 自分のツモ → {tile,win:{han,yaku}|null}
   return {tile:t,win:null};
 }
 function mjPlayerDiscard(R,t){ // 打牌の共通処理 → 'dealin'|null
-  R.my[t]--;R.myRiver.push(t);
+  R.my[t]--;R.myRiver.push({t,ted:t!==R.lastDraw}); // ted=手出し (直前の自摸牌以外を切った)
   mjSee(R.S,t);mjThreatDiscard(R.Sc,t);
   if(R.cpRiichi&&R.cpWin.indexOf(t)>=0){R.end='dealin';R.dealinTile=t;return 'dealin';}
   return null;
@@ -5480,7 +5483,7 @@ function mjCpuTurn(R){ // CPUのツモ〜打牌 → {cut,why,declared,win,ron}
       seatWind:R.seatWind,roundWind:R.roundWind});
     cut=d.tile;why=d.why;
   }
-  R.cp[cut]--;R.cpRiver.push(cut);
+  R.cp[cut]--;R.cpRiver.push({t:cut,ted:cut!==t}); // CPU側も記録 (フェーズ3の手牌読みの土台)
   mjThreatDiscard(R.S,cut);mjSee(R.Sc,cut);
   let declared=false;
   if(!R.cpRiichi&&MJ.shanten(R.cp)===0){R.cpRiichi=R.turn;declared=true;why='テンパイ！リーチ！';}
@@ -5489,7 +5492,7 @@ function mjCpuTurn(R){ // CPUのツモ〜打牌 → {cut,why,declared,win,ron}
   let ron=null;
   if(MJ.shanten(R.my)===0){
     const myWin=MJ.winTiles(R.my);
-    const furiten=myWin.some(w=>R.myRiver.indexOf(w)>=0);
+    const furiten=myWin.some(w=>R.myRiver.some(e=>e.t===w));
     if(!furiten&&myWin.indexOf(cut)>=0){
       R.my[cut]++;
       const w=MJ.judgeYaku(mjWinCtx(R,R.my,cut,R.myRiichi,false));
@@ -5535,6 +5538,85 @@ function mjWeakness(hist){
   for(const w of MJ_WEAK)if(w.hit(agg))return w.label;
 }
 
+/* ---- リアル牌描画 (フェーズ1) ----
+   mjRenderTile(g, tileId, x, y, w, h, opts)
+   tileId: int 0-33 (0-8=萬1-9 / 9-17=筒1-9 / 18-26=索1-9 / 27-33=東南西北白發中)
+   opts: {sel:選択強調, ghost:薄表示(リーチ時の不可牌), gray:グレーアウト(ツモぎり),
+          back:裏面(フェーズ2の他家手牌用)}
+   画像なし・canvasのみ。手牌/河/ルーペ/candRow すべてこれ1本 */
+const MJ_PIPS=[ // 筒子/索子のピップ配置 (単位座標)。伝統的な並びに寄せる
+  [[.5,.5]],
+  [[.5,.27],[.5,.73]],
+  [[.26,.24],[.5,.5],[.74,.76]],
+  [[.29,.27],[.71,.27],[.29,.73],[.71,.73]],
+  [[.27,.24],[.73,.24],[.5,.5],[.27,.76],[.73,.76]],
+  [[.31,.24],[.69,.24],[.31,.5],[.69,.5],[.31,.76],[.69,.76]],
+  [[.24,.2],[.5,.26],[.76,.32],[.31,.6],[.69,.6],[.31,.84],[.69,.84]],
+  [[.31,.17],[.69,.17],[.31,.39],[.69,.39],[.31,.61],[.69,.61],[.31,.83],[.69,.83]],
+  [[.26,.2],[.5,.2],[.74,.2],[.26,.5],[.5,.5],[.74,.5],[.26,.8],[.5,.8],[.74,.8]],
+];
+const MJ_KAN=['一','二','三','四','五','六','七','八','九'];
+function mjRenderTile(g,t,x,y,w,h,o){
+  o=o||{};
+  g.save();
+  if(o.ghost)g.globalAlpha*=.38;
+  const r=Math.max(3,w*.16),gray=!!o.gray;
+  const face=o.sel?'#fff3c4':gray?'#d9dbde':'#fdfcf4';
+  rr(g,x,y+h*.06,w,h*.94,r);g.fillStyle=gray?'#9aa0a8':'#c9bfae';g.fill(); // 厚み
+  const fh=h*.94;
+  rr(g,x,y,w,fh,r);
+  g.fillStyle=face;g.fill();
+  g.strokeStyle=o.sel?'#e5a000':gray?'#8a9098':'#b0a48e';g.lineWidth=o.sel?2:1;g.stroke();
+  if(o.back){rr(g,x+w*.12,y+fh*.12,w*.76,fh*.76,r*.7);g.fillStyle='#2c6e49';g.fill();g.restore();return;}
+  const cx=x+w/2;
+  const ink=c=>gray?'#7d838d':c; // グレーアウト時は図柄も灰色化
+  if(t>=MJ.HONOR){ // 字牌 (白=青枠の空白)
+    if(t===31){
+      g.strokeStyle=ink('#3f6fb0');g.lineWidth=Math.max(1.2,w*.06);
+      rr(g,x+w*.2,y+fh*.16,w*.6,fh*.68,r*.5);g.stroke();
+    }else{
+      g.fillStyle=ink(t===33?'#c0392b':t===32?'#1d7a3d':'#2c3242');
+      g.font=`800 ${fh*.56}px ${FONT}`;g.textAlign='center';g.textBaseline='middle';
+      g.fillText(MJ.NAMES[t],cx,y+fh*.53);
+    }
+  }else{
+    const su=t/9|0,n=t%9+1;
+    if(su===0){ // 萬子: 漢数字(五は赤)+萬
+      g.textAlign='center';g.textBaseline='middle';
+      g.fillStyle=ink(n===5?'#c0392b':'#2c3242');
+      g.font=`800 ${fh*.42}px ${FONT}`;g.fillText(MJ_KAN[n-1],cx,y+fh*.3);
+      g.fillStyle=ink('#b03030');
+      g.font=`800 ${fh*.38}px ${FONT}`;g.fillText('萬',cx,y+fh*.72);
+    }else if(su===1){ // 筒子: 丸ピップ (1筒は大円・5筒の中央は赤)
+      const R0=n===1?w*.3:n<=4?w*.135:w*.105;
+      MJ_PIPS[n-1].forEach(([ux,uy],i)=>{
+        const X=x+w*ux,Y=y+fh*(uy*.84+.08);
+        const col=ink(n===1||(n===5&&i===2)?'#c0392b':'#2e5fa3');
+        g.beginPath();g.arc(X,Y,R0,0,TAU);g.fillStyle=col;g.fill();
+        g.beginPath();g.arc(X,Y,R0*.5,0,TAU);g.fillStyle=face;g.fill();
+        g.beginPath();g.arc(X,Y,R0*.22,0,TAU);g.fillStyle=col;g.fill();
+      });
+    }else{ // 索子: 竹スティック (1索は様式化した1本・5索の中央は赤)
+      if(n===1){
+        g.fillStyle=ink('#1d7a3d');
+        rr(g,cx-w*.12,y+fh*.14,w*.24,fh*.64,w*.1);g.fill();
+        g.fillStyle=ink('#c0392b');
+        rr(g,cx-w*.17,y+fh*.42,w*.34,fh*.1,w*.05);g.fill();
+        g.fillStyle='rgba(255,255,255,.5)';g.fillRect(cx-w*.04,y+fh*.16,w*.08,fh*.58);
+      }else{
+        const SW=w*.15,SH=fh*.21;
+        MJ_PIPS[n-1].forEach(([ux,uy],i)=>{
+          const X=x+w*ux,Y=y+fh*(uy*.84+.08);
+          g.fillStyle=ink(n===5&&i===2?'#c0392b':'#1d7a3d');
+          rr(g,X-SW/2,Y-SH/2,SW,SH,SW*.4);g.fill();
+          g.fillStyle='rgba(255,255,255,.55)';g.fillRect(X-SW/2,Y-SH*.09,SW,SH*.18);
+        });
+      }
+    }
+  }
+  g.restore();
+}
+
 /* ---- ここからUI ---- */
 registerGame({
   id:'mahjong',emoji:'🀄',title:'なぜきり麻雀どうじょう',
@@ -5542,6 +5624,8 @@ registerGame({
   color:'#b8e0d2',duration:null,
   howto:[
     ['🀄','ツモって1まいすてる をくりかえそう'],
+    ['🔍','牌をタップでルーペ→もう一度タップ か ⬆フリックで すてる'],
+    ['🌗','ツモぎりの牌は 河でうすく表示（ボタンで切替）'],
     ['🎯','コーチが1打ごとに「なぜ？」を採点してくれる'],
     ['💡','まよったらヒントで受け入れ枚数をみられる'],
     ['🤖','CPUがリーチしたら 現物・スジでおりるれんしゅう！'],
@@ -5552,14 +5636,35 @@ registerGame({
     const R=mjRoundNew(RNG);
     let mjPhase='draw',sel=-1,an=null,drawn=-1,fb=null,timer=0;
     let hintOn=ctx.rookie,riichiArm=false,endInfo=null,rep=null,page=0,cpuWhy='はじめよう！';
-    const TW=27,TH=40,HX=8,HY=572;                       // 手牌レイアウト
-    const RW=18,RH=24;                                   // 河レイアウト (12枚×2段=最大24打)
+    let tedashiShow=store.get('pgp2_mj_tedashi','1')==='1'; // 🌗ツモぎりグレー表示 (トグル永続)
+    const TW=27,TH=44,HX=8,HY=576;                       // 手牌レイアウト
+    const RW=24,RH=30;                                   // 河レイアウト (1行6枚×4段=最大24打)
+    const RVX=(W-(6*(RW+2)-2))/2;                        // 河のx原点 (中央寄せ)
+    const LP={x:W/2-105,y:340,w:210,h:196};              // ルーペ表示枠
+    const FELT=(()=>{ // 卓 (フェルト+ノイズ+木目縁)。生成1回のオフスクリーンcanvas
+      const c=document.createElement('canvas');c.width=W;c.height=H;
+      const f=c.getContext('2d');
+      const gr=f.createRadialGradient(W/2,H*.42,60,W/2,H*.5,H*.8);
+      gr.addColorStop(0,'#2f7d4e');gr.addColorStop(1,'#1b5232');
+      f.fillStyle=gr;f.fillRect(0,0,W,H);
+      const rnd=mulberry32(7);
+      f.globalAlpha=.05; // 布目のノイズ質感
+      for(let i=0;i<1600;i++){f.fillStyle=rnd()<.5?'#000':'#fff';
+        f.fillRect(rnd()*W,rnd()*H,1.4,1.4);}
+      f.globalAlpha=1;
+      f.strokeStyle='#5d3f22';f.lineWidth=18;rr(f,3,3,W-6,H-6,22);f.stroke(); // 木目調の縁
+      f.strokeStyle='#7a5631';f.lineWidth=9;rr(f,8,8,W-16,H-16,17);f.stroke();
+      f.strokeStyle='rgba(255,235,200,.18)';f.lineWidth=2;rr(f,11,11,W-22,H-22,15);f.stroke();
+      f.strokeStyle='rgba(0,0,0,.3)';f.lineWidth=2;rr(f,17,17,W-34,H-34,12);f.stroke();
+      return c;})();
     const BTNS=[ // 画面下ボタン (onDownでヒットテスト)
-      {id:'hint',x:8,y:626,w:128,h:44,label:()=>hintOn?'💡ヒント中':'💡ヒント',
+      {id:'hint',x:8,y:624,w:126,h:44,label:()=>hintOn?'💡ヒント中':'💡ヒント',
         on:()=>{if(!hintOn){hintOn=true;R.hintsUsed++;A.pop();}else{hintOn=false;A.tick();}}},
-      {id:'riichi',x:146,y:626,w:128,h:44,label:()=>riichiArm?'リーチやめる':'リーチ！',
+      {id:'riichi',x:142,y:624,w:126,h:44,label:()=>riichiArm?'リーチやめる':'リーチ！',
         able:()=>mjPhase==='select'&&!R.myRiichi&&an&&an.cands.some(c=>c.sh===0),
         on:()=>{riichiArm=!riichiArm;sel=-1;A.go();}},
+      {id:'ted',x:276,y:624,w:136,h:44,label:()=>'🌗ツモぎり:'+(tedashiShow?'うすく':'同じ'),
+        on:()=>{tedashiShow=!tedashiShow;store.set('pgp2_mj_tedashi',tedashiShow?'1':'0');A.tick();}},
     ];
     const handTiles=()=>{const o=[];for(let t=0;t<34;t++)for(let k=0;k<R.my[t];k++)o.push(t);return o;};
     function startTurn(){
@@ -5622,29 +5727,21 @@ registerGame({
     }
     startTurn();
     /* ---- 描画 (rr は共通ヘルパーを使用) ---- */
-    const SUIT_COL=['#c0392b','#2166ac','#2a7a3a'];
-    function tile(g,x,y,w,h,t,o){
-      o=o||{};
-      g.save();if(o.dim)g.globalAlpha=.38;
-      rr(g,x,y,w,h,Math.min(5,w*.18));
-      g.fillStyle=o.sel?'#fff3c4':'#fffdf5';g.fill();
-      g.strokeStyle=o.sel?'#e5a000':'#b9ac96';g.lineWidth=o.sel?2:1;g.stroke();
-      if(t>=MJ.HONOR){
-        g.fillStyle=t===33?'#c0392b':t===32?'#2a7a3a':'#3a3f52';
-        g.font=`bold ${h*.5}px ${FONT}`;g.textAlign='center';g.textBaseline='middle';
-        g.fillText(MJ.NAMES[t],x+w/2,y+h/2+1);
-      }else{
-        const su=t/9|0;
-        g.fillStyle=SUIT_COL[su];
-        g.font=`bold ${h*.44}px ${FONT}`;g.textAlign='center';g.textBaseline='middle';
-        g.fillText(String(t%9+1),x+w/2,y+h*.32);
-        g.font=`bold ${h*.3}px ${FONT}`;
-        g.fillText(['萬','筒','索'][su],x+w/2,y+h*.73);
-      }
-      g.restore();
+    const tile=(g,x,y,w,h,t,o)=>mjRenderTile(g,t,x,y,w,h,o&&o.dim?Object.assign({ghost:true},o):o);
+    function river(g,list,x0,y0){ // 河: 1行6枚で改行・表示は最新24枚(4段)まで。座標を引数化 (将来の4人分表示用)
+      const over=list.length-24, show=over>0?list.slice(-24):list; // 25打目以降は古い方から省略 (+N表示)
+      if(over>0)outlinedText(g,'+'+over,x0-8,y0+12,11,'#ffd77a','#12331f',3,1,'right');
+      show.forEach((e,i)=>tile(g,x0+(i%6)*(RW+2),y0+((i/6)|0)*(RH+3),RW,RH,e.t,
+        tedashiShow&&!e.ted?{gray:true}:null)); // ツモぎりはグレーアウト (トグル可)
     }
-    function river(g,list,x0,y0){
-      list.forEach((t,i)=>tile(g,x0+(i%12)*(RW+2),y0+((i/12)|0)*(RH+3),RW,RH,t));
+    function drawLoupe(g){ // ルーペ: 選択牌を拡大表示 (スマホでの視認用)
+      rr(g,LP.x,LP.y,LP.w,LP.h,14);
+      g.fillStyle='rgba(253,252,244,.97)';g.fill();
+      g.strokeStyle='#b0a48e';g.lineWidth=2;g.stroke();
+      tile(g,LP.x+(LP.w-84)/2,LP.y+14,84,112,sel,{sel:true});
+      text(g,MJ.NAMES[sel],LP.x+LP.w/2,LP.y+144,16,'#3a3f52','center');
+      text(g,'もう一度タップ / ⬆フリックで すてる',LP.x+LP.w/2,LP.y+166,10.5,'#8a7a5a','center');
+      text(g,'ほかの場所タップ か Esc で もどる',LP.x+LP.w/2,LP.y+182,10.5,'#b0a48e','center');
     }
     function text(g,s,x,y,px,col,align){
       g.fillStyle=col||'#3a3f52';g.font=`bold ${px}px ${FONT}`;
@@ -5667,54 +5764,49 @@ registerGame({
         else if(mjPhase==='cpu'){timer-=dt;if(timer<=0)cpuStep();}
       },
       draw(g){
-        g.fillStyle='#e7f2ec';g.fillRect(0,0,W,H);
+        g.drawImage(FELT,0,0); // 卓 (フェルト+木目縁。生成は1回だけ)
         // 情報行 (中央はコアHUDのスコアが占有するので左右端のみ使う)
-        text(g,R.turn+'じゅんめ',12,52,15,'#3a3f52');
-        text(g,'のこり'+Math.max(0,R.wall.length-14)+'牌',W-12,52,13,'#7a806f','right');
-        // CPUゾーン
-        text(g,'🤖コーチ',12,74,14,'#3a3f52');
-        if(R.cpRiichi){rr(g,80,64,64,20,10);g.fillStyle='#e5578a';g.fill();
-          text(g,'リーチ！',112,74,12,'#fff','center');}
-        river(g,R.cpRiver,112,84);
-        text(g,'🤖「'+cpuWhy+'」',12,152,11.5,'#5a7a6a');
-        // コーチパネル
-        panel(g,8,164,W-16,292);
-        const px=20,py=180;
-        if(an&&!R.end)text(g,(an.shMin===0?'テンパイ！':an.shMin+'シャンテン'),W-28,py+4,14,
+        outlinedText(g,R.turn+'じゅんめ',16,52,15,'#fff','#12331f',4,1,'left');
+        outlinedText(g,'のこり'+Math.max(0,R.wall.length-14)+'牌',W-16,52,13,'#dceadf','#12331f',4,1,'right');
+        // CPUゾーン (河は1行6枚×4段)
+        outlinedText(g,'🤖コーチ',16,72,14,'#fff','#12331f',4,1,'left');
+        if(R.cpRiichi){rr(g,96,62,64,20,10);g.fillStyle='#e5578a';g.fill();
+          text(g,'リーチ！',128,72,12,'#fff','center');}
+        river(g,R.cpRiver,RVX,74);
+        // コーチパネル (レポート/終了時は縦に拡張)
+        panel(g,8,208,W-16,(mjPhase==='report'||mjPhase==='end')?320:218);
+        const px=20,py=224;
+        if(an&&!R.end)text(g,(an.shMin===0?'テンパイ！':an.shMin+'シャンテン'),W-28,py+2,14,
           an.shMin===0?'#e5578a':'#5a7a6a','right');
         if(mjPhase==='select'){
           if(riichiArm){
-            text(g,'リーチ宣言！テンパイをたもつ牌をえらぼう',px,py+4,13.5,'#e5578a');
+            text(g,'リーチ宣言！テンパイをたもつ牌をえらぼう',px,py+2,13.5,'#e5578a');
           }else{
-            text(g,'どれをきる？(2回タップでけってい)',px,py+4,14,'#3a3f52');
+            text(g,'どれをきる？(タップ→もう一度 か ⬆で確定)',px,py+2,13.5,'#3a3f52');
           }
-          if(R.cpRiichi)text(g,'⚠️リーチ警戒中: 安全度も考えよう',px,py+24,12.5,'#c0392b');
-          if(R.noYaku)text(g,'※役がないと和了できないよ',px,py+42,11.5,'#8a6a2a');
+          text(g,'🤖「'+cpuWhy+'」',px,py+22,11.5,'#5a7a6a');
+          if(R.cpRiichi)text(g,'⚠️リーチ警戒中: 安全度も考えよう',px,py+40,12.5,'#c0392b');
+          if(R.noYaku)text(g,'※役なしは和了できない',W-28,py+40,11.5,'#8a6a2a','right');
           if(hintOn&&an){
-            text(g,'💡コーチのおすすめ:',px,py+66,12.5,'#7a6a3a');
-            an.cands.slice(0,3).forEach((c,i)=>candRow(g,px,py+80+i*44,c,i,!!R.cpRiichi));
+            text(g,'💡コーチのおすすめ:',px,py+58,12.5,'#7a6a3a');
+            an.cands.slice(0,3).forEach((c,i)=>candRow(g,px,py+72+i*38,c,i,!!R.cpRiichi));
             text(g,'総合 = 効率'+Math.round(an.weights.eff*100)+'% + 安全'+
-              Math.round(an.weights.safe*100)+'% (押し引き表より)',px,py+218,10.5,'#999');
+              Math.round(an.weights.safe*100)+'% (押し引き表より)',px,py+190,10.5,'#999');
           }else{
             text(g,'💡ヒントで受け入れ枚数と理由がみられる',px,py+70,12,'#999');
-          }
-          if(sel>=0){
-            text(g,'えらんだ牌: ',px,py+250,13,'#3a3f52');
-            tile(g,px+82,py+236,24,32,sel);
-            text(g,'もういちどタップできる！',px+118,py+250,12,'#7a6a3a');
           }
         }else if(mjPhase==='fb'&&fb){
           const c=fb.chosen,b=fb.an.cands[0];
           if(fb.auto){text(g,'リーチちゅう: ツモぎり',px,py+8,14,'#e5578a');}
           else{
-            text(g,'あなた: '+MJ.NAMES[c.tile]+'ぎり',px,py+8,15,'#3a3f52');
-            mjReason(c,fb.an,!!R.cpRiichi).forEach((s,i)=>text(g,s,px+8,py+34+i*20,12.5,'#555'));
+            text(g,'あなた: '+MJ.NAMES[c.tile]+'ぎり',px,py+2,15,'#3a3f52');
+            mjReason(c,fb.an,!!R.cpRiichi).forEach((s,i)=>text(g,s,px+8,py+26+i*19,12.5,'#555'));
             const same=c.tile===b.tile;
             text(g,same?'◎これが最適打！':'◎最適は '+MJ.NAMES[b.tile]+'ぎりだった',
-              px,py+110,15,same?'#e5a000':'#c0392b');
+              px,py+96,15,same?'#e5a000':'#c0392b');
             if(!same)mjReason(b,fb.an,!!R.cpRiichi).forEach((s,i)=>
-              text(g,s,px+8,py+136+i*20,12.5,'#7a5a2a'));
-            text(g,'タップですすむ ▶',W-30,440,13,'#999','right');
+              text(g,s,px+8,py+120+i*19,12.5,'#7a5a2a'));
+            text(g,'タップですすむ ▶',W-30,py+186,13,'#999','right');
           }
         }else if(mjPhase==='end'&&rep){
           text(g,'きょくしゅうりょう！',px,py+10,16,'#3a3f52');
@@ -5722,11 +5814,13 @@ registerGame({
         }else if(mjPhase==='report'&&rep){
           drawReport(g,px,py);
         }
-        // 自分の河
-        text(g,'じぶんの河',12,470,11,'#7a806f');
-        river(g,R.myRiver,112,462);
-        if(R.myRiichi){rr(g,12,480,64,20,10);g.fillStyle='#e5578a';g.fill();
-          text(g,'リーチ！',44,490,12,'#fff','center');}
+        // 自分の河 + リーチ棒
+        outlinedText(g,'じぶんの河',16,442,11,'#dceadf','#12331f',3,1,'left');
+        if(R.myRiichi){rr(g,14,454,64,20,10);g.fillStyle='#e5578a';g.fill();
+          text(g,'リーチ！',46,464,12,'#fff','center');}
+        river(g,R.myRiver,RVX,430);
+        // ルーペ (選択中の牌を拡大)
+        if(mjPhase==='select'&&sel>=0)drawLoupe(g);
         // 手牌
         if(!R.end){
           const tiles=handTiles();
@@ -5737,14 +5831,14 @@ registerGame({
               {sel:sel===t,dim:riichiArm&&keep&&keep.sh!==0}); // リーチ時: 聴牌が崩れる牌は暗転
           });
         }
-        // ボタン
+        // ボタン (3つめ=ツモぎり表示トグル)
         if(mjPhase==='select'){
           for(const b of BTNS){
             if(b.able&&!b.able())continue;
             rr(g,b.x,b.y,b.w,b.h,12);
-            g.fillStyle=b.id==='riichi'?(riichiArm?'#e5578a':'#ff8fb8'):'#ffd77a';g.fill();
+            g.fillStyle=b.id==='riichi'?(riichiArm?'#e5578a':'#ff8fb8'):b.id==='ted'?'#9ad0e8':'#ffd77a';g.fill();
             g.strokeStyle='rgba(0,0,0,.14)';g.stroke();
-            text(g,b.label(),b.x+b.w/2,b.y+b.h/2,14,'#4a3a2a','center');
+            text(g,b.label(),b.x+b.w/2,b.y+b.h/2,13,'#4a3a2a','center');
           }
         }
       },
@@ -5755,6 +5849,7 @@ registerGame({
         if(mjPhase!=='select')return;
         for(const b of BTNS)
           if(!(b.able&&!b.able())&&x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h){b.on();return;}
+        if(sel>=0&&x>=LP.x&&x<=LP.x+LP.w&&y>=LP.y&&y<=LP.y+LP.h){doDiscard(sel,false);return;} // ルーペタップ=確定
         if(y>=HY-14&&y<=HY+TH+6){
           const tiles=handTiles();
           const i=Math.floor((x-HX)/(TW+2));
@@ -5764,8 +5859,16 @@ registerGame({
               if(!c||c.sh!==0){A.bad();return;}}
             if(sel===t)doDiscard(t,false);
             else{sel=t;A.tick();}
+            return;
           }
         }
+        if(sel>=0){sel=-1;A.tick();} // 盤面のほかの場所タップ=選択解除
+      },
+      onFlick(f){ // 選択中の牌は上フリックでも捨てられる (ルーペ操作)
+        if(mjPhase==='select'&&sel>=0&&f.dy<-40&&Math.abs(f.dy)>Math.abs(f.dx))doDiscard(sel,false);
+      },
+      onKey(code,down){ // Esc: ルーペ選択解除。trueを返してコアの退出処理を抑止 (2回目のEscで従来どおり退出)
+        if(down&&code==='Escape'&&mjPhase==='select'&&sel>=0){sel=-1;A.tick();return true;}
       },
       /* レポート描画とタップ */
       finish(){
@@ -5808,7 +5911,7 @@ registerGame({
       text(g,'おわる',px+325,py+250,14,'#fff','center');
     }
     function reportTap(x,y){
-      const px=20,py=180;
+      const px=20,py=224; // draw() のパネル原点と一致させる
       if(y>=py+228&&y<=py+272){
         if(x>=px+130&&x<=px+166){page=0;A.tick();return;}
         if(x>=px+220&&x<=px+256){page=1;A.tick();return;}
@@ -5890,6 +5993,14 @@ function runMahjongTests(){
   // 採点ランク境界
   ck('rank:SS',mjRankFor(95)[1]==='SS');
   ck('rank:C',mjRankFor(10)[1]==='C');
+  // フェーズ1: 手出し/ツモぎりの記録 (河は {t,ted} オブジェクト)
+  {const R2=mjRoundNew(mulberry32(5));
+   const d=mjDrawSelf(R2);mjPlayerDiscard(R2,d.tile);
+   ck('ted:tsumogiri',R2.myRiver[0].ted===false&&R2.myRiver[0].t===d.tile);
+   const d2=mjDrawSelf(R2);
+   let other=-1;for(let t=0;t<34;t++)if(R2.my[t]>0&&t!==d2.tile){other=t;break;}
+   mjPlayerDiscard(R2,other);
+   ck('ted:tedashi',R2.myRiver[1].ted===true&&R2.myRiver[1].t===other);}
   // 局を通しでヘッドレス実行 (両者CPUポリシー) → 必ず終局しレポートが出る
   for(const seed of[7,99,2024]){
     const R=mjRoundNew(mulberry32(seed));
