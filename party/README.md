@@ -46,7 +46,15 @@ npx wrangler dev       # 既定 http://127.0.0.1:8787 で起動 (ws://127.0.0.1:
 ```sh
 node party/parity.test.mjs     # checkGomoku クライアント/サーバー一致
 node party/server.test.mjs     # サーバー権威ロジック（座席・検証・勝敗・再接続・rematch・席解放）
-# 実ランタイムE2E（任意）: npx wrangler dev を起動した状態で ws クライアントから疎通確認
+```
+
+### 実DOランタイムE2E（オンラインUI×実サーバー・16項目）
+`index.html` のオンラインUI層（makeOnlineNet/makeVsOnlineUI）を抽出し、ローカルの実DOに
+2クライアントで接続して 着席／1タップ非確定→2度タップ確定／着手ミラー／待った可否と巻き戻し／
+決着演出1回だけ／再戦オファー→承諾→新対局／退室／オセロ非合法マス拒否 を機械検証する。
+```sh
+cd party && npx wrangler dev --port 8787 --local   # 別ターミナルで起動（--local=メモリ内DO・本番に触れない）
+node party/online-e2e.test.mjs                     # [online e2e] pass=16 / fail=0 で成功
 ```
 
 ## デプロイ（★ユーザー操作が必要 — Cloudflare アカウント）

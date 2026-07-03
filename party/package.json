@@ -5,6 +5,7 @@
   "description": "PartyKit server for petit-game-park gomoku online multiplayer",
   "devDependencies": {
     "partyserver": "^0.5.8",
-    "wrangler": "^4.86.0"
+    "wrangler": "^4.86.0",
+    "ws": "^8.18.0"
   }
 }
