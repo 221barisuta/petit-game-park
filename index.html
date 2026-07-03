@@ -1440,6 +1440,8 @@ document.addEventListener('keydown',e=>{
   AudioKit.ensure();
   if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter'].includes(e.code))e.preventDefault();
   if(e.code==='Escape'){
+    // play中のゲームが true を返したら Escape を消費したとみなし、既定の退出はしない (例: 麻雀のルーペ解除)
+    if(phase==='play'&&game&&game.onKey&&game.onKey('Escape',true)===true)return;
     if($('scr-game').classList.contains('active'))quitGame();
     else if($('scr-result').classList.contains('active'))show('scr-select');
     return;
@@ -5865,8 +5867,8 @@ registerGame({
       onFlick(f){ // 選択中の牌は上フリックでも捨てられる (ルーペ操作)
         if(mjPhase==='select'&&sel>=0&&f.dy<-40&&Math.abs(f.dy)>Math.abs(f.dx))doDiscard(sel,false);
       },
-      onKey(code,down){ // Escで選択解除
-        if(down&&code==='Escape'&&mjPhase==='select'&&sel>=0){sel=-1;A.tick();}
+      onKey(code,down){ // Esc: ルーペ選択解除。trueを返してコアの退出処理を抑止 (2回目のEscで従来どおり退出)
+        if(down&&code==='Escape'&&mjPhase==='select'&&sel>=0){sel=-1;A.tick();return true;}
       },
       /* レポート描画とタップ */
       finish(){
