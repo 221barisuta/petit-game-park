@@ -2953,7 +2953,9 @@ function renderOnlineBar(){
   $('olTake').classList.toggle('hidden',!(me==='spectator'&&openSeat));
   let st='せつぞくちゅう…';
   if(s.status==='waiting')st=me==='spectator'?'たいきょくを まっています':'あいてを まっています';
-  else if(s.status==='playing')st=(g&&g.turn===me)?'あなたの ばん':(me==='spectator'?'かんせんちゅう':'あいての ばん');
+  else if(s.status==='playing'){st=(g&&g.turn===me)?'あなたの ばん':(me==='spectator'?'かんせんちゅう':'あいての ばん');
+    // #6 オセロの自動パスをオンラインでも表示 (ローカル対戦と同一文言。g.pass はオセロのみ)
+    if(g&&g.pass)st=(g.pass==='black'?'●':'○')+'は パス→ '+st;}
   else if(s.status==='ended'&&g&&g.result){st=g.result.draw?'ひきわけ':
     (g.result.winner===me?'あなたの かち！':(me==='spectator'?(g.result.winner==='black'?'●の かち':'○の かち'):'あいての かち'));
     if(me==='black'||me==='white'){const opp=me==='black'?'white':'black';
@@ -3868,6 +3870,8 @@ function runOthelloHintTests(){
 }
 registerGame({
   id:'othello', emoji:'🔴', title:'オセロ',
+  // #3 選択画面アイコン: 緑盤+黒白石2つ (小サイズで黒白判別・五目と区別)
+  iconHtml:`<svg viewBox="0 0 100 100" width="80%" height="80%" style="display:block"><rect x="8" y="8" width="84" height="84" rx="14" fill="#176a3a" stroke="#0c4a26" stroke-width="4"/><line x1="50" y1="12" x2="50" y2="88" stroke="#0c4a26" stroke-width="2.5"/><line x1="12" y1="50" x2="88" y2="50" stroke="#0c4a26" stroke-width="2.5"/><circle cx="31" cy="31" r="14" fill="#15122a"/><circle cx="69" cy="69" r="14" fill="#fbf8ef" stroke="#b7ad93" stroke-width="2.5"/></svg>`,
   desc:'2人で あそぶ オセロ (リバーシ)',
   color:'#7bc47f', type:'versus',   // duration は付けない (タイマー無し)
   howto:[
@@ -4202,7 +4206,7 @@ registerGame({
         const {black,white}=countStones(board);
         const base='●'+black+' ○'+white;
         if(result)return base+' ／ '+(result.draw?'ひきわけ':SYM[result.winner]+'の かち');
-        return base+' ／ '+(lastPass?SYM[lastPass]+'パス→':'')+SYM[players[turn].color]+'の ばん';
+        return base+' ／ '+(lastPass?SYM[lastPass]+'は パス→':'')+SYM[players[turn].color]+'の ばん'; // #6 パス文言は盤面表示と同一に
       },
       onlineBack(){screen='setup';setRoomUrl('');}, // 入室UIの「もどる」から
       destroy(){OthelloNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');setRoomUrl('');}, // ✕退出時クリーンアップ
