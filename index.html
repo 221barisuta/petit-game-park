@@ -126,29 +126,33 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 .mtab.active{color:#fff;background:linear-gradient(180deg,#7c6cf0,#5a3dd8);border-color:#3a2d56;
   box-shadow:0 1.2cqw 0 rgba(40,30,90,.5)}
 .mtab.active .tcount{background:rgba(255,255,255,.3)}
-#cardList{display:flex;flex-direction:column;gap:2.8cqw;width:100%;align-items:center}
-.gcard{position:relative;width:86cqw;background:#fff;border:1cqw solid #3a2d56;border-radius:6cqw;padding:3cqw 4cqw;
-  display:flex;align-items:center;gap:3.6cqw;text-align:left;
+#cardList{display:grid;grid-template-columns:repeat(2,1fr);gap:2.8cqw;width:86cqw} /* #4 案A: 2列グリッド */
+@media (orientation:landscape){#cardList{grid-template-columns:repeat(3,1fr)}}      /* 横持ちは3列 */
+.gcard{position:relative;background:#fff;border:1cqw solid #3a2d56;border-radius:6cqw;padding:3.4cqw 2cqw 2.8cqw;
+  display:flex;flex-direction:column;align-items:center;gap:1.6cqw;text-align:center;
   box-shadow:0 1.5cqw 0 rgba(58,45,86,.45);transition:transform .12s}
 .gcard:hover{transform:translateY(-1cqw) scale(1.02)}
 .gcard:active{transform:translateY(.6cqw) scale(.99)}
 .gcard .ic{flex:none;width:14.5cqw;height:14.5cqw;border-radius:50%;display:flex;align-items:center;justify-content:center;
   font-size:8.6cqw;background:var(--c,#ffd6a5);border:.8cqw solid rgba(0,0,0,.12);box-shadow:inset 0 -1.4cqw 0 rgba(0,0,0,.12)}
-.gcard .tx{display:flex;flex-direction:column;gap:.7cqw;min-width:0;padding-right:5cqw}
-.gcard .nm{font-size:4.6cqw;font-weight:800;color:#39304f;white-space:nowrap}
+.gcard .tx{display:flex;flex-direction:column;align-items:center;gap:1cqw;min-width:0}
+.gcard .nm{font-size:3.9cqw;font-weight:800;color:#39304f;line-height:1.2}
 .gcard.daily .nm{font-size:4.1cqw}
 .gcard .ds{font-size:3.3cqw;font-weight:700;color:#7a7090}
-.gcard .bs{font-size:3.1cqw;font-weight:800;color:#ff7a00;background:#fff3e0;border-radius:99px;padding:.5cqw 2.6cqw;align-self:flex-start}
-.gcard .vs{font-size:3.1cqw;font-weight:800;color:#fff;background:linear-gradient(180deg,#7ab0ff,#4d8cff);
-  border-radius:99px;padding:.5cqw 2.8cqw;align-self:flex-start;box-shadow:0 .5cqw 0 rgba(40,70,150,.4)}
+.gcard .bs{font-size:3.1cqw;font-weight:800;color:#ff7a00;background:#fff3e0;border-radius:99px;padding:.5cqw 2.6cqw;align-self:center}
+.gcard .vs{font-size:3cqw;font-weight:800;color:#fff;background:linear-gradient(180deg,#7ab0ff,#4d8cff);
+  border-radius:99px;padding:.5cqw 2.4cqw;align-self:center;box-shadow:0 .5cqw 0 rgba(40,70,150,.4)}
 .gcard .qbtn{position:absolute;top:1.6cqw;right:2cqw;width:9.4cqw;height:9.4cqw;border-radius:50%;
   display:flex;align-items:center;justify-content:center;
   font-size:4.4cqw;font-weight:800;color:#9a8fb8;background:#f1edfa;border:.5cqw solid #d8cfe8;
   box-shadow:0 .4cqw 0 rgba(58,45,86,.18)}
 .gcard .qbtn::after{content:'';position:absolute;inset:-3.2cqw} /* タップ領域を拡大(スマホ誤タップ対策) */
 .gcard .qbtn:active{transform:scale(.9)}
-.gcard.daily{background:linear-gradient(135deg,#fff7d6,#ffe9a8);border-color:#c98f00;
+.gcard.daily{grid-column:1/-1;flex-direction:row;text-align:left;padding:3cqw 4cqw;gap:3.6cqw; /* デイリーは全幅・従来レイアウトで目立たせる */
+  background:linear-gradient(135deg,#fff7d6,#ffe9a8);border-color:#c98f00;
   box-shadow:0 1.5cqw 0 rgba(150,100,0,.5), 0 0 4cqw rgba(255,210,60,.55)}
+.gcard.daily .tx{align-items:flex-start;padding-right:5cqw}
+.gcard.daily .bs,.gcard.daily .vs{align-self:flex-start}
 .gcard.daily .nm{color:#7a5200}
 .gcard.daily .ds{color:#9a7a30}
 .gcard.daily .badge{position:absolute;top:-2.2cqw;left:4cqw;font-size:3cqw;font-weight:800;color:#fff;
@@ -1487,7 +1491,7 @@ function buildCards(){
     c.innerHTML=`${isDaily?'<span class="badge">📅 きょうのチャレンジ</span>':''}
       <span class="ic">${def.iconHtml||def.emoji}</span>
       <span class="tx"><span class="nm">${def.title}</span>
-      <span class="ds">${isDaily?'きょうは みんな おなじもんだい！':def.desc}</span>
+      ${isDaily?'<span class="ds">きょうは みんな おなじもんだい！</span>':''}
       ${isDaily
         ? '<span class="bs" id="best-daily">きょうのベスト 0</span>'
         : def.type==='versus'
