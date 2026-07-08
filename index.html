@@ -5762,82 +5762,122 @@ function mjJudgeKind(chosen,an){ // コア共通JUDGE(スコア/コンボ)への
   return loss<=0?'perfect':loss<=4?'great':loss<=12?'good':'miss';
 }
 
-/* ---- 局の進行 (UI非依存: セルフテストでヘッドレス実行できる) ---- */
-function mjRoundNew(rng){
+/* ---- Phase2: 4人打ちの進行 (UI非依存: セルフテストでヘッドレス実行できる) ----
+   卓は seat0=自分, 1=下家, 2=対面, 3=上家。鳴きなし(門前のみ)・東風戦(既定)/半荘。
+   AI打牌は自分と同じ mjAnalyze を使用 (Phase3の手牌読み確率はこの分離点に乗せる想定) */
+const MJ4_NAMES=['あなた','下家','対面','上家'];
+function mj4ScoreValue(han,dealer){ // 簡易点数表(初版): 2000×翻 / 4翻=8000 / 5翻+=12000 / 7翻+=16000。親1.5倍
+  const base=han>=7?16000:han>=5?12000:han>=4?8000:2000*han;
+  return dealer?Math.ceil(base*1.5/100)*100:base;
+}
+function mj4GameNew(rng,hanchan){
+  return {rng,hanchan:!!hanchan,maxKyoku:hanchan?8:4,kyoku:0,
+    scores:[25000,25000,25000,25000],results:[],log:[],hintsUsed:0,noYaku:0};
+}
+const mj4KyokuLabel=g=>(g.kyoku<4?'東':'南')+((g.kyoku%4)+1)+'局';
+const mj4SeatWindOf=(dealer,s)=>27+((s-dealer+4)%4); // 親=東
+function mj4RoundNew(g){
+  const dealer=g.kyoku%4; // 連荘なし(コーチングテンポ優先)
   const wall=[];
   for(let t=0;t<34;t++)for(let k=0;k<4;k++)wall.push(t);
-  for(let i=wall.length-1;i>0;i--){const j=Math.floor(rng()*(i+1));
-    [wall[i],wall[j]]=[wall[j],wall[i]];}
-  const my=new Array(34).fill(0),cp=new Array(34).fill(0);
-  for(let i=0;i<13;i++){my[wall.pop()]++;cp[wall.pop()]++;}
-  return {wall,my,cp,myRiver:[],cpRiver:[],
-    S:mjRiverNew(),   // 自分視点: genbutsu=CPUの河
-    Sc:mjRiverNew(),  // CPU視点: genbutsu=自分の河
-    turn:1,myRiichi:0,cpRiichi:0,cpWin:[],end:null,log:[],hintsUsed:0,noYaku:0,
-    lastDraw:-1, // 直前の自摸牌 (手出し/ツモぎり判定用)
-    seatWind:27,roundWind:27};
+  for(let i=wall.length-1;i>0;i--){const j=Math.floor(g.rng()*(i+1));[wall[i],wall[j]]=[wall[j],wall[i]];}
+  const players=[];
+  for(let s=0;s<4;s++){
+    const hand=new Array(34).fill(0);
+    for(let i=0;i<13;i++)hand[wall.pop()]++;
+    players.push({hand,river:[],riichi:0,lastDraw:-1});
+  }
+  return {g,dealer,wall,players,turn:dealer,turnNo:1,end:null,
+    roundWind:g.kyoku<4?27:28,
+    visible:new Array(34).fill(0)}; // 全河の見え枚数 (増分更新・全席共有)
 }
-const mjWinCtx=(R,hand,winTile,riichi,tsumo)=>({hand,winTile,menzen:true,
-  riichi:!!riichi,tsumo,seatWind:R.seatWind,roundWind:R.roundWind});
-function mjDrawSelf(R){ // 自分のツモ → {tile,win:{han,yaku}|null}
-  const t=R.wall.pop();R.my[t]++;R.lastDraw=t;
-  if(MJ.shanten(R.my)===-1){
-    const w=MJ.judgeYaku(mjWinCtx(R,R.my,t,R.myRiichi,true));
-    if(w.han>0){R.end='tsumo';return {tile:t,win:w};}
-    R.noYaku++; // 役なし: あがれない教材ポイント
+const mj4SeatWind=(R,s)=>mj4SeatWindOf(R.dealer,s);
+const mj4WinCtx=(R,s,hand,winTile,tsumo)=>({hand,winTile,menzen:true,
+  riichi:!!R.players[s].riichi,tsumo,seatWind:mj4SeatWind(R,s),roundWind:R.roundWind});
+const mj4Threat=(R,seat)=>R.players.some((p,s)=>s!==seat&&p.riichi); // 他家のリーチ有無
+function mj4SafetyView(R,seat){ // seat視点の安全度: 現物=リーチ済み他家の河の合算
+  const S={visible:R.visible,genbutsu:new Array(34).fill(false)};
+  for(let s=0;s<4;s++){
+    if(s===seat||!R.players[s].riichi)continue;
+    for(const e of R.players[s].river)S.genbutsu[e.t]=true;
+  }
+  return S;
+}
+function mj4Draw(R,s){ // ツモ → {tile, win|null}。win時は R.end 設定
+  const p=R.players[s],t=R.wall.pop();
+  p.hand[t]++;p.lastDraw=t;
+  if(MJ.shanten(p.hand)===-1){
+    const w=MJ.judgeYaku(mj4WinCtx(R,s,p.hand,t,true));
+    if(w.han>0){R.end={type:'tsumo',seat:s,win:w,winTile:t};return {tile:t,win:w};}
+    if(s===0)R.g.noYaku++; // 役なし: あがれない教材ポイント (自分のみ表示)
   }
   return {tile:t,win:null};
 }
-function mjPlayerDiscard(R,t){ // 打牌の共通処理 → 'dealin'|null
-  R.my[t]--;R.myRiver.push({t,ted:t!==R.lastDraw}); // ted=手出し (直前の自摸牌以外を切った)
-  mjSee(R.S,t);mjThreatDiscard(R.Sc,t);
-  if(R.cpRiichi&&R.cpWin.indexOf(t)>=0){R.end='dealin';R.dealinTile=t;return 'dealin';}
+function mj4Discard(R,s,t){ // 打牌 → 'ron'|null。ロンは打牌者の下家から順 (フリテン・役なし不可)
+  const p=R.players[s];
+  p.hand[t]--;p.river.push({t,ted:t!==p.lastDraw});R.visible[t]++;
+  for(let k=1;k<4;k++){
+    const o=(s+k)%4,q=R.players[o];
+    if(MJ.shanten(q.hand)!==0)continue;
+    const wins=MJ.winTiles(q.hand);
+    if(!wins.includes(t))continue;
+    if(wins.some(wt=>q.river.some(e=>e.t===wt)))continue; // フリテン
+    q.hand[t]++;
+    const w=MJ.judgeYaku(mj4WinCtx(R,o,q.hand,t,false));
+    if(w.han>0){R.end={type:'ron',seat:o,from:s,win:w,winTile:t};return 'ron';}
+    q.hand[t]--;
+  }
   return null;
 }
-function mjCpuTurn(R){ // CPUのツモ〜打牌 → {cut,why,declared,win,ron}
-  const t=R.wall.pop();R.cp[t]++;
-  if(MJ.shanten(R.cp)===-1){
-    const w=MJ.judgeYaku(mjWinCtx(R,R.cp,t,R.cpRiichi,true));
-    if(w.han>0){R.end='cpuTsumo';return {win:w,cut:-1};}
-  }
-  let cut=t,why='リーチちゅうはツモぎり！';
-  if(!R.cpRiichi){
-    const d=mjCpuDiscard(R.cp,R.Sc,{threat:!!R.myRiichi,turn:R.turn,
-      seatWind:R.seatWind,roundWind:R.roundWind});
-    cut=d.tile;why=d.why;
-  }
-  R.cp[cut]--;R.cpRiver.push({t:cut,ted:cut!==t}); // CPU側も記録 (フェーズ3の手牌読みの土台)
-  mjThreatDiscard(R.S,cut);mjSee(R.Sc,cut);
-  let declared=false;
-  if(!R.cpRiichi&&MJ.shanten(R.cp)===0){R.cpRiichi=R.turn;declared=true;why='テンパイ！リーチ！';}
-  if(R.cpRiichi)R.cpWin=MJ.winTiles(R.cp);
-  // 自分のロン判定 (フリテンなし・役ありのみ)
-  let ron=null;
-  if(MJ.shanten(R.my)===0){
-    const myWin=MJ.winTiles(R.my);
-    const furiten=myWin.some(w=>R.myRiver.some(e=>e.t===w));
-    if(!furiten&&myWin.indexOf(cut)>=0){
-      R.my[cut]++;
-      const w=MJ.judgeYaku(mjWinCtx(R,R.my,cut,R.myRiichi,false));
-      if(w.han>0){R.end='ron';ron=w;}else R.my[cut]--;
+function mj4CpuTurn(R,s){ // AI席の1手: ツモ→(和了)→打牌→リーチ宣言。→ {tile,cut,why}
+  const d=mj4Draw(R,s);
+  if(R.end)return d;
+  const p=R.players[s];
+  if(p.riichi){mj4Discard(R,s,d.tile);return {...d,cut:d.tile,why:'ツモぎり'};}
+  const an=mjAnalyze(p.hand,mj4SafetyView(R,s),
+    {threat:mj4Threat(R,s),turn:R.turnNo,seatWind:mj4SeatWind(R,s),roundWind:R.roundWind});
+  const cut=an.cands[0].tile;
+  if(mj4Discard(R,s,cut)==='ron')return {...d,cut,why:''};
+  let why=an.cands[0].sh===0?'テンパイ！':'手なり';
+  if(!p.riichi&&MJ.shanten(p.hand)===0){p.riichi=R.turnNo;why='リーチ！';}
+  return {...d,cut,why};
+}
+function mj4Settle(R){ // 局の清算(ゼロサム) → moves[4]。g.results へ局サマリ、kyoku++
+  const g=R.g,moves=[0,0,0,0];
+  if(R.end&&(R.end.type==='tsumo'||R.end.type==='ron')){
+    const s=R.end.seat,v=mj4ScoreValue(R.end.win.han,s===R.dealer);
+    if(R.end.type==='ron'){moves[s]+=v;moves[R.end.from]-=v;}
+    else{const per=Math.ceil(v/300)*100;moves[s]+=per*3;for(let o=0;o<4;o++)if(o!==s)moves[o]-=per;}
+  }else{
+    const ten=R.players.map(p=>MJ.shanten(p.hand)<=0);
+    const n=ten.filter(Boolean).length;
+    R.end={type:'ryuukyoku',tenpai:ten};
+    if(n>0&&n<4){ // 標準のノーテン罰符(計3000・ゼロサム): 1人聴牌+3000 / 2人±1500 / 3人+1000
+      const get={1:3000,2:1500,3:1000}[n],pay={3:1000,2:1500,1:3000}[4-n];
+      for(let i=0;i<4;i++)moves[i]+=ten[i]?get:-pay;
     }
   }
-  return {cut,why,declared,win:null,ron};
+  for(let i=0;i<4;i++)g.scores[i]+=moves[i];
+  g.results.push({label:mj4KyokuLabel(g),end:R.end,moves:moves.slice(),dealer:R.dealer});
+  g.kyoku++;
+  return moves;
 }
-/* ---- 局後レポート (A-6) ---- */
-const MJ_ADJ=[ // 加減点テーブル
-  {label:'和了ボーナス',pts:6,count:R=>R.end==='tsumo'||R.end==='ron'?1:0},
-  {label:'流局時テンパイ',pts:3,count:R=>R.end==='ryuukyoku'&&MJ.shanten(R.my)===0?1:0},
-  {label:'ほうじゅう',pts:-6,count:R=>R.end==='dealin'?1:0},
-  {label:'リーチみのがし',pts:-3,count:R=>Math.min(3,R.log.filter(l=>l.couldRiichi&&!l.riichied&&!l.auto).length)},
-  {label:'ヒントにたよった',pts:-1,count:R=>Math.min(5,R.hintsUsed)},
+const mj4Ranking=g=>[0,1,2,3].sort((a,b)=>g.scores[b]-g.scores[a]); // 席順タイブレークは席番
+
+/* ---- 対局後レポート (Phase2: 局ではなく対局全体を採点) ---- */
+const MJ_ADJ=[ // 加減点テーブル (S: {log,hintsUsed,wins,dealins,tenpaiRyu})
+  {label:'和了ボーナス',pts:6,count:S=>S.wins||0},
+  {label:'ほうじゅう',pts:-6,count:S=>S.dealins||0},
+  {label:'流局時テンパイ',pts:3,count:S=>S.tenpaiRyu||0},
+  {label:'リーチみのがし',pts:-3,count:S=>Math.min(3,S.log.filter(l=>l.couldRiichi&&!l.riichied&&!l.auto).length)},
+  {label:'ヒントにたよった',pts:-1,count:S=>Math.min(5,S.hintsUsed||0)},
 ];
-function mjReport(R){
-  const judged=R.log.filter(l=>!l.auto);
+function mjReport(S){
+  const judged=S.log.filter(l=>!l.auto);
   const opt=judged.filter(l=>l.kind==='perfect').length;
   let sc=judged.length?judged.reduce((a,l)=>a+l.tscore,0)/judged.length:70;
   const adj=[];
-  for(const a of MJ_ADJ){const n=a.count(R);
+  for(const a of MJ_ADJ){const n=a.count(S);
     if(n){adj.push({label:a.label,pts:a.pts*n});sc+=a.pts*n;}}
   sc=clamp(Math.round(sc),0,100);
   const worst=judged.filter(l=>l.kind!=='perfect')
@@ -5845,7 +5885,7 @@ function mjReport(R){
   return {score:sc,rank:mjRankFor(sc),opt,total:judged.length,adj,worst,
     optRate:judged.length?opt/judged.length:1};
 }
-/* 成長トラッキング (B-9): 直近の局から弱点を1つ提案 (gameHintと同じ思想のテーブル) */
+/* 成長トラッキング: 直近対局から弱点を1つ提案 */
 const MJ_WEAK=[
   {hit:h=>h.avgOpt<0.45,label:'きるまえに「うけいれ何枚?」をくらべるクセをつけよう'},
   {hit:h=>h.lateRi>=2,label:'テンパイしたら まずリーチをけんとうしよう'},
@@ -5861,6 +5901,7 @@ function mjWeakness(hist){
   for(const w of MJ_WEAK)if(w.hit(agg))return w.label;
 }
 
+/* ---- ここからUI ---- */
 /* ---- リアル牌描画 (フェーズ1) ----
    mjRenderTile(g, tileId, x, y, w, h, opts)
    tileId: int 0-33 (0-8=萬1-9 / 9-17=筒1-9 / 18-26=索1-9 / 27-33=東南西北白發中)
@@ -5943,121 +5984,136 @@ function mjRenderTile(g,t,x,y,w,h,o){
 /* ---- ここからUI ---- */
 registerGame({
   id:'mahjong',emoji:'🀄',title:'なぜきり麻雀どうじょう',
-  desc:'「なぜその牌をきる？」りゆうを学べる1人用コーチ',
+  desc:'「なぜその牌をきる？」りゆうを学べる4人打ちコーチ',
   color:'#b8e0d2',duration:null,
   howto:[
-    ['🀄','ツモって1まいすてる をくりかえそう'],
+    ['🀄','4人打ち！ツモって1まいすてる をくりかえそう'],
     ['🔍','牌をタップでルーペ→もう一度タップ か ⬆フリックで すてる'],
-    ['🌗','ツモぎりの牌は 河でうすく表示（ボタンで切替）'],
-    ['🎯','コーチが1打ごとに「なぜ？」を採点してくれる'],
-    ['💡','まよったらヒントで受け入れ枚数をみられる'],
-    ['🤖','CPUがリーチしたら 現物・スジでおりるれんしゅう！'],
-    ['📊','局がおわると SS〜C の添削レポート！'],
+    ['🎯','コーチが1打ごとに「なぜ？」を採点。局をまたいで添削レポート！'],
+    ['🀅','親は点数1.5倍。場風・自風の役牌もヒントに反映されるよ'],
+    ['⚙️','はじまる前に画面上の「東風戦」をタップで半荘に切替'],
   ],
   create(ctx){
     const A=ctx.audio,RNG=ctx.rng;
-    const R=mjRoundNew(RNG);
-    let mjPhase='draw',sel=-1,an=null,drawn=-1,fb=null,timer=0;
-    let hintOn=ctx.rookie,riichiArm=false,endInfo=null,rep=null,page=0,cpuWhy='はじめよう！';
-    let tedashiShow=store.get('pgp2_mj_tedashi','1')==='1'; // 🌗ツモぎりグレー表示 (トグル永続)
-    const TW=27,TH=44,HX=8,HY=576;                       // 手牌レイアウト
-    const RW=24,RH=30;                                   // 河レイアウト (1行6枚×4段=最大24打)
-    const RVX=(W-(6*(RW+2)-2))/2;                        // 河のx原点 (中央寄せ)
-    const LP={x:W/2-105,y:340,w:210,h:196};              // ルーペ表示枠
-    const FELT=(()=>{ // 卓 (フェルト+ノイズ+木目縁)。生成1回のオフスクリーンcanvas
+    let hanchan=store.get('pgp2_mj_hanchan','0')==='1';
+    let G=mj4GameNew(RNG,hanchan);
+    let R=mj4RoundNew(G);
+    let mjPhase='draw',sel=-1,an=null,drawn=-1,fb=null,timer=0,aiSeat=0,aiInfo=null;
+    let hintOn=ctx.rookie,riichiArm=false,rep=null,page=0,kyokuMoves=null;
+    let tedashiShow=store.get('pgp2_mj_tedashi','1')==='1';
+    const TW=27,TH=44,HX=8,HY=576;
+    const RW=22,RH=28;                       // 自河 (6枚×4段・+N省略)
+    const OW=14,OH=19;                       // 他家の河 (ミニ)
+    const LP={x:W/2-105,y:330,w:210,h:196};  // ルーペ
+    const FELT=(()=>{ // 卓 (フェルト+木目縁)。生成1回
       const c=document.createElement('canvas');c.width=W;c.height=H;
       const f=c.getContext('2d');
       const gr=f.createRadialGradient(W/2,H*.42,60,W/2,H*.5,H*.8);
       gr.addColorStop(0,'#2f7d4e');gr.addColorStop(1,'#1b5232');
       f.fillStyle=gr;f.fillRect(0,0,W,H);
       const rnd=mulberry32(7);
-      f.globalAlpha=.05; // 布目のノイズ質感
-      for(let i=0;i<1600;i++){f.fillStyle=rnd()<.5?'#000':'#fff';
-        f.fillRect(rnd()*W,rnd()*H,1.4,1.4);}
+      f.globalAlpha=.05;
+      for(let i=0;i<1600;i++){f.fillStyle=rnd()<.5?'#000':'#fff';f.fillRect(rnd()*W,rnd()*H,1.4,1.4);}
       f.globalAlpha=1;
-      f.strokeStyle='#5d3f22';f.lineWidth=18;rr(f,3,3,W-6,H-6,22);f.stroke(); // 木目調の縁
+      f.strokeStyle='#5d3f22';f.lineWidth=18;rr(f,3,3,W-6,H-6,22);f.stroke();
       f.strokeStyle='#7a5631';f.lineWidth=9;rr(f,8,8,W-16,H-16,17);f.stroke();
       f.strokeStyle='rgba(255,235,200,.18)';f.lineWidth=2;rr(f,11,11,W-22,H-22,15);f.stroke();
       f.strokeStyle='rgba(0,0,0,.3)';f.lineWidth=2;rr(f,17,17,W-34,H-34,12);f.stroke();
       return c;})();
-    const BTNS=[ // 画面下ボタン (onDownでヒットテスト)
+    const BTNS=[
       {id:'hint',x:8,y:624,w:126,h:44,label:()=>hintOn?'💡ヒント中':'💡ヒント',
-        on:()=>{if(!hintOn){hintOn=true;R.hintsUsed++;A.pop();}else{hintOn=false;A.tick();}}},
+        on:()=>{if(!hintOn){hintOn=true;G.hintsUsed++;A.pop();}else{hintOn=false;A.tick();}}},
       {id:'riichi',x:142,y:624,w:126,h:44,label:()=>riichiArm?'リーチやめる':'リーチ！',
-        able:()=>mjPhase==='select'&&!R.myRiichi&&an&&an.cands.some(c=>c.sh===0),
+        able:()=>mjPhase==='select'&&!R.players[0].riichi&&an&&an.cands.some(c=>c.sh===0),
         on:()=>{riichiArm=!riichiArm;sel=-1;A.go();}},
       {id:'ted',x:276,y:624,w:136,h:44,label:()=>'🌗ツモぎり:'+(tedashiShow?'うすく':'同じ'),
         on:()=>{tedashiShow=!tedashiShow;store.set('pgp2_mj_tedashi',tedashiShow?'1':'0');A.tick();}},
     ];
-    const handTiles=()=>{const o=[];for(let t=0;t<34;t++)for(let k=0;k<R.my[t];k++)o.push(t);return o;};
-    function startTurn(){
-      if(R.wall.length<=14){R.end='ryuukyoku';finishRound();return;}
-      const d=mjDrawSelf(R);
+    const me=()=>R.players[0];
+    const handTiles=()=>{const o=[];for(let t=0;t<34;t++)for(let k=0;k<me().hand[t];k++)o.push(t);return o;};
+    const gameStarted=()=>G.kyoku>0||R.players.some(p=>p.river.length>0);
+
+    function startMyTurn(){ // 自分の番: 壁チェック→ツモ→分析
+      if(R.wall.length<=14){endKyoku();return;}
+      const d=mj4Draw(R,0);
       drawn=d.tile;sel=-1;riichiArm=false;
-      if(R.end){endInfo=d.win;finishRound();return;}
-      an=mjAnalyze(R.my,R.S,{threat:!!R.cpRiichi,turn:R.turn,
-        seatWind:R.seatWind,roundWind:R.roundWind});
-      if(R.myRiichi){ // リーチ後はツモぎり
-        doDiscard(drawn,true);
-        return;
-      }
+      if(R.end){endKyoku();return;}
+      an=mjAnalyze(me().hand,mj4SafetyView(R,0),
+        {threat:mj4Threat(R,0),turn:R.turnNo,seatWind:mj4SeatWind(R,0),roundWind:R.roundWind});
+      if(me().riichi){doDiscard(drawn,true);return;} // リーチ後ツモぎり
       mjPhase='select';
     }
     function doDiscard(t,auto){
       const chosen=an.cands.find(c=>c.tile===t);
       const kind=mjJudgeKind(chosen,an);
-      const couldRiichi=!R.myRiichi&&an.cands.some(c=>c.sh===0);
-      if(!auto){
-        ctx.judge(kind,HX+7+handTiles().indexOf(t)*(TW+2),HY,
-          kind==='perfect'?{sub:'さいてき！'}:undefined);
-      }
-      R.log.push({n:R.turn,cut:t,kind,auto:!!auto,tscore:mjTurnScore(chosen,an),
-        best:an.cands[0].tile,threat:!!R.cpRiichi,couldRiichi,
-        riichied:riichiArm||!!R.myRiichi,
-        myReason:mjReason(chosen,an,!!R.cpRiichi),
-        bestReason:mjReason(an.cands[0],an,!!R.cpRiichi)});
-      if(riichiArm&&chosen.sh===0){R.myRiichi=R.turn;A.fever();}
+      const couldRiichi=!me().riichi&&an.cands.some(c=>c.sh===0);
+      if(!auto)ctx.judge(kind,HX+7+handTiles().indexOf(t)*(TW+2),HY,
+        kind==='perfect'?{sub:'さいてき！'}:undefined);
+      G.log.push({n:R.turnNo,kyoku:mj4KyokuLabel(G),cut:t,kind,auto:!!auto,
+        tscore:mjTurnScore(chosen,an),best:an.cands[0].tile,threat:mj4Threat(R,0),
+        couldRiichi,riichied:riichiArm||!!me().riichi,
+        myReason:mjReason(chosen,an,mj4Threat(R,0)),
+        bestReason:mjReason(an.cands[0],an,mj4Threat(R,0))});
+      if(riichiArm&&chosen.sh===0){me().riichi=R.turnNo;A.fever();}
       riichiArm=false;sel=-1;
-      const res=mjPlayerDiscard(R,t);
-      if(res==='dealin'){finishRound();return;}
-      fb={chosen,an:an,auto:!!auto};
-      mjPhase='fb';timer=auto?.55:0;
+      if(mj4Discard(R,0,t)==='ron'){endKyoku();return;}
+      fb={chosen,an,auto:!!auto};
+      mjPhase='fb';timer=auto?.5:0;
     }
-    function cpuStep(){
-      if(R.wall.length<=14){R.end='ryuukyoku';finishRound();return;}
-      const r=mjCpuTurn(R);
-      if(R.end){endInfo=r.win||r.ron;finishRound();return;}
-      cpuWhy=r.why;
-      if(r.declared)A.bad();
-      R.turn++;
-      startTurn();
+    function stepAi(){ // AI1席ずつ進める (0.4sずつ見せる)
+      const s=aiSeat;
+      if(R.wall.length<=14){endKyoku();return;}
+      const r=mj4CpuTurn(R,s);
+      aiInfo={seat:s,why:r.why||''};
+      if(R.end){endKyoku();return;}
+      if(r.why==='リーチ！')A.bad();
+      if(s===3){R.turnNo++;mjPhase='draw';timer=.35;} // 一周 → 自分へ
+      else{aiSeat=s+1;timer=.4;}
     }
-    function finishRound(){
-      rep=mjReport(R);page=0;
-      rep.finalSh=MJ.shanten(R.my);sel=-1;
-      // 成長履歴 (直近20局)
+    function endKyoku(){
+      kyokuMoves=mj4Settle(R);
+      mjPhase='kyokuEnd';sel=-1;
+      const e=G.results[G.results.length-1].end;
+      const msg=e.type==='tsumo'?(e.seat===0?'ツモ和了！🎉':MJ4_NAMES[e.seat]+'のツモ')
+        :e.type==='ron'?(e.seat===0?'ロン和了！🎉':(e.from===0?'ほうじゅう…！💥':MJ4_NAMES[e.seat]+'のロン'))
+        :'流局';
+      banner(msg);
+      (e.seat===0&&(e.type==='tsumo'||e.type==='ron'))?A.record():(e.type==='ron'&&e.from===0)?A.miss():A.ok();
+    }
+    function nextKyoku(){
+      if(G.kyoku>=G.maxKyoku){finishGame();return;}
+      R=mj4RoundNew(G);
+      an=null;fb=null;aiSeat=R.turn===0?0:R.turn;
+      if(R.turn===0){mjPhase='draw';timer=.3;}
+      else{mjPhase='ai';aiSeat=R.turn;timer=.4;}
+    }
+    function finishGame(){
+      rep=mjReport({log:G.log,hintsUsed:G.hintsUsed,
+        wins:G.results.filter(x=>x.end.seat===0&&(x.end.type==='tsumo'||x.end.type==='ron')).length,
+        dealins:G.results.filter(x=>x.end.type==='ron'&&x.end.from===0).length,
+        tenpaiRyu:G.results.filter(x=>x.end.type==='ryuukyoku'&&x.end.tenpai[0]).length});
+      const rank=mj4Ranking(G).indexOf(0)+1;
+      rep.rank4=rank;rep.finalScore=G.scores[0];page=0;
       let hist=[];try{hist=JSON.parse(store.get('pgp2_mj_hist','[]'))||[];}catch(e){}
       hist.push({r:rep.rank[1],opt:rep.optRate,
-        lateRi:R.log.filter(l=>l.couldRiichi&&!l.riichied&&!l.auto).length?1:0,
-        dealin:R.end==='dealin'?1:0});
+        lateRi:G.log.filter(l=>l.couldRiichi&&!l.riichied&&!l.auto).length?1:0,
+        dealin:G.results.some(x=>x.end.type==='ron'&&x.end.from===0)?1:0});
       store.set('pgp2_mj_hist',JSON.stringify(hist.slice(-20)));
       rep.weak=mjWeakness(hist);rep.hist=hist;
-      mjPhase='end';timer=0;
-      const msg={tsumo:'ツモ和了！🎉',ron:'ロン和了！🎉',dealin:'ほうじゅう…！💥',
-        cpuTsumo:'CPUのツモ和了…',ryuukyoku:MJ.shanten(R.my)<=0?'流局(テンパイ)':'流局'}[R.end];
-      banner(msg);
-      (R.end==='tsumo'||R.end==='ron')?A.record():A.miss();
+      mjPhase='report';
+      banner(rank+'位！ コーチランク'+rep.rank[1]);
     }
-    startTurn();
-    /* ---- 描画 (rr は共通ヘルパーを使用) ---- */
+    // 初期: 東1局は親=seat0 → 自分から
+    mjPhase='draw';timer=.3;
+
     const tile=(g,x,y,w,h,t,o)=>mjRenderTile(g,t,x,y,w,h,o&&o.dim?Object.assign({ghost:true},o):o);
-    function river(g,list,x0,y0){ // 河: 1行6枚で改行・表示は最新24枚(4段)まで。座標を引数化 (将来の4人分表示用)
-      const over=list.length-24, show=over>0?list.slice(-24):list; // 25打目以降は古い方から省略 (+N表示)
-      if(over>0)outlinedText(g,'+'+over,x0-8,y0+12,11,'#ffd77a','#12331f',3,1,'right');
-      show.forEach((e,i)=>tile(g,x0+(i%6)*(RW+2),y0+((i/6)|0)*(RH+3),RW,RH,e.t,
-        tedashiShow&&!e.ted?{gray:true}:null)); // ツモぎりはグレーアウト (トグル可)
+    function river(g,list,x0,y0,w,h,cap){ // 1行6枚・最新cap枚(+N)
+      const px=w+2,py=h+3,over=list.length-cap,show=over>0?list.slice(-cap):list;
+      if(over>0)outlinedText(g,'+'+over,x0-6,y0+10,10,'#ffd77a','#12331f',3,1,'right');
+      show.forEach((e,i)=>tile(g,x0+(i%6)*px,y0+((i/6)|0)*py,w,h,e.t,
+        tedashiShow&&!e.ted?{gray:true}:null));
     }
-    function drawLoupe(g){ // ルーペ: 選択牌を拡大表示 (スマホでの視認用)
+    function drawLoupe(g){
       rr(g,LP.x,LP.y,LP.w,LP.h,14);
       g.fillStyle='rgba(253,252,244,.97)';g.fill();
       g.strokeStyle='#b0a48e';g.lineWidth=2;g.stroke();
@@ -6079,82 +6135,101 @@ registerGame({
       g.fillStyle='#eee6d6';g.fillRect(bx+20,y+2,120,11);
       g.fillStyle=['#ffd23f','#7cf29c','#8fd0ff'][idx]||'#8fd0ff';
       g.fillRect(bx+20,y+2,120*clamp(c.total,0,100)/100,11);
-      text(g,mjReason(c,an,threat).join(' '),bx,y+26,10.5,'#555');
+      text(g,mjReason(c,an,mj4Threat(R,0)).join(' '),bx,y+26,10.5,'#555');
+    }
+    function drawOpp(g,s,x){ // 他家1人分 (名前/点/リーチ/ミニ河)
+      const p=R.players[s],active=mjPhase==='ai'&&aiSeat===s;
+      outlinedText(g,MJ4_NAMES[s]+(R.dealer===s?'(親)':''),x,66,11,active?'#ffd77a':'#fff','#12331f',3,1,'left');
+      outlinedText(g,G.scores[s]+'点',x,80,10,'#dceadf','#12331f',3,1,'left');
+      if(p.riichi){rr(g,x+66,58,54,14,7);g.fillStyle='#e5578a';g.fill();
+        text(g,'リーチ',x+93,65,9,'#fff','center');}
+      river(g,p.river,x,88,OW,OH,18); // ミニ河は最新18枚
     }
     return {
       update(dt){
-        if(mjPhase==='fb'&&fb.auto){timer-=dt;if(timer<=0){fb=null;mjPhase='cpu';timer=.45;}}
-        else if(mjPhase==='cpu'){timer-=dt;if(timer<=0)cpuStep();}
+        if(mjPhase==='fb'&&fb&&fb.auto){timer-=dt;if(timer<=0){fb=null;mjPhase='ai';aiSeat=1;timer=.4;}}
+        else if(mjPhase==='draw'){timer-=dt;if(timer<=0)startMyTurn();}
+        else if(mjPhase==='ai'){timer-=dt;if(timer<=0)stepAi();}
       },
       draw(g){
-        g.drawImage(FELT,0,0); // 卓 (フェルト+木目縁。生成は1回だけ)
-        // 情報行 (中央はコアHUDのスコアが占有するので左右端のみ使う)
-        outlinedText(g,R.turn+'じゅんめ',16,52,15,'#fff','#12331f',4,1,'left');
-        outlinedText(g,'のこり'+Math.max(0,R.wall.length-14)+'牌',W-16,52,13,'#dceadf','#12331f',4,1,'right');
-        // CPUゾーン (河は1行6枚×4段)
-        outlinedText(g,'🤖コーチ',16,72,14,'#fff','#12331f',4,1,'left');
-        if(R.cpRiichi){rr(g,96,62,64,20,10);g.fillStyle='#e5578a';g.fill();
-          text(g,'リーチ！',128,72,12,'#fff','center');}
-        river(g,R.cpRiver,RVX,74);
-        // コーチパネル (レポート/終了時は縦に拡張)
-        panel(g,8,208,W-16,(mjPhase==='report'||mjPhase==='end')?320:218);
-        const px=20,py=224;
-        if(an&&!R.end)text(g,(an.shMin===0?'テンパイ！':an.shMin+'シャンテン'),W-28,py+2,14,
+        g.drawImage(FELT,0,0);
+        outlinedText(g,mj4KyokuLabel(G)+(hanchan?'(半荘)':'(東風)'),16,50,14,'#fff','#12331f',4,1,'left');
+        outlinedText(g,'のこり'+Math.max(0,R.wall.length-14)+'牌',W-16,50,12,'#dceadf','#12331f',3,1,'right');
+        if(!gameStarted()){ // 上部HUD(BEST)と重ならない河下の空きにチップ表示 (タップ域と一致)
+          rr(g,W/2-88,148,176,24,12);g.fillStyle='rgba(18,51,31,.78)';g.fill();
+          g.strokeStyle='#ffd77a';g.lineWidth=1;g.stroke();
+          outlinedText(g,'⚙️ タップで 東風⇄半荘',W/2,160,11,'#ffd77a','#12331f',3,1,'center');
+        }
+        drawOpp(g,3,14);drawOpp(g,2,150);drawOpp(g,1,286); // 上家/対面/下家
+        // コーチパネル
+        const tall=(mjPhase==='report'||mjPhase==='kyokuEnd');
+        panel(g,8,176,W-16,tall?320:212);
+        const px=20,py=192;
+        if(an&&!R.end&&mjPhase==='select')text(g,(an.shMin===0?'テンパイ！':an.shMin+'シャンテン'),W-28,py+2,14,
           an.shMin===0?'#e5578a':'#5a7a6a','right');
         if(mjPhase==='select'){
-          if(riichiArm){
-            text(g,'リーチ宣言！テンパイをたもつ牌をえらぼう',px,py+2,13.5,'#e5578a');
-          }else{
-            text(g,'どれをきる？(タップ→もう一度 か ⬆で確定)',px,py+2,13.5,'#3a3f52');
-          }
-          text(g,'🤖「'+cpuWhy+'」',px,py+22,11.5,'#5a7a6a');
-          if(R.cpRiichi)text(g,'⚠️リーチ警戒中: 安全度も考えよう',px,py+40,12.5,'#c0392b');
-          if(R.noYaku)text(g,'※役なしは和了できない',W-28,py+40,11.5,'#8a6a2a','right');
+          if(riichiArm)text(g,'リーチ宣言！テンパイをたもつ牌をえらぼう',px,py+2,13.5,'#e5578a');
+          else text(g,'どれをきる？(タップ→もう一度 か ⬆で確定)',px,py+2,13.5,'#3a3f52');
+          if(mj4Threat(R,0))text(g,'⚠️リーチ警戒中: 安全度も考えよう',px,py+22,12.5,'#c0392b');
+          if(G.noYaku)text(g,'※役なしは和了できない',W-28,py+22,11.5,'#8a6a2a','right');
           if(hintOn&&an){
-            text(g,'💡コーチのおすすめ:',px,py+58,12.5,'#7a6a3a');
-            an.cands.slice(0,3).forEach((c,i)=>candRow(g,px,py+72+i*38,c,i,!!R.cpRiichi));
+            text(g,'💡コーチのおすすめ:',px,py+42,12.5,'#7a6a3a');
+            an.cands.slice(0,3).forEach((c,i)=>candRow(g,px,py+56+i*38,c,i,mj4Threat(R,0)));
             text(g,'総合 = 効率'+Math.round(an.weights.eff*100)+'% + 安全'+
-              Math.round(an.weights.safe*100)+'% (押し引き表より)',px,py+190,10.5,'#999');
+              Math.round(an.weights.safe*100)+'% (押し引き表より)',px,py+174,10.5,'#999');
           }else{
-            text(g,'💡ヒントで受け入れ枚数と理由がみられる',px,py+70,12,'#999');
+            text(g,'💡ヒントで受け入れ枚数と理由がみられる',px,py+60,12,'#999');
           }
         }else if(mjPhase==='fb'&&fb){
           const c=fb.chosen,b=fb.an.cands[0];
           if(fb.auto){text(g,'リーチちゅう: ツモぎり',px,py+8,14,'#e5578a');}
           else{
             text(g,'あなた: '+MJ.NAMES[c.tile]+'ぎり',px,py+2,15,'#3a3f52');
-            mjReason(c,fb.an,!!R.cpRiichi).forEach((s,i)=>text(g,s,px+8,py+26+i*19,12.5,'#555'));
+            mjReason(c,fb.an,mj4Threat(R,0)).forEach((s2,i)=>text(g,s2,px+8,py+24+i*18,12,'#555'));
             const same=c.tile===b.tile;
             text(g,same?'◎これが最適打！':'◎最適は '+MJ.NAMES[b.tile]+'ぎりだった',
-              px,py+96,15,same?'#e5a000':'#c0392b');
-            if(!same)mjReason(b,fb.an,!!R.cpRiichi).forEach((s,i)=>
-              text(g,s,px+8,py+120+i*19,12.5,'#7a5a2a'));
-            text(g,'タップですすむ ▶',W-30,py+186,13,'#999','right');
+              px,py+88,14.5,same?'#e5a000':'#c0392b');
+            if(!same)mjReason(b,fb.an,mj4Threat(R,0)).forEach((s2,i)=>text(g,s2,px+8,py+110+i*18,12,'#7a5a2a'));
+            text(g,'タップですすむ ▶',W-30,py+182,12.5,'#999','right');
           }
-        }else if(mjPhase==='end'&&rep){
-          text(g,'きょくしゅうりょう！',px,py+10,16,'#3a3f52');
-          text(g,'タップでレポートへ ▶',W/2,py+120,14,'#7a6a3a','center');
+        }else if(mjPhase==='ai'){
+          text(g,MJ4_NAMES[aiSeat]+'の番…',px,py+8,14,'#3a3f52');
+          if(aiInfo&&aiInfo.why)text(g,'🤖'+MJ4_NAMES[aiInfo.seat]+'「'+aiInfo.why+'」',px,py+32,12,'#5a7a6a');
+        }else if(mjPhase==='kyokuEnd'){
+          const res=G.results[G.results.length-1],e=res.end;
+          text(g,res.label+' けっか',px,py+4,15,'#3a3f52');
+          if(e.type==='ryuukyoku'){
+            text(g,'流局 ('+e.tenpai.map((t,i)=>t?MJ4_NAMES[i]:null).filter(Boolean).join('・')+' テンパイ)',px,py+28,12.5,'#555');
+          }else{
+            text(g,MJ4_NAMES[e.seat]+' '+(e.type==='tsumo'?'ツモ':'ロン'+(e.from!=null?'('+MJ4_NAMES[e.from]+'から)':''))+
+              ' '+e.win.han+'翻',px,py+28,13,'#555');
+            text(g,e.win.yaku.map(y=>y.name).join('・'),px,py+48,11.5,'#7a5a2a');
+          }
+          [0,1,2,3].forEach(i=>{
+            const mv=res.moves[i];
+            text(g,MJ4_NAMES[i]+(res.dealer===i?'(親)':''),px,py+78+i*22,12.5,'#3a3f52');
+            text(g,G.scores[i]+'点',px+150,py+78+i*22,12.5,'#3a3f52');
+            if(mv)text(g,(mv>0?'+':'')+mv,px+280,py+78+i*22,12.5,mv>0?'#2a7a3a':'#c0392b');
+          });
+          text(g,G.kyoku>=G.maxKyoku?'タップで最終レポートへ ▶':'タップで次の局へ ▶',W/2,py+186,13,'#7a6a3a','center');
         }else if(mjPhase==='report'&&rep){
           drawReport(g,px,py);
         }
-        // 自分の河 + リーチ棒
-        outlinedText(g,'じぶんの河',16,442,11,'#dceadf','#12331f',3,1,'left');
-        if(R.myRiichi){rr(g,14,454,64,20,10);g.fillStyle='#e5578a';g.fill();
-          text(g,'リーチ！',46,464,12,'#fff','center');}
-        river(g,R.myRiver,RVX,430);
-        // ルーペ (選択中の牌を拡大)
+        // 自分ゾーン
+        outlinedText(g,'あなた'+(R.dealer===0?'(親)':'')+' '+G.scores[0]+'点',16,404,12,'#fff','#12331f',3,1,'left');
+        if(me().riichi){rr(g,150,396,64,16,8);g.fillStyle='#e5578a';g.fill();
+          text(g,'リーチ！',182,404,10,'#fff','center');}
+        river(g,me().river,W/2-((RW+2)*6-2)/2,414,RW,RH,24);
         if(mjPhase==='select'&&sel>=0)drawLoupe(g);
-        // 手牌
-        if(!R.end){
+        if(mjPhase!=='report'&&mjPhase!=='kyokuEnd'){
           const tiles=handTiles();
           tiles.forEach((t,i)=>{
             const isDrawn=mjPhase==='select'&&i===tiles.lastIndexOf(drawn);
             const keep=an&&an.cands.find(c=>c.tile===t);
             tile(g,HX+i*(TW+2)+(isDrawn?3:0),HY-(sel===t?8:0),TW,TH,t,
-              {sel:sel===t,dim:riichiArm&&keep&&keep.sh!==0}); // リーチ時: 聴牌が崩れる牌は暗転
+              {sel:sel===t,dim:riichiArm&&keep&&keep.sh!==0});
           });
         }
-        // ボタン (3つめ=ツモぎり表示トグル)
         if(mjPhase==='select'){
           for(const b of BTNS){
             if(b.able&&!b.able())continue;
@@ -6166,13 +6241,19 @@ registerGame({
         }
       },
       onDown(x,y){
-        if(mjPhase==='fb'&&!fb.auto){fb=null;mjPhase='cpu';timer=.4;A.tick();return;}
-        if(mjPhase==='end'){mjPhase='report';A.pop();return;}
+        if(mjPhase==='fb'&&fb&&!fb.auto){fb=null;mjPhase='ai';aiSeat=1;timer=.35;A.tick();return;}
+        if(mjPhase==='kyokuEnd'){nextKyoku();A.pop();return;}
         if(mjPhase==='report'){reportTap(x,y);return;}
+        if(!gameStarted()&&y>=144&&y<=176&&x>W/2-90&&x<W/2+90){ // 東風/半荘トグル (開始前のみ)
+          hanchan=!hanchan;store.set('pgp2_mj_hanchan',hanchan?'1':'0');
+          G=mj4GameNew(RNG,hanchan);R=mj4RoundNew(G);
+          an=null;fb=null;sel=-1;drawn=-1;riichiArm=false; // 配り直した局に合わせて手番状態も戻す
+          mjPhase='draw';timer=.3;A.pop();return;
+        }
         if(mjPhase!=='select')return;
         for(const b of BTNS)
           if(!(b.able&&!b.able())&&x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h){b.on();return;}
-        if(sel>=0&&x>=LP.x&&x<=LP.x+LP.w&&y>=LP.y&&y<=LP.y+LP.h){doDiscard(sel,false);return;} // ルーペタップ=確定
+        if(sel>=0&&x>=LP.x&&x<=LP.x+LP.w&&y>=LP.y&&y<=LP.y+LP.h){doDiscard(sel,false);return;}
         if(y>=HY-14&&y<=HY+TH+6){
           const tiles=handTiles();
           const i=Math.floor((x-HX)/(TW+2));
@@ -6185,48 +6266,46 @@ registerGame({
             return;
           }
         }
-        if(sel>=0){sel=-1;A.tick();} // 盤面のほかの場所タップ=選択解除
+        if(sel>=0){sel=-1;A.tick();}
       },
-      onFlick(f){ // 選択中の牌は上フリックでも捨てられる (ルーペ操作)
+      onFlick(f){
         if(mjPhase==='select'&&sel>=0&&f.dy<-40&&Math.abs(f.dy)>Math.abs(f.dx))doDiscard(sel,false);
       },
-      onKey(code,down){ // Esc: ルーペ選択解除。trueを返してコアの退出処理を抑止 (2回目のEscで従来どおり退出)
+      onKey(code,down){
         if(down&&code==='Escape'&&mjPhase==='select'&&sel>=0){sel=-1;A.tick();return true;}
       },
-      /* レポート描画とタップ */
       finish(){
-        const label={tsumo:'ツモ和了🎉',ron:'ロン和了🎉',dealin:'ほうじゅう💥',
-          cpuTsumo:'CPUの和了',ryuukyoku:'流局'}[R.end]||'-';
-        return {banner:'コーチランク '+rep.rank[1]+'！',
-          stats:[['🀄 けっか',label],['📊 コーチランク',rep.rank[1]],
-            ['⭕ さいてき打',rep.opt+'/'+rep.total],
-            ['💡 つぎの目標',rep.weak]]};
+        const rank=rep?rep.rank4:4;
+        return {banner:rank+'位！ コーチランク'+(rep?rep.rank[1]:'-'),
+          stats:[['🏆 じゅんい',rank+'位 ('+G.scores[0]+'点)'],
+            ['📊 コーチランク',rep?rep.rank[1]:'-'],
+            ['⭕ さいてき打',rep?(rep.opt+'/'+rep.total):'-'],
+            ['💡 つぎの目標',rep?rep.weak:'-']]};
       },
       destroy(){},
     };
     function drawReport(g,px,py){
       if(page===0){
-        text(g,'📊 コーチレポート',px,py+6,15,'#3a3f52');
-        g.fillStyle=rep.rank[2];g.font=`bold 58px ${FONT}`;g.textAlign='center';
-        g.fillText(rep.rank[1],px+60,py+70);
-        text(g,rep.score+'てん',px+60,py+104,13,'#7a806f','center');
-        const L=[['さいてき打',rep.opt+'/'+rep.total+'回'],
-          ['最終形',rep.finalSh<0?'和了！':rep.finalSh===0?'テンパイ':rep.finalSh+'シャンテン']];
+        text(g,'📊 コーチレポート ('+(hanchan?'半荘':'東風戦')+')',px,py+6,15,'#3a3f52');
+        g.fillStyle=rep.rank[2];g.font=`bold 54px ${FONT}`;g.textAlign='center';
+        g.fillText(rep.rank[1],px+56,py+66);
+        text(g,rep.score+'てん',px+56,py+98,12,'#7a806f','center');
+        const L=[['最終順位',rep.rank4+'位 ('+rep.finalScore+'点)'],
+          ['さいてき打',rep.opt+'/'+rep.total+'回']];
         for(const a of rep.adj)L.push([a.label,(a.pts>0?'+':'')+a.pts+'てん']);
-        L.forEach(([k,v],i)=>{text(g,k,px+140,py+40+i*24,12.5,'#555');
-          text(g,v,px+380,py+40+i*24,12.5,'#3a3f52','right');});
-        text(g,'💡 '+rep.weak,px,py+200,12.5,'#7a5a2a');
-        text(g,'直近の成績: '+rep.hist.slice(-5).map(h=>h.r).join(' → '),px,py+224,12,'#999');
+        L.forEach(([k,v],i)=>{text(g,k,px+130,py+34+i*22,12,'#555');
+          text(g,v,px+380,py+34+i*22,12,'#3a3f52','right');});
+        text(g,'💡 '+rep.weak,px,py+196,12,'#7a5a2a');
+        text(g,'直近の成績: '+rep.hist.slice(-5).map(h=>h.r).join(' → '),px,py+218,11.5,'#999');
       }else{
         text(g,'📝 みなおしポイント',px,py+6,15,'#3a3f52');
         if(!rep.worst.length)text(g,'ミスなし！かんぺき！',px,py+40,14,'#e5a000');
         rep.worst.forEach((l,i)=>{
-          const y=py+34+i*52;
-          text(g,l.n+'じゅんめ: '+MJ.NAMES[l.cut]+'ぎり → 最適は'+MJ.NAMES[l.best],px,y,13,'#c0392b');
-          text(g,l.bestReason.join(' '),px+8,y+19,11,'#555');
+          const y=py+32+i*50;
+          text(g,(l.kyoku||'')+' '+l.n+'巡: '+MJ.NAMES[l.cut]+'ぎり → 最適は'+MJ.NAMES[l.best],px,y,12.5,'#c0392b');
+          text(g,l.bestReason.join(' '),px+8,y+18,10.5,'#555');
         });
       }
-      // ページャ+終了ボタン
       text(g,(page+1)+'/2',px+185,py+250,12,'#999');
       [['◀',px+130],['▶',px+220]].forEach(([s,x])=>{
         rr(g,x,py+236,36,28,8);g.fillStyle='#eee6d6';g.fill();text(g,s,x+18,py+250,13,'#555','center');});
@@ -6234,11 +6313,11 @@ registerGame({
       text(g,'おわる',px+325,py+250,14,'#fff','center');
     }
     function reportTap(x,y){
-      const px=20,py=224; // draw() のパネル原点と一致させる
+      const px=20,py=192;
       if(y>=py+228&&y<=py+272){
         if(x>=px+130&&x<=px+166){page=0;A.tick();return;}
         if(x>=px+220&&x<=px+256){page=1;A.tick();return;}
-        if(x>=px+270){ctx.finishGame({banner:'コーチランク '+rep.rank[1]+'！'});return;}
+        if(x>=px+270){ctx.finishGame({banner:rep.rank4+'位！ コーチランク'+rep.rank[1]});return;}
       }
     }
   }
@@ -6307,46 +6386,80 @@ function runMahjongTests(){
   // 回帰: 脅威なしでは最上位候補が必ずシャンテン最小を保つ (受け入れ枚数は帯内比較)
   {const rng=mulberry32(9);let good=true;
    for(let n=0;n<10;n++){
-     const R=mjRoundNew(rng);
-     R.my[R.wall.pop()]++; // 14枚目
-     const an=mjAnalyze(R.my,R.S,{threat:false,turn:3,seatWind:27,roundWind:27});
+     const g4=mj4GameNew(rng),R4=mj4RoundNew(g4);
+     R4.players[0].hand[R4.wall.pop()]++; // 14枚目
+     const an=mjAnalyze(R4.players[0].hand,mj4SafetyView(R4,0),{threat:false,turn:3,seatWind:27,roundWind:27});
      if(an.cands[0].sh!==an.shMin)good=false;
    }
    ck('analyze:top-is-min-shanten',good);}
+  // Phase2: 場風・親子
+  ck('p2:親は東',mj4SeatWindOf(2,2)===27);
+  ck('p2:親の下家は南・上家は北',mj4SeatWindOf(2,3)===28&&mj4SeatWindOf(2,1)===33-3);
+  {const g4=mj4GameNew(mulberry32(1),true);g4.kyoku=5;
+   ck('p2:南場のroundWind',mj4RoundNew(g4).roundWind===28);
+   ck('p2:局ラベル',mj4KyokuLabel(g4)==='南2局');}
+  ck('p2:点数表 (2翻/満貫/親1.5倍)',mj4ScoreValue(2,false)===4000&&mj4ScoreValue(4,false)===8000&&mj4ScoreValue(4,true)===12000);
   // 採点ランク境界
   ck('rank:SS',mjRankFor(95)[1]==='SS');
   ck('rank:C',mjRankFor(10)[1]==='C');
-  // フェーズ1: 手出し/ツモぎりの記録 (河は {t,ted} オブジェクト)
-  {const R2=mjRoundNew(mulberry32(5));
-   const d=mjDrawSelf(R2);mjPlayerDiscard(R2,d.tile);
-   ck('ted:tsumogiri',R2.myRiver[0].ted===false&&R2.myRiver[0].t===d.tile);
-   const d2=mjDrawSelf(R2);
-   let other=-1;for(let t=0;t<34;t++)if(R2.my[t]>0&&t!==d2.tile){other=t;break;}
-   mjPlayerDiscard(R2,other);
-   ck('ted:tedashi',R2.myRiver[1].ted===true&&R2.myRiver[1].t===other);}
-  // 局を通しでヘッドレス実行 (両者CPUポリシー) → 必ず終局しレポートが出る
-  for(const seed of[7,99,2024]){
-    const R=mjRoundNew(mulberry32(seed));
-    let guard=0;
-    while(!R.end&&guard++<60){
-      if(R.wall.length<=14){R.end='ryuukyoku';break;}
-      mjDrawSelf(R);
-      if(R.end)break;
-      const an=mjAnalyze(R.my,R.S,{threat:!!R.cpRiichi,turn:R.turn,seatWind:27,roundWind:27});
-      const top=an.cands[0];
-      R.log.push({n:R.turn,cut:top.tile,kind:mjJudgeKind(top,an),auto:false,
-        tscore:mjTurnScore(top,an),best:top.tile,threat:!!R.cpRiichi,
-        couldRiichi:an.cands.some(c=>c.sh===0),riichied:!!R.myRiichi,
-        myReason:[],bestReason:mjReason(top,an,!!R.cpRiichi)});
-      if(!R.myRiichi&&top.sh===0)R.myRiichi=R.turn;
-      if(mjPlayerDiscard(R,top.tile))break;
-      mjCpuTurn(R);
-      R.turn++;
+  // 手出し/ツモぎりの記録 (河は {t,ted} オブジェクト)
+  {const g4=mj4GameNew(mulberry32(5)),R4=mj4RoundNew(g4);
+   const d=mj4Draw(R4,0);mj4Discard(R4,0,d.tile);
+   ck('ted:tsumogiri',R4.players[0].river[0].ted===false&&R4.players[0].river[0].t===d.tile);
+   const d2=mj4Draw(R4,0);
+   let other=-1;for(let t=0;t<34;t++)if(R4.players[0].hand[t]>0&&t!==d2.tile){other=t;break;}
+   mj4Discard(R4,0,other);
+   ck('ted:tedashi',R4.players[0].river[1].ted===true&&R4.players[0].river[1].t===other);}
+  // Phase2: 対局(東風4局)を通しでヘッドレス実行 (全席CPUポリシー) → 完走・ゼロサム・親ローテ
+  for(const seed of[7,99]){
+    const g4=mj4GameNew(mulberry32(seed),false);
+    let ok=true,guard=0;
+    while(g4.kyoku<g4.maxKyoku&&guard++<20){
+      const R4=mj4RoundNew(g4);
+      let s=R4.dealer,inner=0;
+      while(!R4.end&&R4.wall.length>14&&inner++<300){
+        if(s===0){
+          const d=mj4Draw(R4,0);
+          if(R4.end)break;
+          const an=mjAnalyze(R4.players[0].hand,mj4SafetyView(R4,0),
+            {threat:mj4Threat(R4,0),turn:R4.turnNo,seatWind:mj4SeatWind(R4,0),roundWind:R4.roundWind});
+          const top=an.cands[0];
+          g4.log.push({n:R4.turnNo,cut:top.tile,kind:mjJudgeKind(top,an),auto:false,
+            tscore:mjTurnScore(top,an),best:top.tile,threat:mj4Threat(R4,0),
+            couldRiichi:an.cands.some(c=>c.sh===0),riichied:!!R4.players[0].riichi,
+            myReason:[],bestReason:[]});
+          if(!R4.players[0].riichi&&top.sh===0)R4.players[0].riichi=R4.turnNo;
+          if(mj4Discard(R4,0,top.tile))break;
+        }else{
+          mj4CpuTurn(R4,s);
+          if(R4.end)break;
+        }
+        if(s===3)R4.turnNo++;
+        s=(s+1)%4;
+      }
+      const expectedDealer=g4.kyoku%4;
+      if(R4.dealer!==expectedDealer)ok=false;      // 親ローテーション
+      mj4Settle(R4);
+      if(g4.scores.reduce((a,b)=>a+b,0)!==100000)ok=false; // 点数はゼロサム
     }
-    ck('round-ends#'+seed,!!R.end);
-    const rep=mjReport(R);
-    ck('round-rank#'+seed,['SS','S','A','B','C'].indexOf(rep.rank[1])>=0);
-    ck('round-score#'+seed,rep.score>=0&&rep.score<=100);
+    ck('p2:game-completes#'+seed,g4.kyoku===g4.maxKyoku&&ok);
+    ck('p2:kyoku-results#'+seed,g4.results.length===4&&g4.results.every(r=>r.end&&r.moves.length===4));
+    const rep=mjReport({log:g4.log,hintsUsed:0,
+      wins:g4.results.filter(x=>x.end.seat===0&&(x.end.type==='tsumo'||x.end.type==='ron')).length,
+      dealins:g4.results.filter(x=>x.end.type==='ron'&&x.end.from===0).length,
+      tenpaiRyu:g4.results.filter(x=>x.end.type==='ryuukyoku'&&x.end.tenpai[0]).length});
+    ck('p2:report#'+seed,rep.score>=0&&rep.score<=100&&['SS','S','A','B','C'].indexOf(rep.rank[1])>=0);
+  }
+  { // 牌描画: チンイツ道場が typeof ガードで流用するため、消えても他テストが緑のまま壊れる
+    ck('render:mjRenderTile存在',typeof mjRenderTile==='function');
+    let ok=true;
+    try{const c=document.createElement('canvas');c.width=60;c.height=80;
+      const g=c.getContext('2d');
+      for(const t of [0,4,9,13,18,26,27,31,33])mjRenderTile(g,t,2,2,29,40,{});
+      mjRenderTile(g,5,2,2,29,40,{sel:true});mjRenderTile(g,5,2,2,29,40,{ghost:true});
+      mjRenderTile(g,5,2,2,29,40,{gray:true});mjRenderTile(g,5,2,2,29,40,{back:true});
+    }catch(e){ok=false;}
+    ck('render:全種類の牌が例外なく描ける',ok);
   }
   return done();
 }
