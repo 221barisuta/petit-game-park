@@ -5335,7 +5335,8 @@ registerGame({
         // 回答牌トグル
         if (y >= BT.y - 12 && y <= BT.y + BT.h + 6) {
           const n = Math.floor((x - BT.x0) / (BT.w + 5)) + 1;
-          if (n >= 1 && n <= 9) { sel.has(n) ? sel.delete(n) : sel.add(n); A.tick(); return; }
+          const inTile = (x - BT.x0) % (BT.w + 5) <= BT.w; // 牌間のgapは拾わない (review nit対応)
+          if (n >= 1 && n <= 9 && inTile) { sel.has(n) ? sel.delete(n) : sel.add(n); A.tick(); return; }
         }
         if (x >= ANS.x && x <= ANS.x + ANS.w && y >= ANS.y && y <= ANS.y + ANS.h) {
           if (sel.size) { judgeNow(false); A.pop(); } else A.bad();
