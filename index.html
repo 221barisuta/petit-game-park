@@ -5148,6 +5148,329 @@ registerGame({
 // ▼ 新しいミニゲームは registerGame({...}) をここに追加 ▼
 
 /* =========================================================================
+   🀅 チンイツ道場 — 清一色の待ち当てクイズ (1人用・全10問×10秒)
+   単色手牌は int[9] 枚数配列 (index0=1の牌)。ソルバーは再帰バックトラック。
+   牌描画は「なぜきり道場」の mjRenderTile があれば流用、無ければ軽量牌にフォールバック。
+   ========================================================================= */
+// ---- ソルバー (純ロジック・selftest対象) ----
+function ctzDecompose(c, i) { // c: int[9] 残り(雀頭除去済み) を位置iから面子分解
+  while (i < 9 && c[i] === 0) i++;
+  if (i >= 9) return true;
+  if (c[i] >= 3) { c[i] -= 3; const ok = ctzDecompose(c, i); c[i] += 3; if (ok) return true; } // 刻子
+  if (i <= 6 && c[i + 1] > 0 && c[i + 2] > 0) {                                               // 順子
+    c[i]--; c[i + 1]--; c[i + 2]--;
+    const ok = ctzDecompose(c, i);
+    c[i]++; c[i + 1]++; c[i + 2]++;
+    if (ok) return true;
+  }
+  return false;
+}
+function ctzIsAgari(c) { // c: int[9] 14枚 → 4面子1雀頭 or 七対子
+  let pairs = 0;
+  for (let i = 0; i < 9; i++) if (c[i] === 2) pairs++;
+  if (pairs === 7) return true;                          // 七対子 (単色でも 11223344556677 等で成立)
+  for (let head = 0; head < 9; head++) {
+    if (c[head] < 2) continue;
+    c[head] -= 2;
+    const ok = ctzDecompose(c, 0);
+    c[head] += 2;
+    if (ok) return true;
+  }
+  return false;
+}
+function ctzWaits(c) { // c: int[9] 13枚 → 待ち牌 [1..9] (5枚目になる牌は物理的に不可なので除外)
+  const out = [];
+  for (let t = 0; t < 9; t++) {
+    if (c[t] >= 4) continue;
+    c[t]++;
+    if (ctzIsAgari(c)) out.push(t + 1);
+    c[t]--;
+  }
+  return out;
+}
+// ---- 出題生成 (rngシード依存 → デイリーで全員同じ問題) ----
+function ctzGenHand(rng) { // 待ち1種以上の13枚を返す {c, waits}
+  for (let tries = 0; tries < 4000; tries++) {
+    const pool = [];
+    for (let t = 0; t < 9; t++) for (let k = 0; k < 4; k++) pool.push(t);
+    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+    const c = new Array(9).fill(0);
+    for (let i = 0; i < 13; i++) c[pool[i]]++;
+    const waits = ctzWaits(c);
+    if (waits.length >= 1) return { c, waits };
+  }
+  return { c: [3, 1, 1, 1, 1, 1, 1, 1, 3], waits: ctzWaits([3, 1, 1, 1, 1, 1, 1, 1, 3]) }; // 保険(九蓮形)
+}
+function ctzGenQuiz(rng, n, hardMin) { // 待ち3種以上を hardMin 問以上含む n 問
+  n = n || 10; hardMin = hardMin == null ? 4 : hardMin;
+  const hard = [], easy = [];
+  let guard = 0;
+  while (hard.length < hardMin && guard++ < 6000) {
+    const q = ctzGenHand(rng);
+    (q.waits.length >= 3 ? hard : easy).push(q);
+  }
+  while (hard.length + Math.min(easy.length, n - hard.length) < n) easy.push(ctzGenHand(rng));
+  const quiz = [...hard.slice(0, Math.max(hardMin, n - easy.length)), ...easy].slice(0, n);
+  for (let i = quiz.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [quiz[i], quiz[j]] = [quiz[j], quiz[i]]; }
+  return quiz;
+}
+
+registerGame({
+  id: 'chinitsu', emoji: '🀅', title: 'チンイツ道場',
+  desc: '清一色の「待ち牌」をぜんぶ当てるクイズ！全10問',
+  color: '#a8d8b8', duration: null,
+  howto: [
+    ['🀅', '1色13枚の手牌をみて「待ち牌」をぜんぶ選ぼう'],
+    ['⏱', '1問10秒！のこり3秒でバーが赤くなるよ'],
+    ['✅', '完全一致=◎2点 / 足りない=◯1点 / まちがい=✕'],
+    ['📊', '全10問・20点満点。多面待ちを見切れるか！？'],
+  ],
+  create(ctx) {
+    const A = ctx.audio, RNG = ctx.rng;
+    const QN = 10, QSEC = 10, REVEAL = 2;
+    const quiz = ctzGenQuiz(RNG, QN, 4);
+    const SUITS = [0, 9, 18]; // 問ごとに 萬/筒/索 を回して見た目に変化
+    let qi = 0, phase = 'q', tLeft = QSEC, revT = 0, sel = new Set();
+    let pts = 0, marks = [], times = [], lastMark = null;
+    // レイアウト
+    const HT = { w: 28, h: 42, x0: 12, y: 190 };   // 手牌13枚
+    const BT = { w: 40, h: 58, x0: 12, y: 470 };   // 回答ボタン牌 1-9 (gap 5)
+    const ANS = { x: 110, y: 620, w: 200, h: 52 }; // 回答ボタン
+    const base = () => SUITS[qi % 3];
+    // 牌描画: なぜきり道場の mjRenderTile があれば流用 (読み取りのみ)。無ければ軽量牌
+    function tile(g, n, x, y, w, h, o) { // n: 1..9
+      const t = base() + (n - 1);
+      if (typeof mjRenderTile === 'function') { mjRenderTile(g, t, x, y, w, h, o); return; }
+      o = o || {};
+      rr(g, x, y, w, h, Math.max(3, w * .16));
+      g.fillStyle = o.sel ? '#fff3c4' : '#fdfcf4'; g.fill();
+      g.strokeStyle = o.sel ? '#e5a000' : '#b0a48e'; g.lineWidth = o.sel ? 2 : 1; g.stroke();
+      const su = base() / 9;
+      g.fillStyle = ['#c0392b', '#2166ac', '#1d7a3d'][su];
+      g.font = `800 ${h * .42}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(String(n), x + w / 2, y + h * .32);
+      g.font = `800 ${h * .3}px ${FONT}`;
+      g.fillText(['萬', '筒', '索'][su], x + w / 2, y + h * .72);
+    }
+    const handTiles = () => { const out = []; const c = quiz[qi].c; for (let t = 0; t < 9; t++) for (let k = 0; k < c[t]; k++) out.push(t + 1); return out; };
+    function judgeNow(timeout) {
+      const waits = quiz[qi].waits;
+      const picked = [...sel].sort((a, b) => a - b);
+      const exact = picked.length === waits.length && picked.every((v, i) => v === waits[i]);
+      const subset = picked.length > 0 && picked.every((v) => waits.includes(v)) && !exact;
+      const mark = exact ? '◎' : subset ? '◯' : '✕';
+      const p = exact ? 2 : subset ? 1 : 0;
+      pts += p; marks.push(mark);
+      times.push(QSEC - Math.max(0, tLeft));
+      lastMark = mark;
+      ctx.judge(exact ? 'perfect' : subset ? 'good' : 'miss', W / 2, 300,
+        exact ? { sub: '完全一致！' } : subset ? { sub: 'おしい！あと' + (waits.length - picked.length) + '種' } : timeout && !picked.length ? { sub: '時間切れ…' } : undefined);
+      phase = 'reveal'; revT = REVEAL;
+    }
+    function next() {
+      qi++;
+      if (qi >= QN) { finishAll(); return; }
+      sel = new Set(); tLeft = QSEC; phase = 'q';
+    }
+    function finishAll() {
+      phase = 'done';
+      banner('しゅうりょう！ ' + pts + '/20点');
+      A[pts >= 14 ? 'record' : pts >= 8 ? 'ok' : 'miss'](); // メソッドを切り離すと this が失われるので添字呼び
+      setTimeout(() => ctx.finishGame({ banner: pts + '/20点！' }), 900);
+    }
+    return {
+      update(dt) {
+        if (phase === 'q') { tLeft -= dt; if (tLeft <= 0) { tLeft = 0; judgeNow(true); } }
+        else if (phase === 'reveal') { revT -= dt; if (revT <= 0) next(); }
+      },
+      draw(g) {
+        const grd = g.createLinearGradient(0, 0, 0, H);
+        grd.addColorStop(0, '#28504f'); grd.addColorStop(1, '#1a3a38');
+        g.fillStyle = grd; g.fillRect(0, 0, W, H);
+        if (phase === 'done') return;
+        outlinedText(g, 'もんだい ' + (qi + 1) + '/' + QN, 16, 56, 16, '#fff', '#10302e', 4, 1, 'left');
+        outlinedText(g, '得点 ' + pts + '/20', W - 16, 56, 14, '#ffd77a', '#10302e', 4, 1, 'right');
+        // タイマーバー (のこり3秒で赤)
+        const ratio = clamp(tLeft / QSEC, 0, 1);
+        rr(g, 12, 72, W - 24, 12, 6); g.fillStyle = 'rgba(0,0,0,.35)'; g.fill();
+        if (ratio > 0) { rr(g, 12, 72, (W - 24) * ratio, 12, 6);
+          g.fillStyle = tLeft <= 3 ? '#ef5a6f' : '#7cf29c'; g.fill(); }
+        outlinedText(g, phase === 'q' ? 'この手牌の「待ち牌」をぜんぶ選ぼう！' : 'せいかいは…',
+          W / 2, 116, 15, '#fff', '#10302e', 4, 1, 'center');
+        // 手牌 13枚
+        handTiles().forEach((n, i) => tile(g, n, HT.x0 + i * (HT.w + 3), HT.y, HT.w, HT.h));
+        outlinedText(g, ['萬子', '筒子', '索子'][base() / 9] + 'の清一色', W / 2, HT.y + HT.h + 24, 12, '#bfe3d8', '#10302e', 3, 1, 'center');
+        if (phase === 'q') {
+          // 回答牌 1-9 (トグル)
+          outlinedText(g, 'タップで選ぶ (複数OK)', W / 2, BT.y - 18, 12, '#bfe3d8', '#10302e', 3, 1, 'center');
+          for (let n = 1; n <= 9; n++) {
+            const x = BT.x0 + (n - 1) * (BT.w + 5);
+            tile(g, n, x, BT.y + (sel.has(n) ? -8 : 0), BT.w, BT.h, { sel: sel.has(n) });
+          }
+          // 回答ボタン
+          rr(g, ANS.x, ANS.y, ANS.w, ANS.h, 14);
+          g.fillStyle = sel.size ? '#ff8fb8' : '#5a6a68'; g.fill();
+          g.strokeStyle = 'rgba(0,0,0,.15)'; g.stroke();
+          outlinedText(g, '✅ 回答する', ANS.x + ANS.w / 2, ANS.y + ANS.h / 2 + 1, 17, '#fff', 'rgba(0,0,0,.35)', 4, 1, 'center');
+        } else if (phase === 'reveal') {
+          // 正解リビール
+          const waits = quiz[qi].waits;
+          rr(g, 24, 420, W - 48, 180, 14);
+          g.fillStyle = 'rgba(253,252,244,.96)'; g.fill();
+          g.strokeStyle = '#b0a48e'; g.lineWidth = 2; g.stroke();
+          g.fillStyle = lastMark === '◎' ? '#e5a000' : lastMark === '◯' ? '#7a9a3a' : '#c0392b';
+          g.font = `800 40px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+          g.fillText(lastMark, W / 2, 458);
+          g.fillStyle = '#3a3f52'; g.font = `800 14px ${FONT}`;
+          g.fillText('正解の待ち (' + waits.length + '種)', W / 2, 492);
+          const tw = 34, gap = 6, x0 = W / 2 - (waits.length * (tw + gap) - gap) / 2;
+          waits.forEach((n, i) => tile(g, n, x0 + i * (tw + gap), 508, tw, 48, { sel: sel.has(n) }));
+          g.fillStyle = '#8a7a5a'; g.font = `700 11px ${FONT}`;
+          g.fillText('タップですすむ', W / 2, 584);
+        }
+      },
+      onDown(x, y) {
+        if (phase === 'reveal') { next(); A.tick(); return; }
+        if (phase !== 'q') return;
+        // 回答牌トグル
+        if (y >= BT.y - 12 && y <= BT.y + BT.h + 6) {
+          const n = Math.floor((x - BT.x0) / (BT.w + 5)) + 1;
+          const inTile = (x - BT.x0) % (BT.w + 5) <= BT.w; // 牌間のgapは拾わない (review nit対応)
+          if (n >= 1 && n <= 9 && inTile) { sel.has(n) ? sel.delete(n) : sel.add(n); A.tick(); return; }
+        }
+        if (x >= ANS.x && x <= ANS.x + ANS.w && y >= ANS.y && y <= ANS.y + ANS.h) {
+          if (sel.size) { judgeNow(false); A.pop(); } else A.bad();
+        }
+      },
+      finish() {
+        const perfect = marks.filter((m) => m === '◎').length;
+        const partial = marks.filter((m) => m === '◯').length;
+        const avg = times.length ? (times.reduce((a, b) => a + b, 0) / times.length) : 0;
+        return { banner: pts + '/20点！', stats: [
+          ['🀅 クイズ得点', pts + ' / 20'],
+          ['◎ 完全一致', perfect + '問'],
+          ['◯ 部分正解', partial + '問'],
+          ['⏱ 平均回答', avg.toFixed(1) + '秒'],
+        ] };
+      },
+      destroy() {},
+    };
+  },
+});
+
+/* ---- チンイツ道場 セルフテスト ---- */
+function runChinitsuTests() {
+  const { ck, done } = makeTest('chinitsu');
+  const H = (s) => { const c = new Array(9).fill(0); for (const ch of s) c[+ch - 1]++; return c; };
+  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  // ── 確定フィクスチャ (待ちは手計算/オラクル照合済み) ──
+  // 111222333 型は 123×3 にも読めるため直感より待ちが増える (それ自体が本ゲームの学び)。
+  // 期待値は 手計算＋下記オラクル(独立実装) の一致で確定させたもの。
+  const FIX = [
+    ['1112345678999', [1, 2, 3, 4, 5, 6, 7, 8, 9]], // 純正九蓮宝燈=九面待ち
+    ['1112223334449', [9]],                          // 単騎 (123×3読みでも9のみ)
+    ['1112223334499', [1, 4, 9]],                    // シャンポン+99雀頭で111/123/234/234の1
+    ['1112223334456', [1, 2, 3, 4, 5, 7]],           // 六面 (111222333の多面化)
+    ['1112223334457', [6]],                          // 嵌張
+    ['1112223345678', [1, 2, 3, 4, 6, 9]],           // 六面
+    ['1122334455667', [1, 4, 7]],                    // 二盃口連続形の1-4-7 (7単騎に見える罠)
+    ['1122445577889', [9]],                          // 七対子でのみ和了 (標準形なし)
+    ['1112223335567', [4, 5, 8]],                    // 亜両面+多面化
+    ['1111222333444', [2, 3, 4]],                    // 同一牌4枚使い切り
+    ['2233445566778', [2, 5, 8]],                    // 定番の2-5-8三面
+    ['1113334445557', [6, 7]],
+    ['1123456789999', [1, 4, 7]],                    // 9は4枚使用済みで待てない
+    ['2223456777889', [6, 7, 9]],
+    ['1122335578899', [7]],                          // 七対子/標準どちらでも7単騎
+  ];
+  // ── 独立オラクル: 牌配列ベースの別実装 (ソルバーのタイポ検出用) ──
+  function oraDecomp(arr) { // arr: 昇順の牌配列 (雀頭除去済み)
+    if (!arr.length) return true;
+    const x = arr[0];
+    if (arr[1] === x && arr[2] === x && oraDecomp(arr.slice(3))) return true;
+    const i1 = arr.indexOf(x + 1), i2 = arr.indexOf(x + 2);
+    if (i1 > 0 && i2 > 0) {
+      const rest = arr.slice(1); rest.splice(rest.indexOf(x + 1), 1); rest.splice(rest.indexOf(x + 2), 1);
+      if (oraDecomp(rest)) return true;
+    }
+    return false;
+  }
+  function oraAgari(arr14) {
+    const cnt = {}; arr14.forEach((t) => cnt[t] = (cnt[t] || 0) + 1);
+    if (Object.values(cnt).filter((n) => n === 2).length === 7) return true;
+    for (const v of Object.keys(cnt)) {
+      if (cnt[v] < 2) continue;
+      const rest = [...arr14]; rest.splice(rest.indexOf(+v), 1); rest.splice(rest.indexOf(+v), 1);
+      if (oraDecomp(rest)) return true;
+    }
+    return false;
+  }
+  const oraWaits = (c) => {
+    const arr = []; for (let t = 0; t < 9; t++) for (let k = 0; k < c[t]; k++) arr.push(t + 1);
+    const out = [];
+    for (let n = 1; n <= 9; n++) {
+      if (c[n - 1] >= 4) continue;
+      if (oraAgari([...arr, n].sort((a, b) => a - b))) out.push(n);
+    }
+    return out;
+  };
+  for (const [s, want] of FIX) {
+    const c = H(s);
+    const got = ctzWaits(c);
+    const expect = want || oraWaits(c);
+    ck('fix:' + s + '→' + expect.join(''), eq(got, expect) && (want == null || eq(got, want)));
+    ck('fix:' + s + ' オラクル一致', eq(got, oraWaits(c)));
+  }
+  // ── クロスチェック: ランダム400手でオラクルと完全一致 ──
+  {
+    const rng = mulberry32(77); let ok = true;
+    for (let n = 0; n < 400; n++) {
+      const pool = [];
+      for (let t = 0; t < 9; t++) for (let k = 0; k < 4; k++) pool.push(t);
+      for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+      const c = new Array(9).fill(0);
+      for (let i = 0; i < 13; i++) c[pool[i]]++;
+      if (!eq(ctzWaits(c), oraWaits(c))) { ok = false; break; }
+    }
+    ck('cross: ランダム400手でオラクル一致', ok);
+  }
+  // ── 構成的性質: ランダム和了形から1枚抜くと必ずその牌が待ちに含まれる ──
+  {
+    const rng = mulberry32(99); let ok = true;
+    for (let n = 0; n < 200; n++) {
+      const c = new Array(9).fill(0);
+      let guard = 0, sets = 0;
+      while (sets < 4 && guard++ < 60) {
+        if (rng() < 0.5) { const t = Math.floor(rng() * 9); if (c[t] + 3 <= 4) { c[t] += 3; sets++; } }
+        else { const t = Math.floor(rng() * 7); if (c[t] + 1 <= 4 && c[t + 1] + 1 <= 4 && c[t + 2] + 1 <= 4) { c[t]++; c[t + 1]++; c[t + 2]++; sets++; } }
+      }
+      if (sets < 4) continue;
+      const pt = Math.floor(rng() * 9); if (c[pt] + 2 > 4) { n--; continue; }
+      c[pt] += 2;
+      const tiles = []; for (let t = 0; t < 9; t++) for (let k = 0; k < c[t]; k++) tiles.push(t);
+      const rm = tiles[Math.floor(rng() * tiles.length)];
+      c[rm]--;
+      if (!ctzWaits(c).includes(rm + 1)) { ok = false; break; }
+      c[rm]++;
+    }
+    ck('prop: 和了形-1枚 → その牌が待ちに含まれる (200手)', ok);
+  }
+  // ── 出題生成の性質 ──
+  {
+    const quiz = ctzGenQuiz(mulberry32(2026), 10, 4);
+    ck('gen: 10問', quiz.length === 10);
+    ck('gen: 全問 待ち1種以上', quiz.every((q) => q.waits.length >= 1));
+    ck('gen: 13枚・各牌4枚以下', quiz.every((q) => q.c.reduce((a, b) => a + b, 0) === 13 && q.c.every((v) => v >= 0 && v <= 4)));
+    ck('gen: 待ち3種以上が4問以上', quiz.filter((q) => q.waits.length >= 3).length >= 4);
+    const quiz2 = ctzGenQuiz(mulberry32(2026), 10, 4);
+    ck('gen: 同シードで同一問題 (デイリー対応)', eq(quiz, quiz2));
+  }
+  return done();
+}
+SELFTESTS.push(runChinitsuTests);
+
+
+/* =========================================================================
    🀄 まーじゃん なぜきり道場 — 打牌理由コーチング (1人用)
    牌表現: int[34] 枚数配列 (0-8:萬 9-17:筒 18-26:索 27-33:東南西北白發中)
    設計方針: シャンテンはスート別メモ化DP / 役・安全度・押し引きは全てテーブル駆動 /
