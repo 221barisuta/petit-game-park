@@ -6426,9 +6426,9 @@ function runMahjongTests(){
      if(R4.end)break;
      s=mj4NextSeat(R4,s);
    }
-   ck('p2:turn:東2局は親(下家)始まりで自分の初打も1巡目',
-     R4.end||JSON.stringify(order)===JSON.stringify([[1,1],[2,1],[3,1],[0,1]]));
-   ck('p2:turn:一周して親に戻ると2巡目',R4.end||R4.turnNo===2);}
+   ck('p2:turn:東2局は親(下家)始まりで自分の初打も1巡目', // seed11は1巡目和了なし(和了したらここでfail)
+     !R4.end&&JSON.stringify(order)===JSON.stringify([[1,1],[2,1],[3,1],[0,1]]));
+   ck('p2:turn:一周して親に戻ると2巡目',!R4.end&&R4.turnNo===2);}
   // Phase2: 対局(東風4局)を通しでヘッドレス実行 (全席CPUポリシー) → 完走・ゼロサム・親ローテ
   for(const seed of[7,99]){
     const g4=mj4GameNew(mulberry32(seed),false);
