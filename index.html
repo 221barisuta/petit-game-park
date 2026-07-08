@@ -3796,6 +3796,11 @@ function getWinner(board){
   const {black,white}=countStones(board);
   return black>white?'black':white>black?'white':'draw';
 }
+// 表示記号 (①バグ対策: HUD/勝利/パス表示を1箇所に集約し、色ごとの対応がズレないようにする)
+const OTH_SYM={black:'●',white:'○'};                              // HUD用 (コンパクトバー・形で区別)
+const OTH_EMO={black:'⬛',white:'⬜'}, OTH_JP={black:'黒',white:'白'}; // 勝利/パス表示用 (絵文字+漢字で色を明示)
+const othWinLabel=w=>OTH_EMO[w]+' '+OTH_JP[w]+'のかち！';
+const othPassLabel=c=>OTH_EMO[c]+' '+OTH_JP[c]+'がパス';
 // --- #9 ヒント / #10 CPU 共通の手評価 (純関数・副作用なし) ---
 const OTH_CORNERS=new Set([0,7,56,63]);
 // index に color が打つ手の評価値。非合法(0反転)は -Infinity。角優先(+1000) ＋ 最多反転。
@@ -3991,6 +3996,22 @@ function runOthelloTests(){
   {const b=Array(64).fill('black');for(let i=0;i<32;i++)b[i]='white';
    ck('draw',getWinner(b)==='draw');}
   {const b=Array(64).fill('white');b[0]='black';ck('winner-white',getWinner(b)==='white');}
+  // ①バグ対策: 表示記号(HUD/絵文字+漢字)の黒白対応がズレていないか (大表示「●62」問題の再発防止)
+  {ck('sym-black',OTH_SYM.black==='●');ck('sym-white',OTH_SYM.white==='○');
+   ck('emo-black',OTH_EMO.black==='⬛');ck('emo-white',OTH_EMO.white==='⬜');
+   ck('winlabel-black',othWinLabel('black')==='⬛ 黒のかち！');
+   ck('winlabel-white',othWinLabel('white')==='⬜ 白のかち！');
+   ck('passlabel-black',othPassLabel('black')==='⬛ 黒がパス');
+   ck('passlabel-white',othPassLabel('white')==='⬜ 白がパス');}
+  // 終局集計とラベルの対応: 白石が多い盤の勝者ラベルに「白」が含まれ「黒」が含まれないこと (色の取り違え検出)
+  {const b=Array(64).fill('white');for(let i=0;i<24;i++)b[i]='black';
+   const w=getWinner(b),label=othWinLabel(w);
+   ck('endgame-winner-white',w==='white');
+   ck('endgame-label-matches-tally',label.includes('白')&&!label.includes('黒'));}
+  {const b=Array(64).fill('black');for(let i=0;i<24;i++)b[i]='white';
+   const w=getWinner(b),label=othWinLabel(w);
+   ck('endgame-winner-black',w==='black');
+   ck('endgame-label-matches-tally2',label.includes('黒')&&!label.includes('白'));}
   return done();
 }
 /* runOthelloHintTests 自動テスト: 角優先 / 最多反転(同点は最小index) / 非合法-∞ /
@@ -4029,7 +4050,7 @@ registerGame({
   create(ctx){
     const A=ctx.audio;
     const N=OTH_N;
-    const SYM={black:'●',white:'○'}; // HUD/結果表示用
+    const SYM=OTH_SYM, EMO=OTH_EMO, JP=OTH_JP, winLabel=othWinLabel, passLabel=othPassLabel;
     // 盤レイアウト (W=420,H=740 基準)。石はマス内中央に配置。
     const CELL=44, BOARD=CELL*N, BX=Math.round((W-BOARD)/2), BY=178;
     // 盤下のボタン: プレイ時=[まった] / 決着時=[もういちど][まった]
@@ -4083,13 +4104,13 @@ registerGame({
         }
       }
       if(result.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
-      else{banner(SYM[w]+'の かち！');A.fever();vib([30,50,30,50,30]);confetti();}
+      else{banner(winLabel(w));A.fever();vib([30,50,30,50,30]);confetti();}
     }
     function advanceTurn(){ // 着手後の手番送り (相手番 / 自動パス / 終局 を判定)
       const oppIdx=1-turn,oppColor=players[oppIdx].color,myColor=players[turn].color;
       if(getValidMoves(board,oppColor).length){turn=oppIdx;}             // 相手に手あり
       else if(getValidMoves(board,myColor).length){                     // 相手0手→自動パス(手番維持)
-        lastPass=oppColor;banner(SYM[oppColor]+'は パス');A.bad();      // 次着手まで HUD/盤面に表示
+        lastPass=oppColor;banner(passLabel(oppColor));A.bad();          // 次着手まで HUD/盤面に表示
       }else{endGame();}                                                  // 両者0手→終局
     }
     function place(cell){ // 着手を1箇所に集約 (反転・手番送りもここ)
@@ -4126,6 +4147,20 @@ registerGame({
       else{g.fillStyle='#fbf8ef';g.fill();g.lineWidth=2;g.strokeStyle='#b7ad93';g.stroke();
         g.beginPath();g.arc(-r*0.28,-r*0.28,r*0.30,0,TAU);g.fillStyle='rgba(255,255,255,.7)';g.fill();}
       g.restore();
+    }
+    // ①バグ対策: 石数バッジは drawStone と同じ塗りで描いた石アイコン+数字にし、盤面と必ず一致させる
+    // (旧実装は白石も文字glyph「●」を白塗りで表示しており、上部HUDの「○」と食い違って見えた)
+    // ②視認性改善: 白=白背景+黒枠バッジ / 黒=黒塗りバッジ + 「黒: X / 白: Y」併記ラベル
+    function drawScoreBadges(g,cx,y,black,white){
+      const bw=92,bh=40,r=14,gap=14;
+      const xB=cx-gap/2-bw, xW=cx+gap/2;
+      g.save();g.fillStyle='#141225';rr(g,xB,y-bh/2,bw,bh,r);g.fill();g.restore();
+      drawStone(g,'black',{x:xB+22,y},13);
+      outlinedText(g,''+black,xB+bw/2+11,y,24,'#fff',null,0,1,'left');
+      g.save();g.fillStyle='#fbf8ef';rr(g,xW,y-bh/2,bw,bh,r);g.fill();g.lineWidth=2.5;g.strokeStyle='#141225';g.stroke();g.restore();
+      drawStone(g,'white',{x:xW+22,y},13);
+      outlinedText(g,''+white,xW+bw/2+11,y,24,'#141225',null,0,1,'left');
+      outlinedText(g,'黒: '+black+' / 白: '+white,cx,y+bh/2+20,15,'#fff','#2a3352',3.5);
     }
     // ── #10 CPU: あいて構築 / 対局開始 / CPU思考タイマー ──
     function buildPlayers(){ // cfg から players[{color,type,level}] を組む(五目と同分岐)
@@ -4194,7 +4229,7 @@ registerGame({
     // ── #11 オンライン対戦 (共通状態機械は makeVsOnlineUI。ここはゲーム固有フックのみ) ──
     function fireOnlineResultFx(res){ // 勝敗演出 (endGameと同等。1対局1回だけ)
       if(res.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
-      else{banner(SYM[res.winner]+'の かち！');A.fever();vib([30,50,30,50,30]);confetti();}
+      else{banner(winLabel(res.winner));A.fever();vib([30,50,30,50,30]);confetti();}
     }
     const OL=makeVsOnlineUI({net:OthelloNet,btnL,btnR,btnExit:togBtn,hintCol:'#f2a541',
       cellAt,onResult:fireOnlineResultFx,
@@ -4246,39 +4281,32 @@ registerGame({
         if(screen==='setup'){drawSetup(g);return} // #10 あいて選択画面
         const online=screen==='online'; // #11 オンラインは上部DOMバーが状態表示
         g.fillStyle='#3c4a70';g.fillRect(0,0,W,H); // 地色を少し明るく (白黒の視認性UP)
-        // 石数 (常時表示)。●=黒/○=白 が色でも一致するよう ● は濃色・○ は淡色で描く
         const {black,white}=countStones(board);
         if(!online){
-          outlinedText(g,'オセロ',W/2,68,27,'#fff','#2a3352',7);
-          // ○(中空グリフ)は塗り色にしても中が透けて半透明に見えるため、白も塗りつぶし円●を白で描く(色で黒白を区別)
-          outlinedText(g,'●'+black,W/2-70,112,26,'#15122a','#e9e4f5',7);
-          outlinedText(g,'●'+white,W/2+70,112,26,'#ffffff','#15122a',7);
-          // 手番 / 結果
+          outlinedText(g,'オセロ',W/2,40,22,'#fff','#2a3352',6);
+          drawScoreBadges(g,W/2,80,black,white); // ①②: 石アイコン付きバッジ+「黒:X / 白:Y」併記
+          // 手番 / 結果 (絵文字⬛⬜で色を明示。塗り色をfillStyleに頼らないので白黒の食い違いが起きない)
           if(!result){
             const m=players[turn].color;
-            // 石色で塗り分け (黒=濃色/淡アウトライン, 白=純白/濃アウトライン)
-            const col=c=>c==='black'?['#15122a','#e9e4f5']:['#ffffff','#15122a'];
-            const [cf,cs]=col(m);
-            if(lastPass){
-              // 直前の自動パスを次着手まで表示。パスした側と現手番で石色が違うので2セグメント描画
-              const [pf,ps]=col(lastPass), sz=18, sA='●は パス → ', sB='●の ばん';
-              g.save();g.font=`800 ${sz}px ${FONT}`;const wA=g.measureText(sA).width,wB=g.measureText(sB).width;g.restore();
-              const x0=W/2-(wA+wB)/2;
-              outlinedText(g,sA,x0,150,sz,pf,ps,5,1,'left');
-              outlinedText(g,sB,x0+wA,150,sz,cf,cs,5,1,'left');
-            }else{
-              outlinedText(g,'●の ばん',W/2,150,23,cf,cs,6);
-            }
+            const txt=lastPass?(passLabel(lastPass)+' → '+EMO[m]+'の ばん'):(EMO[m]+'の ばん');
+            outlinedText(g,txt,W/2,136,lastPass?16:20,'#fff','#2a3352',lastPass?4.5:6);
           }else if(result.draw){
-            outlinedText(g,'ひきわけ！',W/2,150,26,'#ffd23f','#5a3a10',7);
+            outlinedText(g,'ひきわけ！',W/2,136,22,'#ffd23f','#5a3a10',6);
           }else{
-            outlinedText(g,SYM[result.winner]+'の かち！',W/2,150,28,'#ffd23f','#5a3a10',7);
+            // ②視認性改善: 勝利表示は背景色付きバッジ (黒勝=黒塗り/白勝=白地+黒枠) で明示
+            const w=result.winner,label=winLabel(w);
+            g.save();g.font=`800 22px ${FONT}`;const tw=g.measureText(label).width;g.restore();
+            const bw=tw+36,bh=38;
+            g.save();g.fillStyle=w==='black'?'#141225':'#fbf8ef';rr(g,W/2-bw/2,136-bh/2,bw,bh,14);g.fill();
+            if(w==='white'){g.lineWidth=2.5;g.strokeStyle='#141225';g.stroke();}
+            g.restore();
+            outlinedText(g,label,W/2,137,22,w==='black'?'#fff':'#141225',null,0);
           }
-          if(result&&oniJustUnlocked)outlinedText(g,'👹 おに 解放！',W/2,180,15,'#ffe93d','#5a3a10',4); // #10 隠し解放通知
+          if(result&&oniJustUnlocked)outlinedText(g,'👹 おに 解放！',W/2,157,13,'#ffe93d','#5a3a10',4); // #10 隠し解放通知
         }else{
-          // オンライン: 状態はDOMバー。石数(スコア)だけ盤直上にコンパクト表示
-          outlinedText(g,'●'+black,W/2-46,168,20,'#15122a','#e9e4f5',6);
-          outlinedText(g,'●'+white,W/2+46,168,20,'#ffffff','#15122a',6);
+          // オンライン: 状態はDOMバー。石数(スコア)だけ盤直上にコンパクト表示 (石アイコンで黒白を確実に区別)
+          drawStone(g,'black',{x:W/2-58,y:168},9);outlinedText(g,''+black,W/2-42,168,20,'#15122a','#e9e4f5',6,1,'left');
+          drawStone(g,'white',{x:W/2+18,y:168},9);outlinedText(g,''+white,W/2+34,168,20,'#ffffff','#15122a',6,1,'left');
         }
         // 盤パネル (緑のフェルト)
         g.save();g.fillStyle='#176a3a';rr(g,BX-12,BY-12,BOARD+24,BOARD+24,16);g.fill();g.restore();
