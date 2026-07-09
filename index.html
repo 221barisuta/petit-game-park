@@ -207,6 +207,7 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 #bannerText{font-size:8.5cqw;font-weight:800;color:#fff;-webkit-text-stroke:1.7cqw #b8336e;paint-order:stroke fill;
   text-shadow:0 1.6cqw 0 rgba(120,20,70,.5);max-width:84cqw;text-align:center;line-height:1.2;word-break:keep-all;overflow-wrap:break-word}
 #bannerText.pop{animation:bannerPop 1.05s ease forwards}
+#bannerText.small{font-size:5.2cqw;-webkit-text-stroke:1cqw #b8336e;text-shadow:0 1cqw 0 rgba(120,20,70,.5);max-width:70cqw}
 @keyframes bannerPop{0%{transform:scale(.2) rotate(-8deg);opacity:0}25%{transform:scale(1.1) rotate(2deg);opacity:1}
   45%{transform:scale(1)}80%{transform:scale(1);opacity:1}100%{transform:scale(1.15);opacity:0}}
 
@@ -1126,9 +1127,10 @@ function hudUpdate(){
     $('hudTime').textContent=game.hudInfo();
   }
 }
-function banner(txt){
+function banner(txt,opt){ // opt.small: 盤面を隠さないコンパクト表示(麻雀の局結果など)
   const ov=$('banner'),el=$('bannerText');
   el.textContent=txt;
+  el.classList.toggle('small',!!(opt&&opt.small));
   ov.classList.remove('hidden');
   el.classList.remove('pop');void el.offsetWidth;el.classList.add('pop');
   setTimeout(()=>ov.classList.add('hidden'),1050);
@@ -5216,18 +5218,18 @@ function ctzGenQuiz(rng, n, hardMin) { // 待ち3種以上を hardMin 問以上�
 }
 
 registerGame({
-  id: 'chinitsu', emoji: '🀅', title: 'チンイツ道場',
-  desc: '清一色の「待ち牌」をぜんぶ当てるクイズ！全10問',
-  color: '#a8d8b8', duration: null,
-  howto: [
-    ['🀅', '1色13枚の手牌をみて「待ち牌」をぜんぶ選ぼう'],
-    ['⏱', '1問10秒！のこり3秒でバーが赤くなるよ'],
-    ['✅', '完全一致=◎2点 / 足りない=◯1点 / まちがい=✕'],
-    ['📊', '全10問・20点満点。多面待ちを見切れるか！？'],
+  id:'chinitsu', emoji:'🀅', title:'チンイツ道場',
+  desc:'清一色の「待ち牌」をぜんぶ当てるクイズ！全10問',
+  color:'#a8d8b8', duration:null,
+  howto:[
+    ['🀅','1色13枚の手牌をみて「待ち牌」をぜんぶ選ぼう'],
+    ['⏱','1問25秒！のこり5秒でバーが赤くなるよ'],
+    ['✅','完全一致=◎2点 / 足りない=◯1点 / まちがい=✕'],
+    ['📊','全10問・20点満点。多面待ちを見切れるか！？'],
   ],
   create(ctx) {
     const A = ctx.audio, RNG = ctx.rng;
-    const QN = 10, QSEC = 10, REVEAL = 2;
+    const QN = 10, QSEC = 25, REVEAL = 2;
     const quiz = ctzGenQuiz(RNG, QN, 4);
     const SUITS = [0, 9, 18]; // 問ごとに 萬/筒/索 を回して見た目に変化
     let qi = 0, phase = 'q', tLeft = QSEC, revT = 0, sel = new Set();
@@ -5290,11 +5292,11 @@ registerGame({
         if (phase === 'done') return;
         outlinedText(g, 'もんだい ' + (qi + 1) + '/' + QN, 16, 56, 16, '#fff', '#10302e', 4, 1, 'left');
         outlinedText(g, '得点 ' + pts + '/20', W - 16, 56, 14, '#ffd77a', '#10302e', 4, 1, 'right');
-        // タイマーバー (のこり3秒で赤)
+        // タイマーバー (のこり5秒で赤)
         const ratio = clamp(tLeft / QSEC, 0, 1);
         rr(g, 12, 72, W - 24, 12, 6); g.fillStyle = 'rgba(0,0,0,.35)'; g.fill();
         if (ratio > 0) { rr(g, 12, 72, (W - 24) * ratio, 12, 6);
-          g.fillStyle = tLeft <= 3 ? '#ef5a6f' : '#7cf29c'; g.fill(); }
+          g.fillStyle = tLeft <= 5 ? '#ef5a6f' : '#7cf29c'; g.fill(); }
         outlinedText(g, phase === 'q' ? 'この手牌の「待ち牌」をぜんぶ選ぼう！' : 'せいかいは…',
           W / 2, 116, 15, '#fff', '#10302e', 4, 1, 'center');
         // 手牌 13枚
@@ -5766,6 +5768,12 @@ function mjJudgeKind(chosen,an){ // コア共通JUDGE(スコア/コンボ)への
    卓は seat0=自分, 1=下家, 2=対面, 3=上家。鳴きなし(門前のみ)・東風戦(既定)/半荘。
    AI打牌は自分と同じ mjAnalyze を使用 (Phase3の手牌読み確率はこの分離点に乗せる想定) */
 const MJ4_NAMES=['あなた','下家','対面','上家'];
+const MJ_SPEED_ORDER=['slow','normal','fast'];
+const MJ_SPEED={ // 他家の打牌テンポ(秒)。normalが既定=1手0.7秒ほど見せてから次へ
+  slow:{seat:1.1,trans:.55,init:.45,label:'🐢ゆっくり'},
+  normal:{seat:.7,trans:.35,init:.3,label:'🚶ふつう'},
+  fast:{seat:.4,trans:.2,init:.2,label:'🐇はやい'},
+};
 function mj4ScoreValue(han,dealer){ // 簡易点数表(初版): 2000×翻 / 4翻=8000 / 5翻+=12000 / 7翻+=16000。親1.5倍
   const base=han>=7?16000:han>=5?12000:han>=4?8000:2000*han;
   return dealer?Math.ceil(base*1.5/100)*100:base;
@@ -5777,6 +5785,11 @@ function mj4GameNew(rng,hanchan){
 const mj4KyokuLabel=g=>(g.kyoku<4?'東':'南')+((g.kyoku%4)+1)+'局';
 const mj4SeatWindOf=(dealer,s)=>27+((s-dealer+4)%4); // 親=東
 const mj4NextSeat=(R,s)=>{const nx=(s+1)%4;if(nx===R.dealer)R.turnNo++;return nx;}; // 一周=親に手番が戻る (親≠seat0の局でも巡目が合う)
+function mj4DoraOf(t){ // ドラ表示牌→ドラ (数牌は同スート+1・字牌は東南西北/白發中で循環)
+  if(t<27){const suit=t-t%9;return suit+(t-suit+1)%9;}
+  if(t<31)return 27+(t-27+1)%4;
+  return 31+(t-31+1)%3;
+}
 function mj4RoundNew(g){
   const dealer=g.kyoku%4; // 連荘なし(コーチングテンポ優先)
   const wall=[];
@@ -5788,8 +5801,10 @@ function mj4RoundNew(g){
     for(let i=0;i<13;i++)hand[wall.pop()]++;
     players.push({hand,river:[],riichi:0,lastDraw:-1});
   }
+  const doraIndicator=wall[0]; // wall.pop()は末尾から取るため先頭14枚(王牌)は局中ずっと不可侵
   return {g,dealer,wall,players,turn:dealer,turnNo:1,end:null,
     roundWind:g.kyoku<4?27:28,
+    doraIndicator,dora:mj4DoraOf(doraIndicator),
     visible:new Array(34).fill(0)}; // 全河の見え枚数 (増分更新・全席共有)
 }
 const mj4SeatWind=(R,s)=>mj4SeatWindOf(R.dealer,s);
@@ -5993,6 +6008,7 @@ registerGame({
     ['🎯','コーチが1打ごとに「なぜ？」を採点。局をまたいで添削レポート！'],
     ['🀅','親は点数1.5倍。場風・自風の役牌もヒントに反映されるよ'],
     ['⚙️','はじまる前に画面上の「東風戦」をタップで半荘に切替'],
+    ['⏱','「速度」チップをタップでゆっくり/ふつう/はやいを切替。直前の1枚は光ってわかりやすい'],
   ],
   create(ctx){
     const A=ctx.audio,RNG=ctx.rng;
@@ -6002,6 +6018,9 @@ registerGame({
     let mjPhase='draw',sel=-1,an=null,drawn=-1,fb=null,timer=0,aiSeat=0,aiInfo=null;
     let hintOn=ctx.rookie,riichiArm=false,rep=null,page=0,kyokuMoves=null;
     let tedashiShow=store.get('pgp2_mj_tedashi','1')==='1';
+    let speed=store.get('pgp2_mj_speed','normal');
+    if(!MJ_SPEED[speed])speed='normal';
+    let lastDiscSeat=-1,discHiT=0; // 直近の打牌ハイライト(1秒)
     const TW=27,TH=44,HX=8,HY=576;
     const RW=22,RH=28;                       // 自河 (6枚×4段・+N省略)
     const OW=14,OH=19;                       // 他家の河 (ミニ)
@@ -6057,21 +6076,24 @@ registerGame({
         bestReason:mjReason(an.cands[0],an,mj4Threat(R,0))});
       if(riichiArm&&chosen.sh===0){me().riichi=R.turnNo;A.fever();}
       riichiArm=false;sel=-1;
-      if(mj4Discard(R,0,t)==='ron'){endKyoku();return;}
+      const discRes=mj4Discard(R,0,t);
+      lastDiscSeat=0;discHiT=1;
+      if(discRes==='ron'){endKyoku();return;}
       mj4NextSeat(R,0);
       fb={chosen,an,auto:!!auto};
       mjPhase='fb';timer=auto?.5:0;
     }
-    function stepAi(){ // AI1席ずつ進める (0.4sずつ見せる)
+    function stepAi(){ // AI1席ずつ進める (speed設定の秒数ずつ見せる)
       const s=aiSeat;
       if(R.wall.length<=14){endKyoku();return;}
       const r=mj4CpuTurn(R,s);
       aiInfo={seat:s,why:r.why||''};
+      if(r.cut!==undefined){lastDiscSeat=s;discHiT=1;} // 打牌があった時だけハイライト(ツモ和了時はcutなし)
       if(R.end){endKyoku();return;}
       if(r.why==='リーチ！')A.bad();
       const nx=mj4NextSeat(R,s);
-      if(nx===0){mjPhase='draw';timer=.35;} // 次は自分
-      else{aiSeat=nx;timer=.4;}
+      if(nx===0){mjPhase='draw';timer=MJ_SPEED[speed].trans;} // 次は自分
+      else{aiSeat=nx;timer=MJ_SPEED[speed].seat;}
     }
     function endKyoku(){
       kyokuMoves=mj4Settle(R);
@@ -6080,15 +6102,15 @@ registerGame({
       const msg=e.type==='tsumo'?(e.seat===0?'ツモ和了！🎉':MJ4_NAMES[e.seat]+'のツモ')
         :e.type==='ron'?(e.seat===0?'ロン和了！🎉':(e.from===0?'ほうじゅう…！💥':MJ4_NAMES[e.seat]+'のロン'))
         :'流局';
-      banner(msg);
+      banner(msg,{small:true});
       (e.seat===0&&(e.type==='tsumo'||e.type==='ron'))?A.record():(e.type==='ron'&&e.from===0)?A.miss():A.ok();
     }
     function nextKyoku(){
       if(G.kyoku>=G.maxKyoku){finishGame();return;}
       R=mj4RoundNew(G);
       an=null;fb=null;aiSeat=R.turn===0?0:R.turn;
-      if(R.turn===0){mjPhase='draw';timer=.3;}
-      else{mjPhase='ai';aiSeat=R.turn;timer=.4;}
+      if(R.turn===0){mjPhase='draw';timer=MJ_SPEED[speed].init;}
+      else{mjPhase='ai';aiSeat=R.turn;timer=MJ_SPEED[speed].seat;}
     }
     function finishGame(){
       rep=mjReport({log:G.log,hintsUsed:G.hintsUsed,
@@ -6104,17 +6126,17 @@ registerGame({
       store.set('pgp2_mj_hist',JSON.stringify(hist.slice(-20)));
       rep.weak=mjWeakness(hist);rep.hist=hist;
       mjPhase='report';
-      banner(rank+'位！ コーチランク'+rep.rank[1]);
+      banner(rank+'位！ コーチランク'+rep.rank[1],{small:true});
     }
     // 初期: 東1局は親=seat0 → 自分から
-    mjPhase='draw';timer=.3;
+    mjPhase='draw';timer=MJ_SPEED[speed].init;
 
     const tile=(g,x,y,w,h,t,o)=>mjRenderTile(g,t,x,y,w,h,o&&o.dim?Object.assign({ghost:true},o):o);
-    function river(g,list,x0,y0,w,h,cap){ // 1行6枚・最新cap枚(+N)
+    function river(g,list,x0,y0,w,h,cap,hiLast){ // 1行6枚・最新cap枚(+N)。hiLast=直近の1枚を1秒ハイライト
       const px=w+2,py=h+3,over=list.length-cap,show=over>0?list.slice(-cap):list;
       if(over>0)outlinedText(g,'+'+over,x0-6,y0+10,10,'#ffd77a','#12331f',3,1,'right');
       show.forEach((e,i)=>tile(g,x0+(i%6)*px,y0+((i/6)|0)*py,w,h,e.t,
-        tedashiShow&&!e.ted?{gray:true}:null));
+        hiLast&&i===show.length-1?{sel:true}:tedashiShow&&!e.ted?{gray:true}:null));
     }
     function drawLoupe(g){
       rr(g,LP.x,LP.y,LP.w,LP.h,14);
@@ -6146,11 +6168,12 @@ registerGame({
       outlinedText(g,G.scores[s]+'点',x,80,10,'#dceadf','#12331f',3,1,'left');
       if(p.riichi){rr(g,x+66,58,54,14,7);g.fillStyle='#e5578a';g.fill();
         text(g,'リーチ',x+93,65,9,'#fff','center');}
-      river(g,p.river,x,88,OW,OH,18); // ミニ河は最新18枚
+      river(g,p.river,x,88,OW,OH,18,lastDiscSeat===s&&discHiT>0); // ミニ河は最新18枚
     }
     return {
       update(dt){
-        if(mjPhase==='fb'&&fb&&fb.auto){timer-=dt;if(timer<=0){fb=null;mjPhase='ai';aiSeat=1;timer=.4;}}
+        if(discHiT>0)discHiT=Math.max(0,discHiT-dt);
+        if(mjPhase==='fb'&&fb&&fb.auto){timer-=dt;if(timer<=0){fb=null;mjPhase='ai';aiSeat=1;timer=MJ_SPEED[speed].seat;}}
         else if(mjPhase==='draw'){timer-=dt;if(timer<=0)startMyTurn();}
         else if(mjPhase==='ai'){timer-=dt;if(timer<=0)stepAi();}
       },
@@ -6158,10 +6181,18 @@ registerGame({
         g.drawImage(FELT,0,0);
         outlinedText(g,mj4KyokuLabel(G)+(hanchan?'(半荘)':'(東風)'),16,50,14,'#fff','#12331f',4,1,'left');
         outlinedText(g,'のこり'+Math.max(0,R.wall.length-14)+'牌',W-16,50,12,'#dceadf','#12331f',3,1,'right');
+        outlinedText(g,'ドラ',258,50,11,'#ffd77a','#12331f',3,1,'left'); // 常時表示(共通HUDのスコア表示と重ならない隙間に配置)
+        tile(g,286,38,15,23,R.doraIndicator);
         if(!gameStarted()){ // 上部HUD(BEST)と重ならない河下の空きにチップ表示 (タップ域と一致)
-          rr(g,W/2-88,148,176,24,12);g.fillStyle='rgba(18,51,31,.78)';g.fill();
+          rr(g,W/2-102,148,100,24,12);g.fillStyle='rgba(18,51,31,.78)';g.fill();
           g.strokeStyle='#ffd77a';g.lineWidth=1;g.stroke();
-          outlinedText(g,'⚙️ タップで 東風⇄半荘',W/2,160,11,'#ffd77a','#12331f',3,1,'center');
+          outlinedText(g,'⚙️東風⇄半荘',W/2-52,160,10.5,'#ffd77a','#12331f',3,1,'center');
+        }
+        { // 速度切替チップ (常時タップ可・ゲーム中はCPUの番でも変えられる)
+          const sw=gameStarted()?140:100,sx=gameStarted()?W/2-70:W/2+2,scx=sx+sw/2;
+          rr(g,sx,148,sw,24,12);g.fillStyle='rgba(18,51,31,.78)';g.fill();
+          g.strokeStyle='#9ad0e8';g.lineWidth=1;g.stroke();
+          outlinedText(g,'⏱速度:'+MJ_SPEED[speed].label,scx,160,10.5,'#9ad0e8','#12331f',3,1,'center');
         }
         drawOpp(g,3,14);drawOpp(g,2,150);drawOpp(g,1,286); // 上家/対面/下家
         // コーチパネル
@@ -6222,7 +6253,7 @@ registerGame({
         outlinedText(g,'あなた'+(R.dealer===0?'(親)':'')+' '+G.scores[0]+'点',16,404,12,'#fff','#12331f',3,1,'left');
         if(me().riichi){rr(g,150,396,64,16,8);g.fillStyle='#e5578a';g.fill();
           text(g,'リーチ！',182,404,10,'#fff','center');}
-        river(g,me().river,W/2-((RW+2)*6-2)/2,414,RW,RH,24);
+        river(g,me().river,W/2-((RW+2)*6-2)/2,414,RW,RH,24,lastDiscSeat===0&&discHiT>0);
         if(mjPhase==='select'&&sel>=0)drawLoupe(g);
         if(mjPhase!=='report'&&mjPhase!=='kyokuEnd'){
           const tiles=handTiles();
@@ -6244,16 +6275,20 @@ registerGame({
         }
       },
       onDown(x,y){
-        if(mjPhase==='fb'&&fb&&!fb.auto){fb=null;mjPhase='ai';aiSeat=1;timer=.35;A.tick();return;}
+        if(mjPhase==='fb'&&fb&&!fb.auto){fb=null;mjPhase='ai';aiSeat=1;timer=MJ_SPEED[speed].trans;A.tick();return;}
         if(mjPhase==='kyokuEnd'){nextKyoku();A.pop();return;}
         if(mjPhase==='report'){reportTap(x,y);return;}
-        if(!gameStarted()&&y>=144&&y<=176&&x>W/2-90&&x<W/2+90){ // 東風/半荘トグル (開始前のみ)
+        if(!gameStarted()&&y>=144&&y<=176&&x>=W/2-102&&x<=W/2-2){ // 東風/半荘トグル (開始前のみ)
           hanchan=!hanchan;store.set('pgp2_mj_hanchan',hanchan?'1':'0');
           G=mj4GameNew(RNG,hanchan);R=mj4RoundNew(G);
           an=null;fb=null;sel=-1;drawn=-1;riichiArm=false; // 配り直した局に合わせて手番状態も戻す
-          mjPhase='draw';timer=.3;
-          banner(hanchan?'半荘(8局)にきりかえ・配りなおし':'東風(4局)にきりかえ・配りなおし');
+          mjPhase='draw';timer=MJ_SPEED[speed].init;
+          banner(hanchan?'半荘(8局)にきりかえ・配りなおし':'東風(4局)にきりかえ・配りなおし',{small:true});
           A.pop();return;
+        }
+        if(y>=144&&y<=176&&x>=(gameStarted()?W/2-70:W/2+2)&&x<=(gameStarted()?W/2+70:W/2+102)){ // 速度切替(いつでも可)
+          speed=MJ_SPEED_ORDER[(MJ_SPEED_ORDER.indexOf(speed)+1)%MJ_SPEED_ORDER.length];
+          store.set('pgp2_mj_speed',speed);A.tick();return;
         }
         if(mjPhase!=='select')return;
         for(const b of BTNS)
