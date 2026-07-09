@@ -612,6 +612,16 @@ function drawWinLine(g,a,b,col,w,base,amp,t){ // 勝ち筋の明滅ライン (�
   g.strokeStyle=col;g.lineWidth=w;g.lineCap='round';
   g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();g.restore();
 }
+/* PR-2: CPU対戦2タップ確定の純ロジック (オセロ/五目で共用)。1回目タップ=ハイライト選択/
+   同マス2回目タップ=確定/盤外タップ=キャンセル/別の合法マス=選択移動/非合法マスは選択を変えず警告のみ。
+   pending: 選択中マス(-1=なし) / cell: 今回タップしたマス(-1=盤外) / legal: cellが着手可能か
+   戻り値 {action:'confirm'|'select'|'cancel'|'invalid'|'none', pending: 次の選択状態} */
+function twoTapDecision(pending,cell,legal){
+  if(cell<0)return pending>=0?{action:'cancel',pending:-1}:{action:'none',pending};
+  if(pending===cell)return {action:'confirm',pending:-1};
+  if(legal)return {action:'select',pending:cell};
+  return {action:'invalid',pending};
+}
 const SELFTESTS=[]; // 各ゲームが純ロジックテストをpushし、?selftest起動時にbootが一括実行
 function makeTest(label){ // run*Tests の定型(集計・ck・出力)を共通化。ckr は引数逆順の旧suite互換
   let pass=0,fail=0;const log=[];
@@ -620,6 +630,26 @@ function makeTest(label){ // run*Tests の定型(集計・ck・出力)を共通�
     done:()=>{console.log('['+label+' tests] pass='+pass+' / fail='+fail,log.length?log:'');
       return {pass,fail,log};}};
 }
+/* PR-2: 2タップ確定(twoTapDecision)の自動テスト。オセロ/五目共通の純ロジック部分。?selftest で実行。 */
+function runTwoTapConfirmTests(){
+  const {ck,done}=makeTest('two-tap confirm');
+  // 未選択(-1)で合法マスをタップ → 選択(select)。confirm/cancelにはならない
+  {const d=twoTapDecision(-1,5,true);ck('first-tap-selects',d.action==='select'&&d.pending===5);}
+  // 未選択で非合法マスをタップ → invalid。選択状態(-1)は変化なし
+  {const d=twoTapDecision(-1,5,false);ck('first-tap-illegal',d.action==='invalid'&&d.pending===-1);}
+  // 選択中に同じマスを2回目タップ → confirm。選択解除(-1)
+  {const d=twoTapDecision(5,5,true);ck('same-cell-confirms',d.action==='confirm'&&d.pending===-1);}
+  // 選択中に別の合法マスをタップ → select(選択移動)。confirmにはならない
+  {const d=twoTapDecision(5,9,true);ck('other-legal-moves-selection',d.action==='select'&&d.pending===9);}
+  // 選択中に別の非合法マスをタップ → invalid。選択(5)は変えない
+  {const d=twoTapDecision(5,9,false);ck('other-illegal-keeps-selection',d.action==='invalid'&&d.pending===5);}
+  // 選択中に盤外(-1)をタップ → cancel。選択解除
+  {const d=twoTapDecision(5,-1,false);ck('offboard-cancels',d.action==='cancel'&&d.pending===-1);}
+  // 未選択で盤外をタップ → none(何もしない)。選択状態(-1)は変化なし
+  {const d=twoTapDecision(-1,-1,false);ck('offboard-noop-when-unselected',d.action==='none'&&d.pending===-1);}
+  return done();
+}
+SELFTESTS.push(runTwoTapConfirmTests);
 function outlinedText(g,txt,x,y,size,fill,stroke,lw,alpha,align){
   g.save();
   g.globalAlpha*=(alpha==null?1:alpha);
@@ -3194,6 +3224,7 @@ registerGame({
     let board=Array(N*N).fill(null); // 空セルは null 基準
     let turn=0,result=null,winLine=null,last=-1,t=0;
     let history=[],hint=-1,hintT=0,undoLock=false,cpuTimer=0; // 履歴 / ヒント / 連打防止 / CPU思考ディレイ
+    let confirmSel=-1; // PR-2: CPU対戦2タップ確定の選択中マス(-1=未選択)。1回目タップでハイライト→同マス2回目で確定
     const parts=new Particles();
 
     function applyCfg(){ // cfg → players
@@ -3215,7 +3246,7 @@ registerGame({
     }
     function clearBoard(){
       board=Array(N*N).fill(null);turn=0;result=null;winLine=null;last=-1;
-      history=[];hint=-1;hintT=0;undoLock=false;cpuTimer=0;
+      history=[];hint=-1;hintT=0;undoLock=false;cpuTimer=0;confirmSel=-1;
       parts.list=[];t=0; // 勝利演出の粒子を新盤面に持ち越さない
     }
     function scheduleCpu(){ // 現手番がCPUなら思考ディレイ(約300〜700ms)を仕込む
@@ -3238,7 +3269,7 @@ registerGame({
       result=null;winLine=null;parts.list=[]; // 決着解除 + 勝利演出クリア
       turn=history.length%2;                    // 手番を戻す (黒=players[0]=偶数手番)
       last=history.length?history[history.length-1]:-1;
-      hint=-1;hintT=0;undoLock=true;cpuTimer=0; // 連続待った防止
+      hint=-1;hintT=0;undoLock=true;cpuTimer=0;confirmSel=-1; // 連続待った防止 / 2タップ選択も解除
       A.pop();vib(8);scheduleCpu();
     }
     function showHint(){ // 💡オンデマンド: 良手を1つ点滅表示 (常時ONや人間以外の手番では無効)
@@ -3249,7 +3280,7 @@ registerGame({
     function place(cell){ // 着手を1箇所に集約 (手番交代もここ)
       if(result||cell<0||cell>=N*N||board[cell])return; // cell>=N*N: CPUの不正indexで配列を拡張させない
       board[cell]=players[turn].mark;last=cell;
-      history.push(cell);hint=-1;hintT=0;undoLock=false; // 履歴に積む / 着手で待った解禁・ヒント消去
+      history.push(cell);hint=-1;hintT=0;undoLock=false;confirmSel=-1; // 履歴に積む / 着手で待った解禁・ヒント/2タップ選択消去
       A.pop();vib(8);
       const r=checkGomoku(board,cell);
       if(r.winner){
@@ -3361,7 +3392,15 @@ registerGame({
         if(!result){
           if(hitBtn(btnL,x,y)){undo();return}      // まった
           if(hitBtn(btnR,x,y)){showHint();return}  // 💡 ヒント
-          if(players[turn].type==='human')place(cellAt(x,y)); // 人間の手番だけ着手可
+          if(players[turn].type==='human'){
+            if(cfg.mode==='pvp'){place(cellAt(x,y));return} // 2人対戦は即着手のまま(2タップ確定はCPU対戦のみ対象)
+            // PR-2: CPU対戦は2タップ確定 (twoTapDecisionはオセロと共用の純ロジック)
+            const c=cellAt(x,y),d=twoTapDecision(confirmSel,c,c>=0&&board[c]===null);
+            confirmSel=d.pending;
+            if(d.action==='confirm')place(c);
+            else if(d.action==='select'||d.action==='cancel')A.pop();
+            else if(d.action==='invalid')A.bad();
+          }
         }else{
           if(hitBtn(btnL,x,y)){reset();return}     // もう いちど
           if(hitBtn(btnR,x,y)){undo();return}      // 勝ち手を待った (誤タップ救済)
@@ -3436,6 +3475,12 @@ registerGame({
           g.save();g.globalAlpha=0.5+0.5*Math.sin(t*9);
           g.strokeStyle='#21e6c1';g.lineWidth=4;g.beginPath();g.arc(c.x,c.y,CELL*0.55,0,TAU);g.stroke();
           g.restore();
+        }
+        // PR-2: CPU対戦2タップ確定の選択マス (黄枠) - 同じマスをもう1回タップすると確定
+        if(!result&&!online&&confirmSel>=0&&!board[confirmSel]){
+          const c=center(confirmSel),hs=CELL*0.5;
+          g.save();g.globalAlpha=0.7+0.3*Math.sin(t*7);g.strokeStyle='#ffd23f';g.lineWidth=3.5;
+          rr(g,c.x-hs,c.y-hs,hs*2,hs*2,6);g.stroke();g.restore();
         }
         parts.draw(g);
         if(online){ OL.drawButtons(g); }
@@ -4066,6 +4111,7 @@ registerGame({
     let flipMap=null,flipT=0;  // 反転アニメ (index→反転前の色)
     let placedAt=-1,placeT=0;  // 着手アニメ (置いた石のポップ)
     let hint=-1,hintT=0;       // #9 ヒント: 推奨手index / 残り点滅秒
+    let confirmSel=-1;         // PR-2: CPU対戦2タップ確定の選択中マス(-1=未選択)。1回目タップでハイライト→同マス2回目で確定
     let assistOn=store.get('pgp2_othello_assist','0')==='1'; // #8 合法手アシスト表示(既定OFF・localStorageで永続。五目ヒントと同方式)
     // #10 CPU対戦: setup画面/モード設定/CPU思考タイマー/おに解放
     let screen='setup';        // 'setup'(あいて選択) | 'play'(対局)。openGame→howto→setup→play
@@ -4089,7 +4135,7 @@ registerGame({
     }
     function reset(){ // もう いちど: 同じ あいて設定で再戦
       board=othInitial();turn=0;result=null;last=-1;history=[];lastPass=null;
-      flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;oniJustUnlocked=false;
+      flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;oniJustUnlocked=false;confirmSel=-1;
       buildPlayers();A.pop();kickCpu();
     }
     function endGame(){
@@ -4120,7 +4166,7 @@ registerGame({
       if(!flips.length){A.bad();vib(8);return;}        // 非合法マス
       history.push({board:board.slice(),turn,last,lastPass}); // 待った用スナップショット
       lastPass=null;                                   // 着手したらパス表示を消す
-      hint=-1;hintT=0;                                 // 着手でヒント消去
+      hint=-1;hintT=0;confirmSel=-1;                   // 着手でヒント/2タップ選択を消去
       board=applyMove(board,cell,color);
       last=cell;placedAt=cell;placeT=PLACE_DUR;
       flipMap=new Map();const opp=othOpp(color);for(const f of flips)flipMap.set(f,opp);flipT=FLIP_DUR;
@@ -4177,7 +4223,7 @@ registerGame({
     function startPlay(){ // setup→対局。盤リセットして開始(先手がCPUならkickCpuで自動着手)
       buildPlayers();
       board=othInitial();turn=0;result=null;last=-1;history=[];lastPass=null;
-      flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;oniJustUnlocked=false;
+      flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;oniJustUnlocked=false;confirmSel=-1;
       screen='play';A.pop();kickCpu();
     }
     // ── #10 setup画面(あいて選択): モード/先後/強さ(おに=解放式)/はじめる ──
@@ -4261,7 +4307,13 @@ registerGame({
         if(hitBtn(btnL,x,y)){undo();return}     // プレイ中: まった(pvpのみ)
         if(hitBtn(btnR,x,y)){showOthHint();return} // プレイ中: 💡ヒント(人間手番のみ)
         if(players[turn].type!=='human')return; // CPU思考中は盤面タップ無効
-        place(cellAt(x,y));
+        if(cfg.mode==='pvp'){place(cellAt(x,y));return} // 2人対戦は即着手のまま(#2 2タップ確定はCPU対戦のみ対象)
+        // PR-2: CPU対戦は2タップ確定 (twoTapDecisionは五目と共用の純ロジック)
+        const c=cellAt(x,y),d=twoTapDecision(confirmSel,c,c>=0&&getFlips(board,c,players[turn].color).length>0);
+        confirmSel=d.pending;
+        if(d.action==='confirm')place(c);
+        else if(d.action==='select'||d.action==='cancel')A.pop();
+        else if(d.action==='invalid')A.bad();
       },
       update(dt){
         t+=dt;
@@ -4340,6 +4392,12 @@ registerGame({
           g.save();g.globalAlpha=0.55+0.45*Math.sin(t*8);
           g.strokeStyle='#ffd23f';g.lineWidth=3.5;
           g.beginPath();g.arc(c.x,c.y,CELL*0.42,0,TAU);g.stroke();g.restore();
+        }
+        // PR-2: CPU対戦2タップ確定の選択マス (黄枠) - 同じマスをもう1回タップすると確定
+        if(!result&&!online&&confirmSel>=0&&board[confirmSel]===null){
+          const c=center(confirmSel),hs=CELL*0.46;
+          g.save();g.globalAlpha=0.7+0.3*Math.sin(t*7);g.strokeStyle='#ffd23f';g.lineWidth=4;
+          rr(g,c.x-hs,c.y-hs,hs*2,hs*2,8);g.stroke();g.restore();
         }
         // 石 (反転アニメ=scaleXフリップ / 着手=ポップ)
         const sr=CELL*0.40;
