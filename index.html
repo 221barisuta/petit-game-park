@@ -6016,9 +6016,9 @@ function mjWeakness(hist){
 /* ---- リアル牌描画 (フェーズ1) ----
    mjRenderTile(g, tileId, x, y, w, h, opts)
    tileId: int 0-33 (0-8=萬1-9 / 9-17=筒1-9 / 18-26=索1-9 / 27-33=東南西北白發中)
-   opts: {sel:選択強調, ghost:薄表示(リーチ時の不可牌), gray:グレーアウト(ツモぎり),
+   opts: {sel:選択強調, ghost:薄表示(リーチ時の不可牌), gray:グレーアウト+半透明(ツモぎり),
           back:裏面(フェーズ2の他家手牌用)}
-   画像なし・canvasのみ。手牌/河/ルーペ/candRow すべてこれ1本 */
+   画像なし・canvasのみ。手牌/河/ルーペ/おすすめマーク すべてこれ1本 */
 const MJ_PIPS=[ // 筒子/索子のピップ配置 (単位座標)。伝統的な並びに寄せる
   [[.5,.5]],
   [[.5,.27],[.5,.73]],
@@ -6031,11 +6031,35 @@ const MJ_PIPS=[ // 筒子/索子のピップ配置 (単位座標)。伝統的な
   [[.26,.2],[.5,.2],[.74,.2],[.26,.5],[.5,.5],[.74,.5],[.26,.8],[.5,.8],[.74,.8]],
 ];
 const MJ_KAN=['一','二','三','四','五','六','七','八','九'];
+const MJ_RED='#c0392b',MJ_BLU='#2e5fa3',MJ_GRN='#1d7a3d';
+/* 筒子/索子の実物準拠配色 (#feedback2 3件目: 単色すぎて清一色/緑一色が牌を読まずに当てられた対策)
+   index=n-2 (n=1は専用デザインなのでnull)。要素数はMJ_PIPS[n-1]のピップ数と一致させること */
+const MJ_PIN_COLORS=[
+  [MJ_GRN,MJ_GRN],
+  [MJ_RED,MJ_GRN,MJ_RED],
+  [MJ_BLU,MJ_BLU,MJ_BLU,MJ_BLU],
+  [MJ_BLU,MJ_BLU,MJ_RED,MJ_BLU,MJ_BLU],
+  [MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN],
+  [MJ_RED,MJ_GRN,MJ_GRN,MJ_BLU,MJ_BLU,MJ_BLU,MJ_BLU],
+  [MJ_BLU,MJ_BLU,MJ_BLU,MJ_BLU,MJ_BLU,MJ_BLU,MJ_BLU,MJ_BLU],
+  [MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_RED,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN],
+];
+const MJ_SOU_COLORS=[
+  [MJ_GRN,MJ_GRN],
+  [MJ_GRN,MJ_RED,MJ_GRN],
+  [MJ_RED,MJ_GRN,MJ_GRN,MJ_RED],
+  [MJ_GRN,MJ_GRN,MJ_RED,MJ_GRN,MJ_GRN],
+  [MJ_RED,MJ_GRN,MJ_RED,MJ_GRN,MJ_RED,MJ_GRN],
+  [MJ_RED,MJ_RED,MJ_RED,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN],
+  [MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN],
+  [MJ_GRN,MJ_GRN,MJ_GRN,MJ_RED,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN],
+];
 function mjRenderTile(g,t,x,y,w,h,o){
   o=o||{};
   g.save();
   if(o.ghost)g.globalAlpha*=.38;
   const r=Math.max(3,w*.16),gray=!!o.gray;
+  if(gray)g.globalAlpha*=.72; // #feedback2 4件目: ツモぎりを色だけでなく実際に「うすく」する
   const face=o.sel?'#fff3c4':gray?'#d9dbde':'#fdfcf4';
   rr(g,x,y+h*.06,w,h*.94,r);g.fillStyle=gray?'#9aa0a8':'#c9bfae';g.fill(); // 厚み
   const fh=h*.94;
@@ -6062,27 +6086,39 @@ function mjRenderTile(g,t,x,y,w,h,o){
       g.font=`800 ${fh*.42}px ${FONT}`;g.fillText(MJ_KAN[n-1],cx,y+fh*.3);
       g.fillStyle=ink('#b03030');
       g.font=`800 ${fh*.38}px ${FONT}`;g.fillText('萬',cx,y+fh*.72);
-    }else if(su===1){ // 筒子: 丸ピップ (1筒は大円・5筒の中央は赤)
-      const R0=n===1?w*.3:n<=4?w*.135:w*.105;
-      MJ_PIPS[n-1].forEach(([ux,uy],i)=>{
-        const X=x+w*ux,Y=y+fh*(uy*.84+.08);
-        const col=ink(n===1||(n===5&&i===2)?'#c0392b':'#2e5fa3');
-        g.beginPath();g.arc(X,Y,R0,0,TAU);g.fillStyle=col;g.fill();
-        g.beginPath();g.arc(X,Y,R0*.5,0,TAU);g.fillStyle=face;g.fill();
-        g.beginPath();g.arc(X,Y,R0*.22,0,TAU);g.fillStyle=col;g.fill();
-      });
-    }else{ // 索子: 竹スティック (1索は様式化した1本・5索の中央は赤)
+    }else if(su===1){ // 筒子: 丸ピップ (1筒は的の専用デザイン・2-9筒は実物準拠で赤/青/緑を混色)
       if(n===1){
-        g.fillStyle=ink('#1d7a3d');
-        rr(g,cx-w*.12,y+fh*.14,w*.24,fh*.64,w*.1);g.fill();
-        g.fillStyle=ink('#c0392b');
-        rr(g,cx-w*.17,y+fh*.42,w*.34,fh*.1,w*.05);g.fill();
-        g.fillStyle='rgba(255,255,255,.5)';g.fillRect(cx-w*.04,y+fh*.16,w*.08,fh*.58);
+        const R0=w*.3,X=x+w*.5,Y=y+fh*.5;
+        g.beginPath();g.arc(X,Y,R0,0,TAU);g.fillStyle=ink(MJ_BLU);g.fill();
+        g.beginPath();g.arc(X,Y,R0*.62,0,TAU);g.fillStyle=face;g.fill();
+        g.beginPath();g.arc(X,Y,R0*.36,0,TAU);g.fillStyle=ink(MJ_BLU);g.fill();
+        g.beginPath();g.arc(X,Y,R0*.16,0,TAU);g.fillStyle=ink(MJ_RED);g.fill();
       }else{
-        const SW=w*.15,SH=fh*.21;
+        const R0=n<=4?w*.135:w*.105,cols=MJ_PIN_COLORS[n-2];
         MJ_PIPS[n-1].forEach(([ux,uy],i)=>{
           const X=x+w*ux,Y=y+fh*(uy*.84+.08);
-          g.fillStyle=ink(n===5&&i===2?'#c0392b':'#1d7a3d');
+          const col=ink(cols[i]);
+          g.beginPath();g.arc(X,Y,R0,0,TAU);g.fillStyle=col;g.fill();
+          g.beginPath();g.arc(X,Y,R0*.5,0,TAU);g.fillStyle=face;g.fill();
+          g.beginPath();g.arc(X,Y,R0*.22,0,TAU);g.fillStyle=col;g.fill();
+        });
+      }
+    }else{ // 索子: 竹スティック (1索=イーソウは鳥の専用デザイン・2-9索は赤の差し色を混ぜて実物準拠)
+      if(n===1){
+        g.fillStyle=ink(MJ_GRN);
+        g.beginPath();g.ellipse(cx,y+fh*.58,w*.27,fh*.3,0,0,TAU);g.fill(); // 胴体
+        g.beginPath();g.ellipse(cx,y+fh*.25,w*.16,fh*.15,0,0,TAU);g.fill(); // 頭
+        g.fillStyle=ink(MJ_RED);
+        g.beginPath();g.moveTo(cx-w*.02,y+fh*.13);g.lineTo(cx+w*.12,y+fh*.17);g.lineTo(cx-w*.02,y+fh*.21);g.closePath();g.fill(); // くちばし
+        g.strokeStyle=ink('#0d3d22');g.lineWidth=Math.max(1,w*.035);g.lineCap='round';
+        g.beginPath();g.moveTo(cx-w*.2,y+fh*.5);g.quadraticCurveTo(cx-w*.34,y+fh*.68,cx-w*.15,y+fh*.88);g.stroke(); // 尾羽
+        g.fillStyle='rgba(255,255,255,.55)';
+        g.beginPath();g.arc(cx-w*.06,y+fh*.23,w*.035,0,TAU);g.fill(); // 目のハイライト
+      }else{
+        const SW=w*.15,SH=fh*.21,cols=MJ_SOU_COLORS[n-2];
+        MJ_PIPS[n-1].forEach(([ux,uy],i)=>{
+          const X=x+w*ux,Y=y+fh*(uy*.84+.08);
+          g.fillStyle=ink(cols[i]);
           rr(g,X-SW/2,Y-SH/2,SW,SH,SW*.4);g.fill();
           g.fillStyle='rgba(255,255,255,.55)';g.fillRect(X-SW/2,Y-SH*.09,SW,SH*.18);
         });
@@ -6248,15 +6284,6 @@ registerGame({
     }
     function panel(g,x,y,w,h){rr(g,x,y,w,h,12);g.fillStyle='rgba(255,255,255,.88)';g.fill();
       g.strokeStyle='#d8ceba';g.lineWidth=1.5;g.stroke();}
-    function candRow(g,x,y,c,idx,threat){
-      tile(g,x,y,24,33,c.tile);
-      const bx=x+32;
-      text(g,['◎','○','△'][idx]||'△',bx,y+8,15,['#e5a000','#7a9a3a','#888'][idx]||'#888');
-      g.fillStyle='#eee6d6';g.fillRect(bx+20,y+2,120,11);
-      g.fillStyle=['#ffd23f','#7cf29c','#8fd0ff'][idx]||'#8fd0ff';
-      g.fillRect(bx+20,y+2,120*clamp(c.total,0,100)/100,11);
-      text(g,mjReason(c,an,mj4Threat(R,0)).join(' '),bx,y+26,10.5,'#555');
-    }
     function drawOpp(g,s,x){ // 他家1人分 (名前/点/リーチ/ミニ河)
       const p=R.players[s],active=mjPhase==='ai'&&aiSeat===s;
       outlinedText(g,MJ4_NAMES[s]+(R.dealer===s?'(親)':''),x,66,11,active?'#ffd77a':'#fff','#12331f',3,1,'left');
@@ -6274,7 +6301,7 @@ registerGame({
       },
       draw(g){
         g.drawImage(FELT,0,0);
-        outlinedText(g,mj4KyokuLabel(G)+(hanchan?'(半荘)':'(東風)'),16,50,14,'#fff','#12331f',4,1,'left');
+        outlinedText(g,mj4KyokuLabel(G)+(hanchan?'(半荘)':'(東風)'),56,50,14,'#fff','#12331f',4,1,'left'); // ✕ボタン(左上9cqw≒38px)を避ける (#feedback2 4件目)
         outlinedText(g,'のこり'+Math.max(0,R.wall.length-14)+'牌',W-16,50,12,'#dceadf','#12331f',3,1,'right');
         outlinedText(g,'ドラ',258,50,11,'#ffd77a','#12331f',3,1,'left'); // 常時表示(共通HUDのスコア表示と重ならない隙間に配置)
         tile(g,286,38,15,23,R.doraIndicator);
@@ -6290,9 +6317,10 @@ registerGame({
           outlinedText(g,'⏱速度:'+MJ_SPEED[speed].label,scx,160,10.5,'#9ad0e8','#12331f',3,1,'center');
         }
         drawOpp(g,3,14);drawOpp(g,2,150);drawOpp(g,1,286); // 上家/対面/下家
-        // コーチパネル
+        // コーチパネル (#feedback2 4件目: ヒント中は牌上マーク主体にして帯を圧縮・卓を隠しすぎない)
         const tall=(mjPhase==='report'||mjPhase==='kyokuEnd');
-        panel(g,8,176,W-16,tall?320:212);
+        const compactHint=mjPhase==='select'&&hintOn;
+        panel(g,8,176,W-16,tall?320:compactHint?116:212);
         const px=20,py=192;
         if(an&&!R.end&&mjPhase==='select')text(g,(an.shMin===0?'テンパイ！':an.shMin+'シャンテン'),W-28,py+2,14,
           an.shMin===0?'#e5578a':'#5a7a6a','right');
@@ -6302,10 +6330,11 @@ registerGame({
           if(mj4Threat(R,0))text(g,'⚠️リーチ警戒中: 安全度も考えよう',px,py+22,12.5,'#c0392b');
           if(G.noYaku)text(g,'※役なしは和了できない',W-28,py+22,11.5,'#8a6a2a','right');
           if(hintOn&&an){
-            text(g,'💡コーチのおすすめ:',px,py+42,12.5,'#7a6a3a');
-            an.cands.slice(0,3).forEach((c,i)=>candRow(g,px,py+56+i*38,c,i,mj4Threat(R,0)));
+            const top=an.cands[0];
+            text(g,'💡おすすめ ◎'+MJ.NAMES[top.tile]+'ぎり (手牌上の◎○△も見てね)',px,py+42,12.5,'#7a6a3a');
+            text(g,mjReason(top,an,mj4Threat(R,0)).join(' '),px,py+62,10.5,'#555');
             text(g,'総合 = 効率'+Math.round(an.weights.eff*100)+'% + 安全'+
-              Math.round(an.weights.safe*100)+'% (押し引き表より)',px,py+174,10.5,'#999');
+              Math.round(an.weights.safe*100)+'% (押し引き表より)',px,py+82,10.5,'#999');
           }else{
             text(g,'💡ヒントで受け入れ枚数と理由がみられる',px,py+60,12,'#999');
           }
@@ -6355,8 +6384,12 @@ registerGame({
           tiles.forEach((t,i)=>{
             const isDrawn=mjPhase==='select'&&i===tiles.lastIndexOf(drawn);
             const keep=an&&an.cands.find(c=>c.tile===t);
-            tile(g,HX+i*(TW+2)+(isDrawn?3:0),HY-(sel===t?8:0),TW,TH,t,
-              {sel:sel===t,dim:riichiArm&&keep&&keep.sh!==0});
+            const tx=HX+i*(TW+2)+(isDrawn?3:0),ty=HY-(sel===t?8:0);
+            tile(g,tx,ty,TW,TH,t,{sel:sel===t,dim:riichiArm&&keep&&keep.sh!==0});
+            if(hintOn&&mjPhase==='select'&&keep){ // #feedback2 4件目: おすすめ一覧を牌上の小マークに集約
+              const idx=an.cands.indexOf(keep);
+              if(idx<3)text(g,['◎','○','△'][idx],tx+TW/2,ty-9,13,['#e5a000','#7a9a3a','#5a86ad'][idx],'center');
+            }
           });
         }
         if(mjPhase==='select'){
@@ -6608,6 +6641,22 @@ function runMahjongTests(){
       mjRenderTile(g,5,2,2,29,40,{gray:true});mjRenderTile(g,5,2,2,29,40,{back:true});
     }catch(e){ok=false;}
     ck('render:全種類の牌が例外なく描ける',ok);
+  }
+  { // 配色: 筒子/索子が単色に偏っていないこと (#feedback2 3件目: 緑一色/清一色が牌を読まず色だけで当てられてしまう対策の再発防止)
+    const c=document.createElement('canvas');c.width=60;c.height=80;
+    const g=c.getContext('2d');
+    const inkColorsOf=t=>{
+      const seen=new Set(),of=g.fill.bind(g);
+      g.fill=function(){seen.add(g.fillStyle);of();};
+      mjRenderTile(g,t,2,2,29,40,{});
+      g.fill=of;
+      const palette=new Set([MJ_RED,MJ_BLU,MJ_GRN]);
+      return [...seen].filter(x=>palette.has(x));
+    };
+    ck('render:筒子3が複数色',new Set(inkColorsOf(9+2)).size>=2);   // 3筒 (index 9=1筒)
+    ck('render:筒子7が複数色',new Set(inkColorsOf(9+6)).size>=2);   // 7筒
+    ck('render:索子3が複数色',new Set(inkColorsOf(18+2)).size>=2);  // 3索 (index 18=1索)
+    ck('render:索子6が複数色',new Set(inkColorsOf(18+5)).size>=2);  // 6索
   }
   return done();
 }
