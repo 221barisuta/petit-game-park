@@ -612,6 +612,16 @@ function drawWinLine(g,a,b,col,w,base,amp,t){ // 勝ち筋の明滅ライン (�
   g.strokeStyle=col;g.lineWidth=w;g.lineCap='round';
   g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();g.restore();
 }
+/* PR-2: CPU対戦2タップ確定の純ロジック (オセロ/五目で共用)。1回目タップ=ハイライト選択/
+   同マス2回目タップ=確定/盤外タップ=キャンセル/別の合法マス=選択移動/非合法マスは選択を変えず警告のみ。
+   pending: 選択中マス(-1=なし) / cell: 今回タップしたマス(-1=盤外) / legal: cellが着手可能か
+   戻り値 {action:'confirm'|'select'|'cancel'|'invalid'|'none', pending: 次の選択状態} */
+function twoTapDecision(pending,cell,legal){
+  if(cell<0)return pending>=0?{action:'cancel',pending:-1}:{action:'none',pending};
+  if(pending===cell)return {action:'confirm',pending:-1};
+  if(legal)return {action:'select',pending:cell};
+  return {action:'invalid',pending};
+}
 const SELFTESTS=[]; // 各ゲームが純ロジックテストをpushし、?selftest起動時にbootが一括実行
 function makeTest(label){ // run*Tests の定型(集計・ck・出力)を共通化。ckr は引数逆順の旧suite互換
   let pass=0,fail=0;const log=[];
@@ -620,6 +630,26 @@ function makeTest(label){ // run*Tests の定型(集計・ck・出力)を共通�
     done:()=>{console.log('['+label+' tests] pass='+pass+' / fail='+fail,log.length?log:'');
       return {pass,fail,log};}};
 }
+/* PR-2: 2タップ確定(twoTapDecision)の自動テスト。オセロ/五目共通の純ロジック部分。?selftest で実行。 */
+function runTwoTapConfirmTests(){
+  const {ck,done}=makeTest('two-tap confirm');
+  // 未選択(-1)で合法マスをタップ → 選択(select)。confirm/cancelにはならない
+  {const d=twoTapDecision(-1,5,true);ck('first-tap-selects',d.action==='select'&&d.pending===5);}
+  // 未選択で非合法マスをタップ → invalid。選択状態(-1)は変化なし
+  {const d=twoTapDecision(-1,5,false);ck('first-tap-illegal',d.action==='invalid'&&d.pending===-1);}
+  // 選択中に同じマスを2回目タップ → confirm。選択解除(-1)
+  {const d=twoTapDecision(5,5,true);ck('same-cell-confirms',d.action==='confirm'&&d.pending===-1);}
+  // 選択中に別の合法マスをタップ → select(選択移動)。confirmにはならない
+  {const d=twoTapDecision(5,9,true);ck('other-legal-moves-selection',d.action==='select'&&d.pending===9);}
+  // 選択中に別の非合法マスをタップ → invalid。選択(5)は変えない
+  {const d=twoTapDecision(5,9,false);ck('other-illegal-keeps-selection',d.action==='invalid'&&d.pending===5);}
+  // 選択中に盤外(-1)をタップ → cancel。選択解除
+  {const d=twoTapDecision(5,-1,false);ck('offboard-cancels',d.action==='cancel'&&d.pending===-1);}
+  // 未選択で盤外をタップ → none(何もしない)。選択状態(-1)は変化なし
+  {const d=twoTapDecision(-1,-1,false);ck('offboard-noop-when-unselected',d.action==='none'&&d.pending===-1);}
+  return done();
+}
+SELFTESTS.push(runTwoTapConfirmTests);
 function outlinedText(g,txt,x,y,size,fill,stroke,lw,alpha,align){
   g.save();
   g.globalAlpha*=(alpha==null?1:alpha);
@@ -3194,6 +3224,7 @@ registerGame({
     let board=Array(N*N).fill(null); // 空セルは null 基準
     let turn=0,result=null,winLine=null,last=-1,t=0;
     let history=[],hint=-1,hintT=0,undoLock=false,cpuTimer=0; // 履歴 / ヒント / 連打防止 / CPU思考ディレイ
+    let confirmSel=-1; // PR-2: CPU対戦2タップ確定の選択中マス(-1=未選択)。1回目タップでハイライト→同マス2回目で確定
     const parts=new Particles();
 
     function applyCfg(){ // cfg → players
@@ -3215,7 +3246,7 @@ registerGame({
     }
     function clearBoard(){
       board=Array(N*N).fill(null);turn=0;result=null;winLine=null;last=-1;
-      history=[];hint=-1;hintT=0;undoLock=false;cpuTimer=0;
+      history=[];hint=-1;hintT=0;undoLock=false;cpuTimer=0;confirmSel=-1;
       parts.list=[];t=0; // 勝利演出の粒子を新盤面に持ち越さない
     }
     function scheduleCpu(){ // 現手番がCPUなら思考ディレイ(約300〜700ms)を仕込む
@@ -3238,7 +3269,7 @@ registerGame({
       result=null;winLine=null;parts.list=[]; // 決着解除 + 勝利演出クリア
       turn=history.length%2;                    // 手番を戻す (黒=players[0]=偶数手番)
       last=history.length?history[history.length-1]:-1;
-      hint=-1;hintT=0;undoLock=true;cpuTimer=0; // 連続待った防止
+      hint=-1;hintT=0;undoLock=true;cpuTimer=0;confirmSel=-1; // 連続待った防止 / 2タップ選択も解除
       A.pop();vib(8);scheduleCpu();
     }
     function showHint(){ // 💡オンデマンド: 良手を1つ点滅表示 (常時ONや人間以外の手番では無効)
@@ -3249,7 +3280,7 @@ registerGame({
     function place(cell){ // 着手を1箇所に集約 (手番交代もここ)
       if(result||cell<0||cell>=N*N||board[cell])return; // cell>=N*N: CPUの不正indexで配列を拡張させない
       board[cell]=players[turn].mark;last=cell;
-      history.push(cell);hint=-1;hintT=0;undoLock=false; // 履歴に積む / 着手で待った解禁・ヒント消去
+      history.push(cell);hint=-1;hintT=0;undoLock=false;confirmSel=-1; // 履歴に積む / 着手で待った解禁・ヒント/2タップ選択消去
       A.pop();vib(8);
       const r=checkGomoku(board,cell);
       if(r.winner){
@@ -3361,7 +3392,15 @@ registerGame({
         if(!result){
           if(hitBtn(btnL,x,y)){undo();return}      // まった
           if(hitBtn(btnR,x,y)){showHint();return}  // 💡 ヒント
-          if(players[turn].type==='human')place(cellAt(x,y)); // 人間の手番だけ着手可
+          if(players[turn].type==='human'){
+            if(cfg.mode==='pvp'){place(cellAt(x,y));return} // 2人対戦は即着手のまま(2タップ確定はCPU対戦のみ対象)
+            // PR-2: CPU対戦は2タップ確定 (twoTapDecisionはオセロと共用の純ロジック)
+            const c=cellAt(x,y),d=twoTapDecision(confirmSel,c,c>=0&&board[c]===null);
+            confirmSel=d.pending;
+            if(d.action==='confirm')place(c);
+            else if(d.action==='select'||d.action==='cancel')A.pop();
+            else if(d.action==='invalid')A.bad();
+          }
         }else{
           if(hitBtn(btnL,x,y)){reset();return}     // もう いちど
           if(hitBtn(btnR,x,y)){undo();return}      // 勝ち手を待った (誤タップ救済)
@@ -3436,6 +3475,12 @@ registerGame({
           g.save();g.globalAlpha=0.5+0.5*Math.sin(t*9);
           g.strokeStyle='#21e6c1';g.lineWidth=4;g.beginPath();g.arc(c.x,c.y,CELL*0.55,0,TAU);g.stroke();
           g.restore();
+        }
+        // PR-2: CPU対戦2タップ確定の選択マス (黄枠) - 同じマスをもう1回タップすると確定
+        if(!result&&!online&&confirmSel>=0&&!board[confirmSel]){
+          const c=center(confirmSel),hs=CELL*0.5;
+          g.save();g.globalAlpha=0.7+0.3*Math.sin(t*7);g.strokeStyle='#ffd23f';g.lineWidth=3.5;
+          rr(g,c.x-hs,c.y-hs,hs*2,hs*2,6);g.stroke();g.restore();
         }
         parts.draw(g);
         if(online){ OL.drawButtons(g); }
@@ -3796,6 +3841,11 @@ function getWinner(board){
   const {black,white}=countStones(board);
   return black>white?'black':white>black?'white':'draw';
 }
+// 表示記号 (①バグ対策: HUD/勝利/パス表示を1箇所に集約し、色ごとの対応がズレないようにする)
+const OTH_SYM={black:'●',white:'○'};                              // HUD用 (コンパクトバー・形で区別)
+const OTH_EMO={black:'⬛',white:'⬜'}, OTH_JP={black:'黒',white:'白'}; // 勝利/パス表示用 (絵文字+漢字で色を明示)
+const othWinLabel=w=>OTH_EMO[w]+' '+OTH_JP[w]+'のかち！';
+const othPassLabel=c=>OTH_EMO[c]+' '+OTH_JP[c]+'がパス';
 // --- #9 ヒント / #10 CPU 共通の手評価 (純関数・副作用なし) ---
 const OTH_CORNERS=new Set([0,7,56,63]);
 // index に color が打つ手の評価値。非合法(0反転)は -Infinity。角優先(+1000) ＋ 最多反転。
@@ -3991,6 +4041,22 @@ function runOthelloTests(){
   {const b=Array(64).fill('black');for(let i=0;i<32;i++)b[i]='white';
    ck('draw',getWinner(b)==='draw');}
   {const b=Array(64).fill('white');b[0]='black';ck('winner-white',getWinner(b)==='white');}
+  // ①バグ対策: 表示記号(HUD/絵文字+漢字)の黒白対応がズレていないか (大表示「●62」問題の再発防止)
+  {ck('sym-black',OTH_SYM.black==='●');ck('sym-white',OTH_SYM.white==='○');
+   ck('emo-black',OTH_EMO.black==='⬛');ck('emo-white',OTH_EMO.white==='⬜');
+   ck('winlabel-black',othWinLabel('black')==='⬛ 黒のかち！');
+   ck('winlabel-white',othWinLabel('white')==='⬜ 白のかち！');
+   ck('passlabel-black',othPassLabel('black')==='⬛ 黒がパス');
+   ck('passlabel-white',othPassLabel('white')==='⬜ 白がパス');}
+  // 終局集計とラベルの対応: 白石が多い盤の勝者ラベルに「白」が含まれ「黒」が含まれないこと (色の取り違え検出)
+  {const b=Array(64).fill('white');for(let i=0;i<24;i++)b[i]='black';
+   const w=getWinner(b),label=othWinLabel(w);
+   ck('endgame-winner-white',w==='white');
+   ck('endgame-label-matches-tally',label.includes('白')&&!label.includes('黒'));}
+  {const b=Array(64).fill('black');for(let i=0;i<24;i++)b[i]='white';
+   const w=getWinner(b),label=othWinLabel(w);
+   ck('endgame-winner-black',w==='black');
+   ck('endgame-label-matches-tally2',label.includes('黒')&&!label.includes('白'));}
   return done();
 }
 /* runOthelloHintTests 自動テスト: 角優先 / 最多反転(同点は最小index) / 非合法-∞ /
@@ -4029,7 +4095,7 @@ registerGame({
   create(ctx){
     const A=ctx.audio;
     const N=OTH_N;
-    const SYM={black:'●',white:'○'}; // HUD/結果表示用
+    const SYM=OTH_SYM, EMO=OTH_EMO, JP=OTH_JP, winLabel=othWinLabel, passLabel=othPassLabel;
     // 盤レイアウト (W=420,H=740 基準)。石はマス内中央に配置。
     const CELL=44, BOARD=CELL*N, BX=Math.round((W-BOARD)/2), BY=178;
     // 盤下のボタン: プレイ時=[まった] / 決着時=[もういちど][まった]
@@ -4045,6 +4111,7 @@ registerGame({
     let flipMap=null,flipT=0;  // 反転アニメ (index→反転前の色)
     let placedAt=-1,placeT=0;  // 着手アニメ (置いた石のポップ)
     let hint=-1,hintT=0;       // #9 ヒント: 推奨手index / 残り点滅秒
+    let confirmSel=-1;         // PR-2: CPU対戦2タップ確定の選択中マス(-1=未選択)。1回目タップでハイライト→同マス2回目で確定
     let assistOn=store.get('pgp2_othello_assist','0')==='1'; // #8 合法手アシスト表示(既定OFF・localStorageで永続。五目ヒントと同方式)
     // #10 CPU対戦: setup画面/モード設定/CPU思考タイマー/おに解放
     let screen='setup';        // 'setup'(あいて選択) | 'play'(対局)。openGame→howto→setup→play
@@ -4068,7 +4135,7 @@ registerGame({
     }
     function reset(){ // もう いちど: 同じ あいて設定で再戦
       board=othInitial();turn=0;result=null;last=-1;history=[];lastPass=null;
-      flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;oniJustUnlocked=false;
+      flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;oniJustUnlocked=false;confirmSel=-1;
       buildPlayers();A.pop();kickCpu();
     }
     function endGame(){
@@ -4083,13 +4150,13 @@ registerGame({
         }
       }
       if(result.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
-      else{banner(SYM[w]+'の かち！');A.fever();vib([30,50,30,50,30]);confetti();}
+      else{banner(winLabel(w));A.fever();vib([30,50,30,50,30]);confetti();}
     }
     function advanceTurn(){ // 着手後の手番送り (相手番 / 自動パス / 終局 を判定)
       const oppIdx=1-turn,oppColor=players[oppIdx].color,myColor=players[turn].color;
       if(getValidMoves(board,oppColor).length){turn=oppIdx;}             // 相手に手あり
       else if(getValidMoves(board,myColor).length){                     // 相手0手→自動パス(手番維持)
-        lastPass=oppColor;banner(SYM[oppColor]+'は パス');A.bad();      // 次着手まで HUD/盤面に表示
+        lastPass=oppColor;banner(passLabel(oppColor));A.bad();          // 次着手まで HUD/盤面に表示
       }else{endGame();}                                                  // 両者0手→終局
     }
     function place(cell){ // 着手を1箇所に集約 (反転・手番送りもここ)
@@ -4099,7 +4166,7 @@ registerGame({
       if(!flips.length){A.bad();vib(8);return;}        // 非合法マス
       history.push({board:board.slice(),turn,last,lastPass}); // 待った用スナップショット
       lastPass=null;                                   // 着手したらパス表示を消す
-      hint=-1;hintT=0;                                 // 着手でヒント消去
+      hint=-1;hintT=0;confirmSel=-1;                   // 着手でヒント/2タップ選択を消去
       board=applyMove(board,cell,color);
       last=cell;placedAt=cell;placeT=PLACE_DUR;
       flipMap=new Map();const opp=othOpp(color);for(const f of flips)flipMap.set(f,opp);flipT=FLIP_DUR;
@@ -4127,6 +4194,20 @@ registerGame({
         g.beginPath();g.arc(-r*0.28,-r*0.28,r*0.30,0,TAU);g.fillStyle='rgba(255,255,255,.7)';g.fill();}
       g.restore();
     }
+    // ①バグ対策: 石数バッジは drawStone と同じ塗りで描いた石アイコン+数字にし、盤面と必ず一致させる
+    // (旧実装は白石も文字glyph「●」を白塗りで表示しており、上部HUDの「○」と食い違って見えた)
+    // ②視認性改善: 白=白背景+黒枠バッジ / 黒=黒塗りバッジ + 「黒: X / 白: Y」併記ラベル
+    function drawScoreBadges(g,cx,y,black,white){
+      const bw=92,bh=40,r=14,gap=14;
+      const xB=cx-gap/2-bw, xW=cx+gap/2;
+      g.save();g.fillStyle='#141225';rr(g,xB,y-bh/2,bw,bh,r);g.fill();g.restore();
+      drawStone(g,'black',{x:xB+22,y},13);
+      outlinedText(g,''+black,xB+bw/2+11,y,24,'#fff',null,0,1,'left');
+      g.save();g.fillStyle='#fbf8ef';rr(g,xW,y-bh/2,bw,bh,r);g.fill();g.lineWidth=2.5;g.strokeStyle='#141225';g.stroke();g.restore();
+      drawStone(g,'white',{x:xW+22,y},13);
+      outlinedText(g,''+white,xW+bw/2+11,y,24,'#141225',null,0,1,'left');
+      outlinedText(g,'黒: '+black+' / 白: '+white,cx,y+bh/2+15,13,'#fff','#2a3352',3);
+    }
     // ── #10 CPU: あいて構築 / 対局開始 / CPU思考タイマー ──
     function buildPlayers(){ // cfg から players[{color,type,level}] を組む(五目と同分岐)
       const L=cfg.level;
@@ -4142,7 +4223,7 @@ registerGame({
     function startPlay(){ // setup→対局。盤リセットして開始(先手がCPUならkickCpuで自動着手)
       buildPlayers();
       board=othInitial();turn=0;result=null;last=-1;history=[];lastPass=null;
-      flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;oniJustUnlocked=false;
+      flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;oniJustUnlocked=false;confirmSel=-1;
       screen='play';A.pop();kickCpu();
     }
     // ── #10 setup画面(あいて選択): モード/先後/強さ(おに=解放式)/はじめる ──
@@ -4194,7 +4275,7 @@ registerGame({
     // ── #11 オンライン対戦 (共通状態機械は makeVsOnlineUI。ここはゲーム固有フックのみ) ──
     function fireOnlineResultFx(res){ // 勝敗演出 (endGameと同等。1対局1回だけ)
       if(res.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
-      else{banner(SYM[res.winner]+'の かち！');A.fever();vib([30,50,30,50,30]);confetti();}
+      else{banner(winLabel(res.winner));A.fever();vib([30,50,30,50,30]);confetti();}
     }
     const OL=makeVsOnlineUI({net:OthelloNet,btnL,btnR,btnExit:togBtn,hintCol:'#f2a541',
       cellAt,onResult:fireOnlineResultFx,
@@ -4226,7 +4307,13 @@ registerGame({
         if(hitBtn(btnL,x,y)){undo();return}     // プレイ中: まった(pvpのみ)
         if(hitBtn(btnR,x,y)){showOthHint();return} // プレイ中: 💡ヒント(人間手番のみ)
         if(players[turn].type!=='human')return; // CPU思考中は盤面タップ無効
-        place(cellAt(x,y));
+        if(cfg.mode==='pvp'){place(cellAt(x,y));return} // 2人対戦は即着手のまま(#2 2タップ確定はCPU対戦のみ対象)
+        // PR-2: CPU対戦は2タップ確定 (twoTapDecisionは五目と共用の純ロジック)
+        const c=cellAt(x,y),d=twoTapDecision(confirmSel,c,c>=0&&getFlips(board,c,players[turn].color).length>0);
+        confirmSel=d.pending;
+        if(d.action==='confirm')place(c);
+        else if(d.action==='select'||d.action==='cancel')A.pop();
+        else if(d.action==='invalid')A.bad();
       },
       update(dt){
         t+=dt;
@@ -4246,42 +4333,38 @@ registerGame({
         if(screen==='setup'){drawSetup(g);return} // #10 あいて選択画面
         const online=screen==='online'; // #11 オンラインは上部DOMバーが状態表示
         g.fillStyle='#3c4a70';g.fillRect(0,0,W,H); // 地色を少し明るく (白黒の視認性UP)
-        // 石数 (常時表示)。●=黒/○=白 が色でも一致するよう ● は濃色・○ は淡色で描く
         const {black,white}=countStones(board);
         if(!online){
-          outlinedText(g,'オセロ',W/2,68,27,'#fff','#2a3352',7);
-          // ○(中空グリフ)は塗り色にしても中が透けて半透明に見えるため、白も塗りつぶし円●を白で描く(色で黒白を区別)
-          outlinedText(g,'●'+black,W/2-70,112,26,'#15122a','#e9e4f5',7);
-          outlinedText(g,'●'+white,W/2+70,112,26,'#ffffff','#15122a',7);
-          // 手番 / 結果
+          outlinedText(g,'オセロ',W/2,36,20,'#fff','#2a3352',6);
+          drawScoreBadges(g,W/2,76,black,white); // ①②: 石アイコン付きバッジ+「黒:X / 白:Y」併記
+          // 手番 / 結果 (絵文字⬛⬜で色を明示。塗り色をfillStyleに頼らないので白黒の食い違いが起きない)
+          // reviewer指摘(PR#41 must-fix): drawScoreBadgesの併記ラベルと縦方向に重なっていたため、
+          // バッジ/ラベルを上に詰め手番/結果をy=142まで下げて余白を確保 (通常時・lastPass時とも)
           if(!result){
             const m=players[turn].color;
-            // 石色で塗り分け (黒=濃色/淡アウトライン, 白=純白/濃アウトライン)
-            const col=c=>c==='black'?['#15122a','#e9e4f5']:['#ffffff','#15122a'];
-            const [cf,cs]=col(m);
-            if(lastPass){
-              // 直前の自動パスを次着手まで表示。パスした側と現手番で石色が違うので2セグメント描画
-              const [pf,ps]=col(lastPass), sz=18, sA='●は パス → ', sB='●の ばん';
-              g.save();g.font=`800 ${sz}px ${FONT}`;const wA=g.measureText(sA).width,wB=g.measureText(sB).width;g.restore();
-              const x0=W/2-(wA+wB)/2;
-              outlinedText(g,sA,x0,150,sz,pf,ps,5,1,'left');
-              outlinedText(g,sB,x0+wA,150,sz,cf,cs,5,1,'left');
-            }else{
-              outlinedText(g,'●の ばん',W/2,150,23,cf,cs,6);
-            }
+            const txt=lastPass?(passLabel(lastPass)+' → '+EMO[m]+'の ばん'):(EMO[m]+'の ばん');
+            outlinedText(g,txt,W/2,142,lastPass?15:19,'#fff','#2a3352',lastPass?4:5.5);
           }else if(result.draw){
-            outlinedText(g,'ひきわけ！',W/2,150,26,'#ffd23f','#5a3a10',7);
+            outlinedText(g,'ひきわけ！',W/2,142,20,'#ffd23f','#5a3a10',5.5);
           }else{
-            outlinedText(g,SYM[result.winner]+'の かち！',W/2,150,28,'#ffd23f','#5a3a10',7);
+            // ②視認性改善: 勝利表示は背景色付きバッジ (黒勝=黒塗り/白勝=白地+黒枠) で明示
+            const w=result.winner,label=winLabel(w);
+            g.save();g.font=`800 20px ${FONT}`;const tw=g.measureText(label).width;g.restore();
+            const bw=tw+34,bh=36;
+            g.save();g.fillStyle=w==='black'?'#141225':'#fbf8ef';rr(g,W/2-bw/2,142-bh/2,bw,bh,13);g.fill();
+            if(w==='white'){g.lineWidth=2.5;g.strokeStyle='#141225';g.stroke();}
+            g.restore();
+            outlinedText(g,label,W/2,143,20,w==='black'?'#fff':'#141225',null,0);
           }
-          if(result&&oniJustUnlocked)outlinedText(g,'👹 おに 解放！',W/2,180,15,'#ffe93d','#5a3a10',4); // #10 隠し解放通知
         }else{
-          // オンライン: 状態はDOMバー。石数(スコア)だけ盤直上にコンパクト表示
-          outlinedText(g,'●'+black,W/2-46,168,20,'#15122a','#e9e4f5',6);
-          outlinedText(g,'●'+white,W/2+46,168,20,'#ffffff','#15122a',6);
+          // オンライン: 状態はDOMバー。石数(スコア)だけ盤直上にコンパクト表示 (石アイコンで黒白を確実に区別)
+          drawStone(g,'black',{x:W/2-58,y:168},9);outlinedText(g,''+black,W/2-42,168,20,'#15122a','#e9e4f5',6,1,'left');
+          drawStone(g,'white',{x:W/2+18,y:168},9);outlinedText(g,''+white,W/2+34,168,20,'#ffffff','#15122a',6,1,'left');
         }
         // 盤パネル (緑のフェルト)
         g.save();g.fillStyle='#176a3a';rr(g,BX-12,BY-12,BOARD+24,BOARD+24,16);g.fill();g.restore();
+        // #10 隠し解放通知: 盤パネルより後に描く(勝利バッジ下端y=160を避けたy=172はパネル塗り領域(y>=166)内のため、描画順で可視性を確保)
+        if(!online&&result&&oniJustUnlocked)outlinedText(g,'👹 おに 解放！',W/2,172,12,'#ffe93d','#5a3a10',4);
         // グリッド
         g.save();g.strokeStyle='#0c4a26';g.lineWidth=2;
         for(let i=0;i<=N;i++){
@@ -4309,6 +4392,12 @@ registerGame({
           g.save();g.globalAlpha=0.55+0.45*Math.sin(t*8);
           g.strokeStyle='#ffd23f';g.lineWidth=3.5;
           g.beginPath();g.arc(c.x,c.y,CELL*0.42,0,TAU);g.stroke();g.restore();
+        }
+        // PR-2: CPU対戦2タップ確定の選択マス (黄枠) - 同じマスをもう1回タップすると確定
+        if(!result&&!online&&confirmSel>=0&&board[confirmSel]===null){
+          const c=center(confirmSel),hs=CELL*0.46;
+          g.save();g.globalAlpha=0.7+0.3*Math.sin(t*7);g.strokeStyle='#ffd23f';g.lineWidth=4;
+          rr(g,c.x-hs,c.y-hs,hs*2,hs*2,8);g.stroke();g.restore();
         }
         // 石 (反転アニメ=scaleXフリップ / 着手=ポップ)
         const sr=CELL*0.40;
@@ -4353,7 +4442,9 @@ registerGame({
         const {black,white}=countStones(board);
         const base='●'+black+' ○'+white;
         if(result)return base+' ／ '+(result.draw?'ひきわけ':SYM[result.winner]+'の かち');
-        return base+' ／ '+(lastPass?SYM[lastPass]+'は パス→':'')+SYM[players[turn].color]+'の ばん'; // #6 パス文言は盤面表示と同一に
+        // reviewer指摘(PR#41 nit): canvas側はwinLabel/passLabel(絵文字+漢字)へ寄せたが、
+        // このHUDは常時表示の1行コンパクトバーとして意図的に●/○のまま(絵文字にすると横幅超過のため)
+        return base+' ／ '+(lastPass?SYM[lastPass]+'は パス→':'')+SYM[players[turn].color]+'の ばん';
       },
       onlineBack(){screen='setup';setRoomUrl('');}, // 入室UIの「もどる」から
       destroy(){OthelloNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');setRoomUrl('');}, // ✕退出時クリーンアップ
