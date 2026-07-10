@@ -4160,7 +4160,7 @@ registerGame({
       g.save();g.fillStyle='#fbf8ef';rr(g,xW,y-bh/2,bw,bh,r);g.fill();g.lineWidth=2.5;g.strokeStyle='#141225';g.stroke();g.restore();
       drawStone(g,'white',{x:xW+22,y},13);
       outlinedText(g,''+white,xW+bw/2+11,y,24,'#141225',null,0,1,'left');
-      outlinedText(g,'黒: '+black+' / 白: '+white,cx,y+bh/2+20,15,'#fff','#2a3352',3.5);
+      outlinedText(g,'黒: '+black+' / 白: '+white,cx,y+bh/2+15,13,'#fff','#2a3352',3);
     }
     // ── #10 CPU: あいて構築 / 対局開始 / CPU思考タイマー ──
     function buildPlayers(){ // cfg から players[{color,type,level}] を組む(五目と同分岐)
@@ -4283,26 +4283,28 @@ registerGame({
         g.fillStyle='#3c4a70';g.fillRect(0,0,W,H); // 地色を少し明るく (白黒の視認性UP)
         const {black,white}=countStones(board);
         if(!online){
-          outlinedText(g,'オセロ',W/2,40,22,'#fff','#2a3352',6);
-          drawScoreBadges(g,W/2,80,black,white); // ①②: 石アイコン付きバッジ+「黒:X / 白:Y」併記
+          outlinedText(g,'オセロ',W/2,36,20,'#fff','#2a3352',6);
+          drawScoreBadges(g,W/2,76,black,white); // ①②: 石アイコン付きバッジ+「黒:X / 白:Y」併記
           // 手番 / 結果 (絵文字⬛⬜で色を明示。塗り色をfillStyleに頼らないので白黒の食い違いが起きない)
+          // reviewer指摘(PR#41 must-fix): drawScoreBadgesの併記ラベルと縦方向に重なっていたため、
+          // バッジ/ラベルを上に詰め手番/結果をy=142まで下げて余白を確保 (通常時・lastPass時とも)
           if(!result){
             const m=players[turn].color;
             const txt=lastPass?(passLabel(lastPass)+' → '+EMO[m]+'の ばん'):(EMO[m]+'の ばん');
-            outlinedText(g,txt,W/2,136,lastPass?16:20,'#fff','#2a3352',lastPass?4.5:6);
+            outlinedText(g,txt,W/2,142,lastPass?15:19,'#fff','#2a3352',lastPass?4:5.5);
           }else if(result.draw){
-            outlinedText(g,'ひきわけ！',W/2,136,22,'#ffd23f','#5a3a10',6);
+            outlinedText(g,'ひきわけ！',W/2,142,20,'#ffd23f','#5a3a10',5.5);
           }else{
             // ②視認性改善: 勝利表示は背景色付きバッジ (黒勝=黒塗り/白勝=白地+黒枠) で明示
             const w=result.winner,label=winLabel(w);
-            g.save();g.font=`800 22px ${FONT}`;const tw=g.measureText(label).width;g.restore();
-            const bw=tw+36,bh=38;
-            g.save();g.fillStyle=w==='black'?'#141225':'#fbf8ef';rr(g,W/2-bw/2,136-bh/2,bw,bh,14);g.fill();
+            g.save();g.font=`800 20px ${FONT}`;const tw=g.measureText(label).width;g.restore();
+            const bw=tw+34,bh=36;
+            g.save();g.fillStyle=w==='black'?'#141225':'#fbf8ef';rr(g,W/2-bw/2,142-bh/2,bw,bh,13);g.fill();
             if(w==='white'){g.lineWidth=2.5;g.strokeStyle='#141225';g.stroke();}
             g.restore();
-            outlinedText(g,label,W/2,137,22,w==='black'?'#fff':'#141225',null,0);
+            outlinedText(g,label,W/2,143,20,w==='black'?'#fff':'#141225',null,0);
           }
-          if(result&&oniJustUnlocked)outlinedText(g,'👹 おに 解放！',W/2,157,13,'#ffe93d','#5a3a10',4); // #10 隠し解放通知
+          if(result&&oniJustUnlocked)outlinedText(g,'👹 おに 解放！',W/2,161,12,'#ffe93d','#5a3a10',4); // #10 隠し解放通知
         }else{
           // オンライン: 状態はDOMバー。石数(スコア)だけ盤直上にコンパクト表示 (石アイコンで黒白を確実に区別)
           drawStone(g,'black',{x:W/2-58,y:168},9);outlinedText(g,''+black,W/2-42,168,20,'#15122a','#e9e4f5',6,1,'left');
@@ -4381,7 +4383,9 @@ registerGame({
         const {black,white}=countStones(board);
         const base='●'+black+' ○'+white;
         if(result)return base+' ／ '+(result.draw?'ひきわけ':SYM[result.winner]+'の かち');
-        return base+' ／ '+(lastPass?SYM[lastPass]+'は パス→':'')+SYM[players[turn].color]+'の ばん'; // #6 パス文言は盤面表示と同一に
+        // reviewer指摘(PR#41 nit): canvas側はwinLabel/passLabel(絵文字+漢字)へ寄せたが、
+        // このHUDは常時表示の1行コンパクトバーとして意図的に●/○のまま(絵文字にすると横幅超過のため)
+        return base+' ／ '+(lastPass?SYM[lastPass]+'は パス→':'')+SYM[players[turn].color]+'の ばん';
       },
       onlineBack(){screen='setup';setRoomUrl('');}, // 入室UIの「もどる」から
       destroy(){OthelloNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');setRoomUrl('');}, // ✕退出時クリーンアップ
