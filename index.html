@@ -4304,7 +4304,7 @@ registerGame({
             g.restore();
             outlinedText(g,label,W/2,143,20,w==='black'?'#fff':'#141225',null,0);
           }
-          if(result&&oniJustUnlocked)outlinedText(g,'👹 おに 解放！',W/2,161,12,'#ffe93d','#5a3a10',4); // #10 隠し解放通知
+          if(result&&oniJustUnlocked)outlinedText(g,'👹 おに 解放！',W/2,172,12,'#ffe93d','#5a3a10',4); // #10 隠し解放通知 (勝利バッジ下端y=160との重なり回避でy=172)
         }else{
           // オンライン: 状態はDOMバー。石数(スコア)だけ盤直上にコンパクト表示 (石アイコンで黒白を確実に区別)
           drawStone(g,'black',{x:W/2-58,y:168},9);outlinedText(g,''+black,W/2-42,168,20,'#15122a','#e9e4f5',6,1,'left');
