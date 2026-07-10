@@ -112,7 +112,11 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 .mini-btn:active{transform:translateY(.5cqw)}
 
 /* ---- select ---- */
-#scr-select{background:linear-gradient(170deg,#8ec5fc,#e0c3fc);justify-content:center;gap:2.8cqw;padding:5cqw 0}
+/* #43 実機フィードバック: 一覧が6件+デイリーでviewportを超えると中央基準+overflow:hiddenで
+   上下とも見切れて到達不能になっていた。上端基準+縦スクロールに変更しsafe-area(ノッチ/ホームバー)も確保 */
+#scr-select{background:linear-gradient(170deg,#8ec5fc,#e0c3fc);justify-content:flex-start;gap:2.8cqw;
+  padding:calc(5cqw + env(safe-area-inset-top)) 0 calc(5cqw + env(safe-area-inset-bottom));
+  overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 #scr-select h2{font-size:6.4cqw;font-weight:800;color:#fff;-webkit-text-stroke:1.2cqw #4a3d7a;paint-order:stroke fill;
   text-shadow:0 1cqw 0 rgba(74,61,122,.4)}
 #menuTabs{display:flex;gap:2.4cqw;width:86cqw;margin:0 auto}
