@@ -6106,7 +6106,7 @@ function mjRenderTile(g,t,x,y,w,h,o){
           g.beginPath();g.arc(X,Y,R0*.22,0,TAU);g.fillStyle=col;g.fill();
         });
       }
-    }else{ // 索子: 竹スティック (1索=イーソウは鳥の専用デザイン・2-9索は赤の差し色を混ぜて実物準拠)
+    }else{ // 索子: 竹スティック (1索=イーソウは鳥の専用デザイン・基本は緑一色で5索中央/9索中央列のみ赤の実物準拠)
       if(n===1){
         g.fillStyle=ink(MJ_GRN);
         g.beginPath();g.ellipse(cx,y+fh*.58,w*.27,fh*.3,0,0,TAU);g.fill(); // 胴体
@@ -6648,7 +6648,8 @@ function runMahjongTests(){
     }catch(e){ok=false;}
     ck('render:全種類の牌が例外なく描ける',ok);
   }
-  { // 配色: 筒子/索子が単色に偏っていないこと (#feedback2 3件目: 緑一色/清一色が牌を読まず色だけで当てられてしまう対策の再発防止)
+  { // 配色: 筒子は複数色で単色に偏らないこと・索子は実物準拠で基本緑一色(5索中央/9索中央列のみ赤)であること
+    // (#feedback2 3件目: 緑一色/清一色が牌を読まず色だけで当てられてしまう対策の再発防止・#feedback2.5でソウズの配色方針を明確化)
     const c=document.createElement('canvas');c.width=60;c.height=80;
     const g=c.getContext('2d');
     const inkColorsOf=t=>{
