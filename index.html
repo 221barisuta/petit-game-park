@@ -3337,8 +3337,9 @@ registerGame({
         for(let i=0;i<3;i++)add(50+i*108,y+18,100,44,LV[i],'levelL',i+1,cfg.levelL===i+1);y+=78;
         for(let i=0;i<3;i++)add(50+i*108,y+18,100,44,LV[i],'levelR',i+1,cfg.levelR===i+1);y+=78;
       }
-      add(110,y+18,200,44,'ヒント つねに: '+(hintOn?'ON':'OFF'),'hint',0,hintOn);y+=78;
-      add(70,y+18,240,44,'🖐 2タップ確定: '+(twoTapVs?'ON':'OFF'),'twotap',0,twoTapVs);y+=78; // #feedback2 5件目
+      // #feedback2 5件目 review must-fix: pvc/cvcで行が増えH=740を超えていたため、ヒント/2タップを1行にまとめて圧縮
+      add(50,y+18,150,44,'ヒント: '+(hintOn?'ON':'OFF'),'hint',0,hintOn);
+      add(220,y+18,150,44,'🖐2タップ: '+(twoTapVs?'ON':'OFF'),'twotap',0,twoTapVs);y+=70;
       add(80,y+22,260,56,'▶ はじめる','start',0,false);
       return b;
     }
