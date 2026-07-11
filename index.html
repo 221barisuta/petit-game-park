@@ -364,7 +364,7 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
   <section id="scr-select" class="screen">
     <h2>ゲームを えらぼう！</h2>
     <div id="menuTabs">
-      <button class="mtab" data-tab="solo">🎯 ひとりであそぶ <span class="tcount" id="tcount-solo"></span></button>
+      <button class="mtab" data-tab="solo">🎯 一人であそぶ <span class="tcount" id="tcount-solo"></span></button>
       <button class="mtab" data-tab="versus">⚔️ たいせん <span class="tcount" id="tcount-versus"></span></button>
     </div>
     <div id="cardList"></div>
@@ -902,6 +902,7 @@ let curDef=null,game=null,phase='idle',elapsed=0,rafId=0,lastTs=0;
 let lastSec=-1,lastHudScore=null;
 let score=0,combo=0,maxCombo=0,judgeCounts={},feverT=0,feverCount=0;
 let isDaily=false,seed=0,bestKey='',best=0,bestBeaten=false;
+let rankGen=0; // #feedback2 1件目: 結果画面を離れた後に古いランキング取得が割り込むのを防ぐ世代カウンタ
 let judgePop=null,resultInfo=null;
 const coreFlo=new Floaties(),coreParts=new Particles();
 
@@ -1240,7 +1241,7 @@ function showResult(extra){
     const b=document.createElement('b');b.textContent=v;
     row.appendChild(a);row.appendChild(b);stats.appendChild(row);
   }
-  $('resBest').textContent=(isDaily?'きょうのベスト: ':'ベスト: ')+newBest+'   🏅 '+titleFor(tot);
+  $('resBest').textContent=(isDaily?'今日のベスト: ':'ベスト: ')+newBest+'   🏅 '+titleFor(tot);
   // 解放
   const ul=UNLOCKS.find(u=>u.game===def.id&&u.at===plays);
   $('resUnlock').classList.toggle('hidden',!ul);
@@ -1259,20 +1260,36 @@ function showResult(extra){
   show('scr-result');
   game=null;
   // ランキング送信 → デイリーなら「きょうのトップ5」を表示 (rankingBase未設定ならno-op)
-  $('resRank').classList.add('hidden');$('resRank').innerHTML=''; // 前回のランキング行を必ずクリア (renderTotalRankはappendするため)
+  const rankBox=$('resRank');
+  rankBox.classList.add('hidden');rankBox.innerHTML=''; // 前回のランキング行を必ずクリア (renderTotalRankはappendするため)
+  const myRankGen=++rankGen; // このshowResult呼び出し専用の世代番号(古い応答の書き込みを無視するため)
+  const rankBase=(window.PGP_CONFIG||{}).rankingBase;
+  const clearPending=()=>{const p=rankBox.querySelector('.rpending');if(p)p.remove();};
+  if(rankBase&&(isDaily||RANK_TOTAL_GAMES.includes(def.id))){
+    // #feedback2 1件目: 反映まで間があるので「集計中」を出して無表示のまま止まって見えるのを防ぐ
+    const pend=document.createElement('div');pend.className='rttl rpending';pend.textContent='📡 集計中…';
+    rankBox.appendChild(pend);rankBox.classList.remove('hidden');
+  }
   (async()=>{
     try{
       const sub=await window.PGP_RANKING.submitScore(def.id,score,{daily:isDaily,seed,date:todaySeed()});
       const tsub=await window.PGP_RANKING.submitTotal(def.id,score); // #15 オプトインON時のみ送信
+      if(myRankGen!==rankGen)return; // #feedback2 1件目: 離脱後に次のプレイの結果画面が既に始まっている→古い応答は破棄
       if(isDaily){
         const top=await window.PGP_RANKING.fetchTop(def.id,{mode:'daily'});
-        renderRank(top,sub,score);
+        if(myRankGen!==rankGen)return;
+        renderRank(top,sub,score); // box.innerHTML=''で自前クリアするためpending解除は不要
       }
       if(RANK_TOTAL_GAMES.includes(def.id)){ // #15 デイリーの近くに「トータル」
         const tt=await window.PGP_RANKING.fetchTotal(def.id,5);
-        renderTotalRank(tt,tsub);
+        if(myRankGen!==rankGen)return;
+        clearPending();renderTotalRank(tt,tsub);
       }
-    }catch(e){}
+    }catch(e){
+      if(myRankGen===rankGen)clearPending();
+    }finally{
+      if(myRankGen===rankGen){clearPending();if(!rankBox.children.length)rankBox.classList.add('hidden');}
+    }
   })();
   track('game_end',{game:def.id,score,daily:isDaily?1:0,record:isRec?1:0});
 }
@@ -1281,7 +1298,7 @@ function renderRank(top,sub,myScore){
   if(!top||!top.ok||!Array.isArray(top.entries)||top.entries.length===0)return;
   const box=$('resRank');box.innerHTML='';
   const ttl=document.createElement('div');ttl.className='rttl';
-  ttl.textContent='🏆 きょうのランキング'+(sub&&sub.rank?`　あなたは ${sub.rank}い！`:'');
+  ttl.textContent='🏆 今日のランキング'+(sub&&sub.rank?`　あなたは ${sub.rank}い！`:'');
   box.appendChild(ttl);
   let marked=false;
   top.entries.slice(0,5).forEach((e,i)=>{
@@ -1507,7 +1524,7 @@ function refreshBests(){
   const d=$('best-daily');
   if(d){
     const ds=todaySeed(),ddef=dailyDef();
-    d.textContent='きょうのベスト '+getInt(`pgp2_dbest_${ds}_${ddef.id}`,0);
+    d.textContent='今日のベスト '+getInt(`pgp2_dbest_${ds}_${ddef.id}`,0);
   }
   $('titleRank').textContent='🏅 '+titleFor(getInt('pgp2_plays_total',0))+'（'+getInt('pgp2_plays_total',0)+'プレイ）';
 }
@@ -1526,12 +1543,12 @@ function buildCards(){
     c.className='gcard'+(isDaily?' daily':'');
     c.style.setProperty('--c',def.color);
     const vsBadge=def.id==='chicken'?'🤖 CPUと たいせん':'👥 2人で たいせん'; // #1 チキンはCPUとの度胸試し
-    c.innerHTML=`${isDaily?'<span class="badge">📅 きょうのチャレンジ</span>':''}
+    c.innerHTML=`${isDaily?'<span class="badge">📅 今日のチャレンジ</span>':''}
       <span class="ic">${def.iconHtml||def.emoji}</span>
       <span class="tx"><span class="nm">${def.title}</span>
-      ${isDaily?'<span class="ds">きょうは みんな おなじもんだい！</span>':''}
+      ${isDaily?'<span class="ds">今日は みんな おなじもんだい！</span>':''}
       ${isDaily
-        ? '<span class="bs" id="best-daily">きょうのベスト 0</span>'
+        ? '<span class="bs" id="best-daily">今日のベスト 0</span>'
         : def.type==='versus'
           ? `<span class="vs">${vsBadge}</span>${def.id==='chicken'?'<span class="bs" id="best-chicken">ベスト 0</span>':''}`
           : `<span class="bs" id="best-${def.id}">ベスト 0</span>`}</span>
@@ -3324,7 +3341,7 @@ registerGame({
     // ── セットアップ画面: クリック領域を一元生成 (draw と onDown で共用) ──
     function buildSetup(){
       const b=[];const add=(x,y,w,h,label,kind,val,active)=>b.push({x,y,w,h,label,kind,val,active:!!active});
-      add(50,156,320,48,'👥 ふたりで たいせん','mode','pvp',cfg.mode==='pvp');
+      add(50,156,320,48,'👥 二人で たいせん','mode','pvp',cfg.mode==='pvp');
       add(50,208,320,48,'🤖 CPUと たいせん','mode','pvc',cfg.mode==='pvc');
       add(50,260,320,48,'🤖🤖 CPUどうし','mode','cvc',cfg.mode==='cvc');
       add(50,312,320,48,GomokuNet.available()?'🌐 オンライン たいせん':'🌐 オンライン (じゅんびちゅう)','online',0,false);
@@ -4249,7 +4266,7 @@ registerGame({
     // ── #10 setup画面(あいて選択): モード/先後/強さ(おに=解放式)/はじめる ──
     function setupBtns(){ // 描画とヒットテストで共有する単一ソース(cfgで動的レイアウト)
       const L=[];let y=148;
-      for(const [v,lb] of [['pvp','👥 ふたりで たいせん'],['pvc','🤖 CPUと たいせん'],['cvc','🤖🤖 CPUどうし']])
+      for(const [v,lb] of [['pvp','👥 二人で たいせん'],['pvc','🤖 CPUと たいせん'],['cvc','🤖🤖 CPUどうし']])
         {L.push({x:50,y,w:320,h:44,kind:'mode',val:v,label:lb,active:cfg.mode===v});y+=50;}
       L.push({x:50,y,w:320,h:44,kind:'online',label:OthelloNet.available()?'🌐 オンライン たいせん':'🌐 オンライン (じゅんびちゅう)',online:true});y+=50; // #11
       y+=6;
