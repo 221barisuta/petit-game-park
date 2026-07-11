@@ -2568,6 +2568,8 @@ registerGame({
     const players=[{mark:'○',type:'human'},{mark:'×',type:'human'}];
     let board=Array(9).fill(null); // 空セルは null 基準
     let turn=0,result=null,winLine=null,t=0;
+    let confirmSel=-1; // #feedback2 5件目: 2タップ確定の選択中マス(オセロ/五目と共通設定を流用)
+    let twoTapVs=store.get('pgp2_twotap_vs','1')==='1';
     const parts=new Particles();
 
     function center(idx){
@@ -2580,7 +2582,7 @@ registerGame({
       return cy*3+cx;
     }
     function reset(){
-      board=Array(9).fill(null);turn=0;result=null;winLine=null;
+      board=Array(9).fill(null);turn=0;result=null;winLine=null;confirmSel=-1;
       A.pop();
     }
     function place(cell){           // 着手を1箇所に集約 (手番交代もここ)
@@ -2612,7 +2614,13 @@ registerGame({
     return {
       onDown(x,y){
         if(result){reset();return}   // 決着後タップでリセット
-        place(cellAt(x,y));
+        if(!twoTapVs){place(cellAt(x,y));return} // #feedback2 5件目: 設定OFF時は従来通り即着手
+        // #feedback2 5件目: ふたりでの誤タップ防止に2タップ確定 (twoTapDecisionはオセロ/五目と共用)
+        const c=cellAt(x,y),d=twoTapDecision(confirmSel,c,c>=0&&!board[c]);
+        confirmSel=d.pending;
+        if(d.action==='confirm')place(c);
+        else if(d.action==='select'||d.action==='cancel')A.pop();
+        else if(d.action==='invalid')A.bad();
       },
       update(dt){t+=dt;parts.update(dt);},
       draw(g){
@@ -2638,6 +2646,12 @@ registerGame({
         g.restore();
         // マーク
         for(let i=0;i<9;i++)if(board[i])drawMark(g,board[i],center(i));
+        // #feedback2 5件目: 2タップ確定の選択マス(黄枠) - 同じマスをもう1回タップすると確定
+        if(!result&&confirmSel>=0&&!board[confirmSel]){
+          const c=center(confirmSel),hs=CELL*0.42;
+          g.save();g.globalAlpha=0.7+0.3*Math.sin(t*7);g.strokeStyle='#ffd23f';g.lineWidth=3.5;
+          rr(g,c.x-hs,c.y-hs,hs*2,hs*2,6);g.stroke();g.restore();
+        }
         // 勝ち筋ハイライト
         if(winLine)drawWinLine(g,center(winLine[0]),center(winLine[2]),'#ffd23f',16,0.5,0.25,t);
         parts.draw(g);
@@ -3093,6 +3107,7 @@ function makeVsOnlineUI(cfg){
     if(seated&&ng.turn===s.seat){
       const c=cfg.cellAt(x,y);if(c<0)return;
       if(!cfg.canPut(ng,c,s.seat)){A.bad();return;}
+      if(cfg.twoTapEnabled&&!cfg.twoTapEnabled()){net.move(c);st.pending=-1;A.pop();return;} // #feedback2 5件目: 設定OFFなら即着手
       if(st.pending===c){net.move(c);st.pending=-1;A.pop();} // 同マス 再タップ=確定
       else{st.pending=c;A.pop();}                            // 仮置き(別マスなら移動)
     }else if(cfg.cellAt(x,y)>=0)A.bad();
@@ -3225,6 +3240,7 @@ registerGame({
     let turn=0,result=null,winLine=null,last=-1,t=0;
     let history=[],hint=-1,hintT=0,undoLock=false,cpuTimer=0; // 履歴 / ヒント / 連打防止 / CPU思考ディレイ
     let confirmSel=-1; // PR-2: CPU対戦2タップ確定の選択中マス(-1=未選択)。1回目タップでハイライト→同マス2回目で確定
+    let twoTapVs=store.get('pgp2_twotap_vs','1')==='1'; // #feedback2 5件目: ふたりで/オンラインの2タップ確定(誤タップ防止・既定ON)
     const parts=new Particles();
 
     function applyCfg(){ // cfg → players
@@ -3322,6 +3338,7 @@ registerGame({
         for(let i=0;i<3;i++)add(50+i*108,y+18,100,44,LV[i],'levelR',i+1,cfg.levelR===i+1);y+=78;
       }
       add(110,y+18,200,44,'ヒント つねに: '+(hintOn?'ON':'OFF'),'hint',0,hintOn);y+=78;
+      add(70,y+18,240,44,'🖐 2タップ確定: '+(twoTapVs?'ON':'OFF'),'twotap',0,twoTapVs);y+=78; // #feedback2 5件目
       add(80,y+22,260,56,'▶ はじめる','start',0,false);
       return b;
     }
@@ -3333,6 +3350,7 @@ registerGame({
         else if(it.kind==='levelL')cfg.levelL=it.val;
         else if(it.kind==='levelR')cfg.levelR=it.val;
         else if(it.kind==='hint'){hintOn=!hintOn;store.set('pgp2_gomoku_hint',hintOn?'1':'0');}
+        else if(it.kind==='twotap'){twoTapVs=!twoTapVs;store.set('pgp2_twotap_vs',twoTapVs?'1':'0');}
         else if(it.kind==='online'){GomokuNet.available()?OL.enter():A.bad();}
         else if(it.kind==='start')startGame();
         return;
@@ -3363,7 +3381,7 @@ registerGame({
         confetti();}
     }
     const OL=makeVsOnlineUI({net:GomokuNet,btnL,btnR,btnExit:setBtn,exitSize:15,hintCol:'#3a9bdc',
-      undoNeedsOppTurn:true,cellAt,onResult:fireResultFx,
+      undoNeedsOppTurn:true,cellAt,onResult:fireResultFx,twoTapEnabled:()=>twoTapVs,
       enterReset(){screen='online';result=null;winLine=null;parts.list=[];hint=-1;hintT=0;},
       leaveReset(){screen='setup';},
       newGameReset(){parts.list=[];hint=-1;hintT=0;},
@@ -3393,8 +3411,8 @@ registerGame({
           if(hitBtn(btnL,x,y)){undo();return}      // まった
           if(hitBtn(btnR,x,y)){showHint();return}  // 💡 ヒント
           if(players[turn].type==='human'){
-            if(cfg.mode==='pvp'){place(cellAt(x,y));return} // 2人対戦は即着手のまま(2タップ確定はCPU対戦のみ対象)
-            // PR-2: CPU対戦は2タップ確定 (twoTapDecisionはオセロと共用の純ロジック)
+            if(cfg.mode==='pvp'&&!twoTapVs){place(cellAt(x,y));return} // #feedback2 5件目: 設定OFF時のみ即着手
+            // PR-2/#feedback2 5件目: CPU対戦は常に・ふたりでたいせんは設定ON時に2タップ確定 (twoTapDecisionはオセロと共用の純ロジック)
             const c=cellAt(x,y),d=twoTapDecision(confirmSel,c,c>=0&&board[c]===null);
             confirmSel=d.pending;
             if(d.action==='confirm')place(c);
@@ -4113,6 +4131,7 @@ registerGame({
     let hint=-1,hintT=0;       // #9 ヒント: 推奨手index / 残り点滅秒
     let confirmSel=-1;         // PR-2: CPU対戦2タップ確定の選択中マス(-1=未選択)。1回目タップでハイライト→同マス2回目で確定
     let assistOn=store.get('pgp2_othello_assist','0')==='1'; // #8 合法手アシスト表示(既定OFF・localStorageで永続。五目ヒントと同方式)
+    let twoTapVs=store.get('pgp2_twotap_vs','1')==='1'; // #feedback2 5件目: ふたりで/オンラインの2タップ確定(誤タップ防止・既定ON・五目と共通設定)
     // #10 CPU対戦: setup画面/モード設定/CPU思考タイマー/おに解放
     let screen='setup';        // 'setup'(あいて選択) | 'play'(対局)。openGame→howto→setup→play
     let cfg={ mode:['pvp','pvc','cvc'].includes(store.get('pgp2_othello_mode','pvp'))?store.get('pgp2_othello_mode','pvp'):'pvp',
@@ -4245,6 +4264,7 @@ registerGame({
         L.push({x:50+3*80,y,w:74,h:40,kind:'level',val:4,label:locked?'🔒おに':'👹おに',active:cfg.level===4&&!locked,locked});
         L._lvY=y; y+=50;
       }
+      L.push({x:50,y,w:320,h:40,kind:'twotap',label:'🖐 2タップ確定: '+(twoTapVs?'ON':'OFF'),active:twoTapVs});y+=48; // #feedback2 5件目
       L.push({x:80,y:y+8,w:260,h:52,kind:'start',label:'▶ はじめる',start:true});
       return L;
     }
@@ -4267,6 +4287,7 @@ registerGame({
         if(b.kind==='mode'){cfg.mode=b.val;store.set('pgp2_othello_mode',b.val);A.pop();}
         else if(b.kind==='first'){cfg.humanFirst=!!b.val;store.set('pgp2_othello_first',b.val?'1':'0');A.pop();}
         else if(b.kind==='level'){cfg.level=b.val;store.set('pgp2_othello_lv',String(b.val));A.pop();}
+        else if(b.kind==='twotap'){twoTapVs=!twoTapVs;store.set('pgp2_twotap_vs',twoTapVs?'1':'0');A.pop();}
         else if(b.kind==='online'){OthelloNet.available()?OL.enter():A.bad();} // #11
         else if(b.kind==='start'){startPlay();}
         return;
@@ -4278,7 +4299,7 @@ registerGame({
       else{banner(winLabel(res.winner));A.fever();vib([30,50,30,50,30]);confetti();}
     }
     const OL=makeVsOnlineUI({net:OthelloNet,btnL,btnR,btnExit:togBtn,hintCol:'#f2a541',
-      cellAt,onResult:fireOnlineResultFx,
+      cellAt,onResult:fireOnlineResultFx,twoTapEnabled:()=>twoTapVs,
       enterReset(){screen='online';result=null;last=-1;lastPass=null;flipMap=null;flipT=0;
         placedAt=-1;placeT=0;hint=-1;hintT=0;},
       leaveReset(){screen='setup';},
@@ -4307,8 +4328,8 @@ registerGame({
         if(hitBtn(btnL,x,y)){undo();return}     // プレイ中: まった(pvpのみ)
         if(hitBtn(btnR,x,y)){showOthHint();return} // プレイ中: 💡ヒント(人間手番のみ)
         if(players[turn].type!=='human')return; // CPU思考中は盤面タップ無効
-        if(cfg.mode==='pvp'){place(cellAt(x,y));return} // 2人対戦は即着手のまま(#2 2タップ確定はCPU対戦のみ対象)
-        // PR-2: CPU対戦は2タップ確定 (twoTapDecisionは五目と共用の純ロジック)
+        if(cfg.mode==='pvp'&&!twoTapVs){place(cellAt(x,y));return} // #feedback2 5件目: 設定OFF時のみ即着手
+        // PR-2/#feedback2 5件目: CPU対戦は常に・ふたりでたいせんは設定ON時に2タップ確定 (twoTapDecisionは五目と共用の純ロジック)
         const c=cellAt(x,y),d=twoTapDecision(confirmSel,c,c>=0&&getFlips(board,c,players[turn].color).length>0);
         confirmSel=d.pending;
         if(d.action==='confirm')place(c);
