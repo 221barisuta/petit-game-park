@@ -4,3 +4,4 @@ ranking-worker/.wrangler/
 party/.wrangler/
 node_modules/
 .partykit/
+.handoff-tmp/
