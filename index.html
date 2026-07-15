@@ -5849,12 +5849,14 @@ const MJ_DANGER=[
 function mjDanger(S,h,t,river){for(const e of MJ_DANGER)if(e.hit(S,h,t,river))return e;}
 const MJ_TIER_MARK=['◎','○','注意','危険'];
 function mj4Danger(R,seat,t){ // 指定家(seat)から見た牌tの危険度。現物はseatの河のみで判定(furiten理論通り)
-  const S={visible:R.visible,genbutsu:new Array(34).fill(false)};
+  // review must-fix(PR#49 2巡目): 候補牌tは「今から切って河に乗る」ものとして扱う。
+  // 手牌hからは1枚減らすが、同時にローカルなvisible[t]を+1して既知総数を保存する
+  // (減らすだけだと打牌後の既知枚数が1枚少なく評価され、例: 字牌を手牌2枚→1枚打牌時に
+  //  本来「字牌2枚見え」のはずが「生牌」に誤判定されていた)
+  const S={visible:R.visible.slice(),genbutsu:new Array(34).fill(false)};
   for(const e of R.players[seat].river)S.genbutsu[e.t]=true;
-  // review must-fix(PR#49): 自分の手牌hは、今から切る候補t自身を1枚除いてから壁/字牌判定に使う
-  // (mjAnalyzeのh14[t]--と同じ規約。除かないと「まだ自分の手にある1枚」を二重に安全側へ数えてしまう)
   const h=R.players[0].hand.slice();
-  if(h[t]>0)h[t]--;
+  if(h[t]>0){h[t]--;S.visible[t]++;}
   return mjDanger(S,h,t,R.players[seat].river);
 }
 function mj4TenpaiKehai(river){ // 聴牌気配(簡易): 直近3打中2回以上が手出し→気配あり
@@ -6797,6 +6799,13 @@ function runMahjongTests(){
     { // 生牌の字牌: 見えているのが0〜1枚の字牌は危険(tier3)
       const R=mkR();
       ck('danger:生牌の字牌',mj4Danger(R,1,28).tier===3&&mj4Danger(R,1,28).label==='生牌の字牌');
+    }
+    { // review must-fix(PR#49 2巡目)回帰: 自分の手牌に字牌を2枚持ち1枚打牌する場合、
+      // 打牌後は「河1+手牌1=2枚見え」のはずが、候補牌を手牌から減らすだけだと
+      // 河へ移した1枚ぶんが既知総数から消え「生牌」に誤判定されていた
+      const R=mkR();R.players[0].hand[27]=2; // 東を2枚所持(他家の河には出ていない)
+      ck('danger:自分の手牌2枚→1枚打牌でも字牌2枚見え扱い(review回帰)',
+        mj4Danger(R,1,27).tier===1&&mj4Danger(R,1,27).label==='字牌2枚見え');
     }
     { // 情報なし: 何もヒットしない中央の無スジ牌はtier2(注意)
       const R=mkR();
