@@ -5808,6 +5808,66 @@ const MJ_SAFETY=[
 ];
 function mjSafety(S,h,t){for(const e of MJ_SAFETY)if(e.hit(S,h,t))return e;}
 
+/* ---- Phase3: 他家個別の危険牌ヒートマップ (現物/スジ/裏スジ/間四軒/カベ/ワンチャンス・ノーチャンス/字牌の生き死に) ----
+   既存のmjSuji/mjNoChance/mjWallCntは「リーチ済み他家の河を合算した1視点」向けだったため、
+   Phase3では家ごとに現物(自分の河のみ)を見る個別ビューを新設し、4段階(tier 0=◎〜3=危険)へ統合する */
+const mjUraSuji=(river,t)=>{ // 裏スジ: 対象牌の±3を「手出し」で切っていたら危険信号(スジと同じ±3・手出し限定)
+  if(t>=MJ.HONOR)return false;
+  const n=t%9,b=t-n;
+  const tedAt=k=>k>=0&&k<=8&&river.some(e=>e.t===b+k&&e.ted);
+  return (n-3>=0&&tedAt(n-3))||(n+3<=8&&tedAt(n+3));
+};
+const mjAidaYonken=(S,h,t)=>{ // 間四軒: 対象牌の隣(±1)のどちらかが壁(4枚見え)ならカンチャンが構成不能
+  if(t>=MJ.HONOR)return false;
+  const n=t%9,b=t-n,dead=k=>k>=0&&k<=8&&mjWallCnt(S,h,b+k)<=0;
+  return dead(n-1)||dead(n+1);
+};
+/* ヒートマップ段階テーブル: tier 0=◎安全 / 1=○ / 2=注意 / 3=危険。上から順に最初の一致を採用 */
+const MJ_DANGER=[
+  {tier:0,label:'現物',hit:(S,h,t)=>S.genbutsu[t]},
+  {tier:0,label:'カベ(絶対通る)',hit:(S,h,t)=>mjWallCnt(S,h,t)<=0},
+  {tier:3,label:'裏スジ',hit:(S,h,t,river)=>mjUraSuji(river,t)},
+  {tier:3,label:'生牌の字牌',hit:(S,h,t)=>t>=MJ.HONOR&&S.visible[t]+h[t]<2},
+  {tier:1,label:'ワンチャンス',hit:(S,h,t)=>mjWallCnt(S,h,t)===1},
+  {tier:1,label:'字牌2枚見え',hit:(S,h,t)=>t>=MJ.HONOR&&S.visible[t]+h[t]>=2},
+  {tier:1,label:'スジ',hit:(S,h,t)=>t<MJ.HONOR&&mjSuji(S,t)},
+  {tier:1,label:'間四軒',hit:(S,h,t)=>mjAidaYonken(S,h,t)},
+  {tier:2,label:'情報なし',hit:()=>true},
+];
+function mjDanger(S,h,t,river){for(const e of MJ_DANGER)if(e.hit(S,h,t,river))return e;}
+const MJ_TIER_MARK=['◎','○','注意','危険'];
+function mj4Danger(R,seat,t){ // 指定家(seat)から見た牌tの危険度。現物はseatの河のみで判定(furiten理論通り)
+  const S={visible:R.visible,genbutsu:new Array(34).fill(false)};
+  for(const e of R.players[seat].river)S.genbutsu[e.t]=true;
+  const h=R.players[0].hand; // 見えない枚数の差し引きは常に自分(seat0)の手牌基準
+  return mjDanger(S,h,t,R.players[seat].river);
+}
+function mj4TenpaiKehai(river){ // 聴牌気配(簡易): 直近3打中2回以上が手出し→気配あり
+  if(river.length<3)return false;
+  return river.slice(-3).filter(e=>e.ted).length>=2;
+}
+function mj4DangerReason(R,t){ // 自分が切る牌tについて、他家3人のうち最も危険な家の判定を返す({seat,d}) / 全員◎ならnull扱いはせずtier0を返す
+  let worst=null;
+  for(let s=1;s<4;s++){
+    const d=mj4Danger(R,s,t);
+    if(!worst||d.tier>worst.d.tier)worst={seat:s,d};
+  }
+  return worst;
+}
+function mj4CoachLine(R,t){ // ルーペ用の理由付き1行解説(注意/危険な家がある時だけ返す。安全なら null)
+  const w=mj4DangerReason(R,t);
+  if(!w||w.d.tier<=1)return null;
+  return MJ4_NAMES[w.seat]+'に'+(w.d.tier===3?'危険':'注意')+'('+w.d.label+')';
+}
+function mj4PushEval(R,chosenTile,an){ // 押し引き採点用: 危険牌を押したか/より安全な牌をよけて選んだか
+  const threat=[1,2,3].some(s=>R.players[s].riichi||mj4TenpaiKehai(R.players[s].river));
+  if(!threat)return null;
+  const chosenTier=mj4DangerReason(R,chosenTile).d.tier;
+  if(chosenTier<=1)return {pushedDanger:false,avoidedDanger:true}; // 脅威下で安全な牌を選べた(代替の有無は問わない)
+  const hadSafeAlt=an.cands.some(c=>c.tile!==chosenTile&&mj4DangerReason(R,c.tile).d.tier<=1);
+  return {pushedDanger:hadSafeAlt,avoidedDanger:false}; // 危険な牌を選んだ場合のみ「避けられたか」を見る
+}
+
 /* 役の芽テーブル: 13枚時点で「どの役に向かえるか」を宣言的に判定 */
 const MJ_YAKU_EYES=[
   {label:'タンヤオ形',pts:8,hit:h=>{for(let t=0;t<34;t++)if(h[t]>0&&MJ.YAOCHU[t])return false;return true;}},
@@ -6013,6 +6073,9 @@ const MJ_ADJ=[ // 加減点テーブル (S: {log,hintsUsed,wins,dealins,tenpaiRy
   {label:'流局時テンパイ',pts:3,count:S=>S.tenpaiRyu||0},
   {label:'リーチみのがし',pts:-3,count:S=>Math.min(3,S.log.filter(l=>l.couldRiichi&&!l.riichied&&!l.auto).length)},
   {label:'ヒントにたよった',pts:-1,count:S=>Math.min(5,S.hintsUsed||0)},
+  // Phase3 押し引き採点: 他家に脅威(リーチ/聴牌気配)がある局面で、危険牌をよけた/押した回数
+  {label:'危険牌をよけた',pts:2,count:S=>S.log.filter(l=>l.avoidedDanger).length},
+  {label:'危険牌をおした',pts:-2,count:S=>S.log.filter(l=>l.pushedDanger).length},
 ];
 function mjReport(S){
   const judged=S.log.filter(l=>!l.auto);
@@ -6180,13 +6243,14 @@ registerGame({
     let mjPhase='draw',sel=-1,an=null,drawn=-1,fb=null,timer=0,aiSeat=0,aiInfo=null;
     let hintOn=ctx.rookie,riichiArm=false,rep=null,page=0,kyokuMoves=null;
     let tedashiShow=store.get('pgp2_mj_tedashi','1')==='1';
+    let readOn=false; // Phase3: 危険牌ヒートマップ表示トグル(常時表示にせずテンポ優先・既定OFF)
     let speed=store.get('pgp2_mj_speed','normal');
     if(!MJ_SPEED[speed])speed='normal';
     let lastDiscSeat=-1,discHiT=0; // 直近の打牌ハイライト(1秒)
     const TW=27,TH=44,HX=8,HY=576;
     const RW=22,RH=28;                       // 自河 (6枚×4段・+N省略)
     const OW=14,OH=19;                       // 他家の河 (ミニ)
-    const LP={x:W/2-105,y:330,w:210,h:196};  // ルーペ
+    const LP={x:W/2-105,y:330,w:210,h:214};  // ルーペ(Phase3で危険牌コーチング1行ぶん高さ追加)
     const FELT=(()=>{ // 卓 (フェルト+木目縁)。生成1回
       const c=document.createElement('canvas');c.width=W;c.height=H;
       const f=c.getContext('2d');
@@ -6210,6 +6274,8 @@ registerGame({
         on:()=>{riichiArm=!riichiArm;sel=-1;A.go();}},
       {id:'ted',x:276,y:624,w:136,h:44,label:()=>'🌗ツモぎり:'+(tedashiShow?'うすく':'同じ'),
         on:()=>{tedashiShow=!tedashiShow;store.set('pgp2_mj_tedashi',tedashiShow?'1':'0');A.tick();}},
+      {id:'read',x:8,y:674,w:404,h:40,label:()=>readOn?'🔍読みオフ':'🔍よみ(危険牌をみる)',
+        on:()=>{readOn=!readOn;A.tick();}},
     ];
     const me=()=>R.players[0];
     const handTiles=()=>{const o=[];for(let t=0;t<34;t++)for(let k=0;k<me().hand[t];k++)o.push(t);return o;};
@@ -6231,11 +6297,13 @@ registerGame({
       const couldRiichi=!me().riichi&&an.cands.some(c=>c.sh===0);
       if(!auto)ctx.judge(kind,HX+7+handTiles().indexOf(t)*(TW+2),HY,
         kind==='perfect'?{sub:'さいてき！'}:undefined);
+      const pushEval=mj4PushEval(R,t,an); // Phase3 押し引き採点: 危険牌を押した/よけたか(脅威なしならnull)
       G.log.push({n:R.turnNo,kyoku:mj4KyokuLabel(G),cut:t,kind,auto:!!auto,
         tscore:mjTurnScore(chosen,an),best:an.cands[0].tile,threat:mj4Threat(R,0),
         couldRiichi,riichied:riichiArm||!!me().riichi,
         myReason:mjReason(chosen,an,mj4Threat(R,0)),
-        bestReason:mjReason(an.cands[0],an,mj4Threat(R,0))});
+        bestReason:mjReason(an.cands[0],an,mj4Threat(R,0)),
+        pushedDanger:!!(pushEval&&pushEval.pushedDanger),avoidedDanger:!!(pushEval&&pushEval.avoidedDanger)});
       if(riichiArm&&chosen.sh===0){me().riichi=R.turnNo;A.fever();}
       riichiArm=false;sel=-1;
       const discRes=mj4Discard(R,0,t);
@@ -6308,6 +6376,10 @@ registerGame({
       text(g,MJ.NAMES[sel],LP.x+LP.w/2,LP.y+144,16,'#3a3f52','center');
       text(g,'もう一度タップ / ⬆フリックで すてる',LP.x+LP.w/2,LP.y+166,10.5,'#8a7a5a','center');
       text(g,'ほかの場所タップ か Esc で もどる',LP.x+LP.w/2,LP.y+182,10.5,'#b0a48e','center');
+      if(readOn){ // Phase3: 危険牌コーチング(注意/危険な家がある時だけ理由付きで1行表示)
+        const cl=mj4CoachLine(R,sel);
+        if(cl)text(g,'⚠️'+cl,LP.x+LP.w/2,LP.y+200,10.5,'#c0392b','center');
+      }
     }
     function text(g,s,x,y,px,col,align){
       g.fillStyle=col||'#3a3f52';g.font=`bold ${px}px ${FONT}`;
@@ -6421,13 +6493,20 @@ registerGame({
               const idx=an.cands.indexOf(keep);
               if(idx<3)text(g,['◎','○','△'][idx],tx+TW/2,ty-9,13,['#e5a000','#7a9a3a','#5a86ad'][idx],'center');
             }
+            if(readOn&&mjPhase==='select'){ // Phase3: 危険牌ヒートマップ(他家3人のうち最悪の家を牌の右下に色で表示)
+              const d=mj4DangerReason(R,t).d;
+              const col=['#39c06a','#9ad0e8','#ffd23f','#e5578a'][d.tier];
+              g.save();g.beginPath();g.arc(tx+TW-5,ty+TH-6,4,0,TAU);g.fillStyle=col;g.fill();
+              g.lineWidth=1;g.strokeStyle='rgba(0,0,0,.35)';g.stroke();g.restore();
+            }
           });
         }
         if(mjPhase==='select'){
           for(const b of BTNS){
             if(b.able&&!b.able())continue;
             rr(g,b.x,b.y,b.w,b.h,12);
-            g.fillStyle=b.id==='riichi'?(riichiArm?'#e5578a':'#ff8fb8'):b.id==='ted'?'#9ad0e8':'#ffd77a';g.fill();
+            g.fillStyle=b.id==='riichi'?(riichiArm?'#e5578a':'#ff8fb8'):b.id==='ted'?'#9ad0e8'
+              :b.id==='read'?(readOn?'#e57373':'#cfd8dc'):'#ffd77a';g.fill();
             g.strokeStyle='rgba(0,0,0,.14)';g.stroke();
             text(g,b.label(),b.x+b.w/2,b.y+b.h/2,13,'#4a3a2a','center');
           }
@@ -6661,6 +6740,69 @@ function runMahjongTests(){
       dealins:g4.results.filter(x=>x.end.type==='ron'&&x.end.from===0).length,
       tenpaiRyu:g4.results.filter(x=>x.end.type==='ryuukyoku'&&x.end.tenpai[0]).length});
     ck('p2:report#'+seed,rep.score>=0&&rep.score<=100&&['SS','S','A','B','C'].indexOf(rep.rank[1])>=0);
+  }
+  { // Phase3: 危険牌ヒートマップ(現物/カベ/ワンチャンス/スジ/裏スジ/間四軒/字牌の生き死に)
+    const mkR=()=>({visible:new Array(34).fill(0),
+      players:[{hand:new Array(34).fill(0)},{river:[]},{river:[]},{river:[]}]});
+    const disc=(R,seat,t,ted)=>{R.players[seat].river.push({t,ted:!!ted});R.visible[t]++;};
+    { // 現物: seat1自身の河にある牌は絶対安全(tier0)
+      const R=mkR();disc(R,1,13,true); // 5p
+      ck('danger:現物',mj4Danger(R,1,13).tier===0&&mj4Danger(R,1,13).label==='現物');
+    }
+    { // カベ: seat1が切っていなくても4枚見えていれば絶対安全(tier0)
+      const R=mkR();for(let k=0;k<4;k++)disc(R,2,0,true); // 1m 4枚見え(seat2の河)
+      ck('danger:カベ',mj4Danger(R,1,0).tier===0&&mj4Danger(R,1,0).label.indexOf('カベ')>=0);
+    }
+    { // ワンチャンス: 残り1枚(tier1)
+      const R=mkR();for(let k=0;k<3;k++)disc(R,2,5,true); // 6m 3枚見え→残り1
+      ck('danger:ワンチャンス',mj4Danger(R,1,5).tier===1&&mj4Danger(R,1,5).label==='ワンチャンス');
+    }
+    { // スジ: 端牌は片側の関連牌のツモぎりだけでスジ成立(tier1)。裏スジ混入を避けるためted:falseで検証
+      const R=mkR();disc(R,1,3,false); // 4mをツモぎり→1mがスジ
+      ck('danger:スジ',mj4Danger(R,1,0).tier===1&&mj4Danger(R,1,0).label==='スジ');
+    }
+    { // 裏スジ: 同じ±3の関係でも「手出し」だと危険信号が優先される(tier3)
+      const R=mkR();disc(R,1,3,true); // 4mを手出し→1m/7mが裏スジ
+      ck('danger:裏スジ(手出しはスジより優先)',mj4Danger(R,1,0).tier===3&&mj4Danger(R,1,0).label==='裏スジ');
+    }
+    { // 間四軒: 対象牌の隣(5p→4pか6p)が壁ならカンチャン構成不能(tier1)
+      const R=mkR();for(let k=0;k<4;k++)disc(R,2,12,true); // 4p 4枚見え(壁)
+      ck('danger:間四軒',mj4Danger(R,1,13).tier===1&&mj4Danger(R,1,13).label==='間四軒');
+    }
+    { // 字牌2枚見え: tier1
+      const R=mkR();disc(R,2,27,true);disc(R,3,27,false); // 東2枚見え
+      ck('danger:字牌2枚見え',mj4Danger(R,1,27).tier===1&&mj4Danger(R,1,27).label==='字牌2枚見え');
+    }
+    { // 生牌の字牌: 見えているのが0〜1枚の字牌は危険(tier3)
+      const R=mkR();
+      ck('danger:生牌の字牌',mj4Danger(R,1,28).tier===3&&mj4Danger(R,1,28).label==='生牌の字牌');
+    }
+    { // 情報なし: 何もヒットしない中央の無スジ牌はtier2(注意)
+      const R=mkR();
+      ck('danger:情報なし(中央無スジ)',mj4Danger(R,1,13).tier===2); // 5p・河なし
+    }
+    // 聴牌気配: 直近3打中2回以上手出しで「気配あり」
+    ck('kehai:2回以上手出しで気配あり',mj4TenpaiKehai([{t:0,ted:false},{t:1,ted:true},{t:2,ted:true}]));
+    ck('kehai:手出し1回以下は気配なし',!mj4TenpaiKehai([{t:0,ted:false},{t:1,ted:false},{t:2,ted:true}]));
+    { // コーチング1行: 安全なら null / 危険な家があれば家名+理由を含む文字列
+      const Rsafe=mkR();disc(Rsafe,1,13,true);disc(Rsafe,2,13,true);disc(Rsafe,3,13,true); // 全員現物
+      ck('coach:全員安全ならnull',mj4CoachLine(Rsafe,13)===null);
+      const Rdanger=mkR();disc(Rdanger,1,3,true); // 下家(seat1)に裏スジ危険
+      const line=mj4CoachLine(Rdanger,0);
+      ck('coach:危険な家名と理由を含む',line!==null&&line.indexOf('下家')>=0&&line.indexOf('危険')>=0);
+    }
+    { // 押し引き採点: 脅威下で安全な代替(カベ=全員から見て安全)があるのに危険牌を選ぶ→pushedDanger / 安全な牌を選ぶ→avoidedDanger
+      const R=mkR();R.players[1].riichi=3; // 下家リーチ→脅威あり
+      disc(R,1,3,true); // 1mが裏スジ(危険)
+      for(let k=0;k<4;k++)disc(R,2,20,true); // 7sが全員から見てカベ(安全な代替)
+      const an={cands:[{tile:0},{tile:20}]}; // 0=1m(危険) / 20=7s(カベで安全)
+      const pushed=mj4PushEval(R,0,an);
+      ck('push:危険牌を選ぶとpushedDanger',pushed&&pushed.pushedDanger===true&&pushed.avoidedDanger===false);
+      const avoided=mj4PushEval(R,20,an);
+      ck('push:安全な牌を選ぶとavoidedDanger',avoided&&avoided.avoidedDanger===true&&avoided.pushedDanger===false);
+      const Rnothreat=mkR();
+      ck('push:脅威なしはnull',mj4PushEval(Rnothreat,0,an)===null);
+    }
   }
   { // 牌描画: チンイツ道場が typeof ガードで流用するため、消えても他テストが緑のまま壊れる
     ck('render:mjRenderTile存在',typeof mjRenderTile==='function');
