@@ -141,22 +141,13 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
   font-size:8.6cqw;background:var(--c,#ffd6a5);border:.8cqw solid rgba(0,0,0,.12);box-shadow:inset 0 -1.4cqw 0 rgba(0,0,0,.12)}
 .gcard .tx{display:flex;flex-direction:column;align-items:center;gap:1cqw;min-width:0}
 .gcard .nm{font-size:3.9cqw;font-weight:800;color:#39304f;line-height:1.2}
-.gcard.daily .nm{font-size:4.1cqw}
 .gcard .ds{font-size:3.3cqw;font-weight:700;color:#7a7090}
 .gcard .bs{font-size:3.1cqw;font-weight:800;color:#ff7a00;background:#fff3e0;border-radius:99px;padding:.5cqw 2.6cqw;align-self:center}
 .gcard .vs{font-size:3cqw;font-weight:800;color:#fff;background:linear-gradient(180deg,#7ab0ff,#4d8cff);
   border-radius:99px;padding:.5cqw 2.4cqw;align-self:center;box-shadow:0 .5cqw 0 rgba(40,70,150,.4)}
-.gcard .qbtn{position:absolute;top:1.6cqw;right:2cqw;width:9.4cqw;height:9.4cqw;border-radius:50%;
-  display:flex;align-items:center;justify-content:center;
-  font-size:4.4cqw;font-weight:800;color:#9a8fb8;background:#f1edfa;border:.5cqw solid #d8cfe8;
-  box-shadow:0 .4cqw 0 rgba(58,45,86,.18)}
-.gcard .qbtn::after{content:'';position:absolute;inset:-3.2cqw} /* タップ領域を拡大(スマホ誤タップ対策) */
-.gcard .qbtn:active{transform:scale(.9)}
-.gcard.daily{grid-column:1/-1;flex-direction:row;text-align:left;padding:3cqw 4cqw;gap:3.6cqw; /* デイリーは全幅・従来レイアウトで目立たせる */
+.gcard.daily{ /* #feedback3 8件目: 他カードと同サイズ・同グリッドに統一(全幅/横並びレイアウトは廃止)。配色のみで目立たせる */
   background:linear-gradient(135deg,#fff7d6,#ffe9a8);border-color:#c98f00;
   box-shadow:0 1.5cqw 0 rgba(150,100,0,.5), 0 0 4cqw rgba(255,210,60,.55)}
-.gcard.daily .tx{align-items:flex-start;padding-right:5cqw}
-.gcard.daily .bs,.gcard.daily .vs{align-self:flex-start}
 .gcard.daily .nm{color:#7a5200}
 .gcard.daily .ds{color:#9a7a30}
 .gcard.daily .badge{position:absolute;top:-2.2cqw;left:4cqw;font-size:3cqw;font-weight:800;color:#fff;
@@ -1551,15 +1542,8 @@ function buildCards(){
         ? '<span class="bs" id="best-daily">今日のベスト 0</span>'
         : def.type==='versus'
           ? `<span class="vs">${vsBadge}</span>${def.id==='chicken'?'<span class="bs" id="best-chicken">ベスト 0</span>':''}`
-          : `<span class="bs" id="best-${def.id}">ベスト 0</span>`}</span>
-      <span class="qbtn" data-q="${def.id}">?</span>`;
-    // 「？」は専用ハンドラで howto を明示起動 (stopPropagation でカード遷移と分離)
-    const q=c.querySelector('.qbtn');
-    if(q)q.addEventListener('click',e=>{
-      e.stopPropagation();
-      AudioKit.ensure();AudioKit.pop();
-      openGame(def,{forceHowto:true});
-    });
+          : `<span class="bs" id="best-${def.id}">ベスト 0</span>`}</span>`;
+    // #feedback3 9件目: 「？」アイコンは機能していなかったため削除(howtoは初回プレイ時のforceHowtoで自動表示)
     c.addEventListener('click',()=>{
       AudioKit.ensure();AudioKit.pop();
       openGame(def,isDaily?{daily:true}:{});   // デイリー枠のカードは daily モードで起動
@@ -3878,10 +3862,11 @@ function getWinner(board){
   return black>white?'black':white>black?'white':'draw';
 }
 // 表示記号 (①バグ対策: HUD/勝利/パス表示を1箇所に集約し、色ごとの対応がズレないようにする)
-const OTH_SYM={black:'●',white:'○'};                              // HUD用 (コンパクトバー・形で区別)
-const OTH_EMO={black:'⬛',white:'⬜'}, OTH_JP={black:'黒',white:'白'}; // 勝利/パス表示用 (絵文字+漢字で色を明示)
-const othWinLabel=w=>OTH_EMO[w]+' '+OTH_JP[w]+'のかち！';
-const othPassLabel=c=>OTH_EMO[c]+' '+OTH_JP[c]+'がパス';
+const OTH_SYM={black:'●',white:'○'};                    // HUD用・勝利/パス表示用共通 (形で色を明示)
+const OTH_JP={black:'黒',white:'白'};
+// #feedback3 4件目: 四角絵文字(⬛/⬜)は使わず、盤上の石と同じ丸系(●/○)に統一
+const othWinLabel=w=>OTH_SYM[w]+' '+OTH_JP[w]+'のかち！';
+const othPassLabel=c=>OTH_SYM[c]+' '+OTH_JP[c]+'がパス';
 // --- #9 ヒント / #10 CPU 共通の手評価 (純関数・副作用なし) ---
 const OTH_CORNERS=new Set([0,7,56,63]);
 // index に color が打つ手の評価値。非合法(0反転)は -Infinity。角優先(+1000) ＋ 最多反転。
@@ -4077,13 +4062,14 @@ function runOthelloTests(){
   {const b=Array(64).fill('black');for(let i=0;i<32;i++)b[i]='white';
    ck('draw',getWinner(b)==='draw');}
   {const b=Array(64).fill('white');b[0]='black';ck('winner-white',getWinner(b)==='white');}
-  // ①バグ対策: 表示記号(HUD/絵文字+漢字)の黒白対応がズレていないか (大表示「●62」問題の再発防止)
+  // ①バグ対策: 表示記号(HUD/勝利・パス表示)の黒白対応がズレていないか (大表示「●62」問題の再発防止)
+  // #feedback3 4件目: 勝利/パス表示は⬛⬜ではなく●/○(盤上の石と同じ丸系)であることも検証
   {ck('sym-black',OTH_SYM.black==='●');ck('sym-white',OTH_SYM.white==='○');
-   ck('emo-black',OTH_EMO.black==='⬛');ck('emo-white',OTH_EMO.white==='⬜');
-   ck('winlabel-black',othWinLabel('black')==='⬛ 黒のかち！');
-   ck('winlabel-white',othWinLabel('white')==='⬜ 白のかち！');
-   ck('passlabel-black',othPassLabel('black')==='⬛ 黒がパス');
-   ck('passlabel-white',othPassLabel('white')==='⬜ 白がパス');}
+   ck('winlabel-black',othWinLabel('black')==='● 黒のかち！');
+   ck('winlabel-white',othWinLabel('white')==='○ 白のかち！');
+   ck('passlabel-black',othPassLabel('black')==='● 黒がパス');
+   ck('passlabel-white',othPassLabel('white')==='○ 白がパス');
+   ck('winlabel-no-square-emoji',!/[⬛⬜]/.test(othWinLabel('black')+othWinLabel('white')+othPassLabel('black')+othPassLabel('white')));}
   // 終局集計とラベルの対応: 白石が多い盤の勝者ラベルに「白」が含まれ「黒」が含まれないこと (色の取り違え検出)
   {const b=Array(64).fill('white');for(let i=0;i<24;i++)b[i]='black';
    const w=getWinner(b),label=othWinLabel(w);
@@ -4131,7 +4117,7 @@ registerGame({
   create(ctx){
     const A=ctx.audio;
     const N=OTH_N;
-    const SYM=OTH_SYM, EMO=OTH_EMO, JP=OTH_JP, winLabel=othWinLabel, passLabel=othPassLabel;
+    const SYM=OTH_SYM, JP=OTH_JP, winLabel=othWinLabel, passLabel=othPassLabel;
     // 盤レイアウト (W=420,H=740 基準)。石はマス内中央に配置。
     const CELL=44, BOARD=CELL*N, BX=Math.round((W-BOARD)/2), BY=178;
     // 盤下のボタン: プレイ時=[まった] / 決着時=[もういちど][まった]
@@ -4211,9 +4197,17 @@ registerGame({
       advanceTurn();
       kickCpu(); // 次がCPU番なら思考起動(自動パスで手番維持の場合も)
     }
-    function undo(){ // 待った: 直前の自分の着手(自動パス含む)を1手戻す。CPU対戦では無効(pvpのみ)
-      if(cfg.mode!=='pvp'||!history.length){A.bad();return;}
-      const s=history.pop();
+    // 待った可否: cvc不可 / pvcは人間の着手が1つ以上ある場合のみ / pvpは常時可
+    // #feedback3 6件目: CPU対戦(pvc)もCPUの応手込みで人間の直前手まで戻せるようにする
+    function undoable(){
+      if(cfg.mode==='cvc'||!history.length)return false;
+      if(cfg.mode==='pvp')return true;
+      return history.some(s=>players[s.turn].type==='human');
+    }
+    function undo(){ // 待った: pvp=直前1手 / pvc=CPU応手も一緒に人間の着手直前まで戻す(自動パス含む)
+      if(!undoable()){A.bad();return;}
+      let s=history.pop();
+      if(cfg.mode==='pvc')while(players[s.turn].type==='cpu')s=history.pop();
       board=s.board;turn=s.turn;last=s.last;lastPass=s.lastPass;
       result=null;flipMap=null;flipT=0;placedAt=-1;placeT=0;hint=-1;hintT=0;
       A.pop();vib(8);
@@ -4233,17 +4227,19 @@ registerGame({
     }
     // ①バグ対策: 石数バッジは drawStone と同じ塗りで描いた石アイコン+数字にし、盤面と必ず一致させる
     // (旧実装は白石も文字glyph「●」を白塗りで表示しており、上部HUDの「○」と食い違って見えた)
-    // ②視認性改善: 白=白背景+黒枠バッジ / 黒=黒塗りバッジ + 「黒: X / 白: Y」併記ラベル
+    // ②視認性改善: 白=白背景+黒枠バッジ / 黒=黒塗りバッジ
+    // #feedback3 2件目: 併記の「黒: X / 白: Y」テキスト行は表示重複のため削除(スコアはこのバッジのみ)
+    // #feedback3 3件目: 黒バッジは地色(#141225)と黒石が同化し石アイコンが見えなくなっていたため白フチを追加
     function drawScoreBadges(g,cx,y,black,white){
       const bw=92,bh=40,r=14,gap=14;
       const xB=cx-gap/2-bw, xW=cx+gap/2;
       g.save();g.fillStyle='#141225';rr(g,xB,y-bh/2,bw,bh,r);g.fill();g.restore();
       drawStone(g,'black',{x:xB+22,y},13);
+      g.save();g.strokeStyle='#fbf8ef';g.lineWidth=1.6;g.beginPath();g.arc(xB+22,y,13,0,TAU);g.stroke();g.restore();
       outlinedText(g,''+black,xB+bw/2+11,y,24,'#fff',null,0,1,'left');
       g.save();g.fillStyle='#fbf8ef';rr(g,xW,y-bh/2,bw,bh,r);g.fill();g.lineWidth=2.5;g.strokeStyle='#141225';g.stroke();g.restore();
       drawStone(g,'white',{x:xW+22,y},13);
       outlinedText(g,''+white,xW+bw/2+11,y,24,'#141225',null,0,1,'left');
-      outlinedText(g,'黒: '+black+' / 白: '+white,cx,y+bh/2+15,13,'#fff','#2a3352',3);
     }
     // ── #10 CPU: あいて構築 / 対局開始 / CPU思考タイマー ──
     function buildPlayers(){ // cfg から players[{color,type,level}] を組む(五目と同分岐)
@@ -4340,10 +4336,10 @@ registerGame({
         if(screen==='online'){OL.onTap(x,y);return} // #11 オンライン
         if(hitBtn(togBtn,x,y)){assistOn=!assistOn;store.set('pgp2_othello_assist',assistOn?'1':'0');A.pop();return} // #8 アシスト切替(常時)
         if(result){
-          if(hitBtn(btnR,x,y)){undo();return}  // 決着後: まった(pvpのみ・誤タップ救済)
+          if(hitBtn(btnR,x,y)){undo();return}  // 決着後: まった(誤タップ救済。pvp/pvcのみ・cvc不可)
           reset();return;                       // それ以外のタップで再戦
         }
-        if(hitBtn(btnL,x,y)){undo();return}     // プレイ中: まった(pvpのみ)
+        if(hitBtn(btnL,x,y)){undo();return}     // プレイ中: まった(pvp/pvcのみ・cvc不可)
         if(hitBtn(btnR,x,y)){showOthHint();return} // プレイ中: 💡ヒント(人間手番のみ)
         if(players[turn].type!=='human')return; // CPU思考中は盤面タップ無効
         if(cfg.mode==='pvp'&&!twoTapVs){place(cellAt(x,y));return} // #feedback2 5件目: 設定OFF時のみ即着手
@@ -4375,13 +4371,13 @@ registerGame({
         const {black,white}=countStones(board);
         if(!online){
           outlinedText(g,'オセロ',W/2,36,20,'#fff','#2a3352',6);
-          drawScoreBadges(g,W/2,76,black,white); // ①②: 石アイコン付きバッジ+「黒:X / 白:Y」併記
-          // 手番 / 結果 (絵文字⬛⬜で色を明示。塗り色をfillStyleに頼らないので白黒の食い違いが起きない)
+          drawScoreBadges(g,W/2,76,black,white); // ①②: 石アイコン付きバッジ(スコア表示はここのみ)
+          // 手番 / 結果 (●/○で色を明示。塗り色をfillStyleに頼らないので白黒の食い違いが起きない)
           // reviewer指摘(PR#41 must-fix): drawScoreBadgesの併記ラベルと縦方向に重なっていたため、
           // バッジ/ラベルを上に詰め手番/結果をy=142まで下げて余白を確保 (通常時・lastPass時とも)
           if(!result){
             const m=players[turn].color;
-            const txt=lastPass?(passLabel(lastPass)+' → '+EMO[m]+'の ばん'):(EMO[m]+'の ばん');
+            const txt=lastPass?(passLabel(lastPass)+' → '+SYM[m]+'の ばん'):(SYM[m]+'の ばん');
             outlinedText(g,txt,W/2,142,lastPass?15:19,'#fff','#2a3352',lastPass?4:5.5);
           }else if(result.draw){
             outlinedText(g,'ひきわけ！',W/2,142,20,'#ffd23f','#5a3a10',5.5);
@@ -4464,7 +4460,7 @@ registerGame({
         }
         // ボタン
         if(online){ OL.drawButtons(g); return; } // #11 オンラインは専用ボタン(まった/ヒント/再戦/たいきょ)
-        const undoDis=cfg.mode!=='pvp'||!history.length; // まったはpvpのみ(CPU対戦では無効)
+        const undoDis=!undoable(); // #feedback3 6件目: pvcもCPU応手ぶんまとめて戻せる(cvcのみ不可)
         if(result){
           drawBtn(g,btnL,'▶ もう いちど','#ff4d94',false);
           drawBtn(g,btnR,'↩ まった','#7a6cc0',undoDis);
@@ -4477,13 +4473,9 @@ registerGame({
       },
       hudInfo(){
         if(screen==='setup')return 'あいてを えらぶ';
-        if(screen==='online')return ''; // #11 オンラインは上部DOMバーが状態表示 (右上hudと重なりを防ぐため空)
-        const {black,white}=countStones(board);
-        const base='●'+black+' ○'+white;
-        if(result)return base+' ／ '+(result.draw?'ひきわけ':SYM[result.winner]+'の かち');
-        // reviewer指摘(PR#41 nit): canvas側はwinLabel/passLabel(絵文字+漢字)へ寄せたが、
-        // このHUDは常時表示の1行コンパクトバーとして意図的に●/○のまま(絵文字にすると横幅超過のため)
-        return base+' ／ '+(lastPass?SYM[lastPass]+'は パス→':'')+SYM[players[turn].color]+'の ばん';
+        // #feedback3 1件目(PR#41削除漏れ): playはcanvas側にスコアバッジ+手番/結果を描画済みのため
+        // 上部HUDバーは空にする(タイトル「オセロ」への重なり・カウント3重表示を解消)。online同様の扱い
+        return '';
       },
       onlineBack(){screen='setup';setRoomUrl('');}, // 入室UIの「もどる」から
       destroy(){OthelloNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');setRoomUrl('');}, // ✕退出時クリーンアップ
