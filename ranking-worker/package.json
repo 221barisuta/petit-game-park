@@ -1,0 +1,6 @@
+{
+  "name": "pgp-ranking",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker: プチゲー★パーク 共用ランキングAPI"
+}
