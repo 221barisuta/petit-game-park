@@ -3,7 +3,7 @@
    インストール済みPWAでも、オンラインで開けば常に最新の index.html を表示する。
    オフライン時はキャッシュにフォールバックして起動できる。
    ファイルを更新したら CACHE_VERSION を上げること（古いキャッシュは自動削除）。 */
-const CACHE_VERSION = 'pgp2-v57';
+const CACHE_VERSION = 'pgp2-v54';
 const NAV_TIMEOUT = 3500; // HTMLのネットワーク取得がこれを超えたらキャッシュfallback(ms)
 const PRECACHE = [
   './',
