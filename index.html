@@ -4874,7 +4874,10 @@ registerGame({
     let cpuTimer=0,t=0,gameNo=1,lastRanks=null;
     let olRuleEdit=false; // オンラインロビーでホストがルール編集中
     let onlineToastSeq=DaifugoNet.state.toastSeq,olErr='';
-    const NAMES=['あなた','CPU 1','CPU 2','CPU 3','CPU 4','CPU 5'];
+    // #feedback4 3,4件目: ローカルCPU対戦の相手表示にキャラアイコン+ひらがな名を付ける
+    // (オンラインの名前はサーバー側(party/daifugo-server.js)の別データのため、この配列は影響しない)
+    // CPU判別の🤖バッジは既存どおりv.cpu[seat]から付与されるため名前を変えるだけで両立する
+    const NAMES=['あなた','🐶 ぽち','🐱 みけ','🐰 うさこ','🐻 くまきち','🦊 こんた'];
 
     // ── カード描画 ──
     const SUITS=['♠','♥','♦','♣'];
