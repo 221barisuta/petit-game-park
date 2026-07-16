@@ -6098,16 +6098,19 @@ const MJ_PIN_COLORS=[
   [MJ_BLU,MJ_BLU,MJ_BLU,MJ_BLU,MJ_BLU,MJ_BLU,MJ_BLU,MJ_BLU],
   [MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_RED,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN],
 ];
+/* 索子の配色は実物準拠(基本は竹の緑一色)。赤の差し色が入るのは 5索(中央のみ)・9索(中央列のみ) */
 const MJ_SOU_COLORS=[
   [MJ_GRN,MJ_GRN],
-  [MJ_GRN,MJ_RED,MJ_GRN],
-  [MJ_RED,MJ_GRN,MJ_GRN,MJ_RED],
+  [MJ_GRN,MJ_GRN,MJ_GRN],
+  [MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN],
   [MJ_GRN,MJ_GRN,MJ_RED,MJ_GRN,MJ_GRN],
-  [MJ_RED,MJ_GRN,MJ_RED,MJ_GRN,MJ_RED,MJ_GRN],
-  [MJ_RED,MJ_RED,MJ_RED,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN],
+  [MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN],
+  [MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN],
   [MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN],
-  [MJ_GRN,MJ_GRN,MJ_GRN,MJ_RED,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN,MJ_GRN],
+  [MJ_GRN,MJ_RED,MJ_GRN,MJ_GRN,MJ_RED,MJ_GRN,MJ_GRN,MJ_RED,MJ_GRN],
 ];
+/* 8索は実物同様アーチ型(上下2段が弓なりに湾曲)。他の数字はMJ_PIPSの汎用配置を流用 */
+const MJ_SOU_PIPS_8=[[.22,.32],[.41,.19],[.59,.19],[.78,.32],[.22,.68],[.41,.81],[.59,.81],[.78,.68]];
 function mjRenderTile(g,t,x,y,w,h,o){
   o=o||{};
   g.save();
@@ -6157,20 +6160,23 @@ function mjRenderTile(g,t,x,y,w,h,o){
           g.beginPath();g.arc(X,Y,R0*.22,0,TAU);g.fillStyle=col;g.fill();
         });
       }
-    }else{ // 索子: 竹スティック (1索=イーソウは鳥の専用デザイン・2-9索は赤の差し色を混ぜて実物準拠)
+    }else{ // 索子: 竹スティック (1索=イーソウは鳥の専用デザイン・基本は緑一色で5索中央/9索中央列のみ赤の実物準拠)
       if(n===1){
         g.fillStyle=ink(MJ_GRN);
         g.beginPath();g.ellipse(cx,y+fh*.58,w*.27,fh*.3,0,0,TAU);g.fill(); // 胴体
         g.beginPath();g.ellipse(cx,y+fh*.25,w*.16,fh*.15,0,0,TAU);g.fill(); // 頭
         g.fillStyle=ink(MJ_RED);
         g.beginPath();g.moveTo(cx-w*.02,y+fh*.13);g.lineTo(cx+w*.12,y+fh*.17);g.lineTo(cx-w*.02,y+fh*.21);g.closePath();g.fill(); // くちばし
+        g.fillStyle=ink('#e8c530'); // 黄: 胸元の差し色(小さめに留めて緑の胴体を主体に保つ)
+        g.beginPath();g.ellipse(cx,y+fh*.62,w*.09,fh*.1,0,0,TAU);g.fill();
         g.strokeStyle=ink('#0d3d22');g.lineWidth=Math.max(1,w*.035);g.lineCap='round';
         g.beginPath();g.moveTo(cx-w*.2,y+fh*.5);g.quadraticCurveTo(cx-w*.34,y+fh*.68,cx-w*.15,y+fh*.88);g.stroke(); // 尾羽
         g.fillStyle='rgba(255,255,255,.55)';
         g.beginPath();g.arc(cx-w*.06,y+fh*.23,w*.035,0,TAU);g.fill(); // 目のハイライト
       }else{
         const SW=w*.15,SH=fh*.21,cols=MJ_SOU_COLORS[n-2];
-        MJ_PIPS[n-1].forEach(([ux,uy],i)=>{
+        const pips=n===8?MJ_SOU_PIPS_8:MJ_PIPS[n-1]; // 8索は実物同様アーチ型の専用配置
+        pips.forEach(([ux,uy],i)=>{
           const X=x+w*ux,Y=y+fh*(uy*.84+.08);
           g.fillStyle=ink(cols[i]);
           rr(g,X-SW/2,Y-SH/2,SW,SH,SW*.4);g.fill();
@@ -6696,7 +6702,8 @@ function runMahjongTests(){
     }catch(e){ok=false;}
     ck('render:全種類の牌が例外なく描ける',ok);
   }
-  { // 配色: 筒子/索子が単色に偏っていないこと (#feedback2 3件目: 緑一色/清一色が牌を読まず色だけで当てられてしまう対策の再発防止)
+  { // 配色: 筒子は複数色で単色に偏らないこと・索子は実物準拠で基本緑一色(5索中央/9索中央列のみ赤)であること
+    // (#feedback2 3件目: 緑一色/清一色が牌を読まず色だけで当てられてしまう対策の再発防止・#feedback2.5でソウズの配色方針を明確化)
     const c=document.createElement('canvas');c.width=60;c.height=80;
     const g=c.getContext('2d');
     const inkColorsOf=t=>{
@@ -6709,8 +6716,11 @@ function runMahjongTests(){
     };
     ck('render:筒子3が複数色',new Set(inkColorsOf(9+2)).size>=2);   // 3筒 (index 9=1筒)
     ck('render:筒子7が複数色',new Set(inkColorsOf(9+6)).size>=2);   // 7筒
-    ck('render:索子3が複数色',new Set(inkColorsOf(18+2)).size>=2);  // 3索 (index 18=1索)
-    ck('render:索子6が複数色',new Set(inkColorsOf(18+5)).size>=2);  // 6索
+    // 索子は実物準拠で基本緑一色(#feedback2.5): 赤の差し色は5索(中央)・9索(中央列)のみ
+    ck('render:索子5が複数色(中央のみ赤)',new Set(inkColorsOf(18+4)).size>=2); // 5索 (index 18=1索)
+    ck('render:索子9が複数色(中央列が赤)',new Set(inkColorsOf(18+8)).size>=2); // 9索
+    ck('render:索子3は緑単色',new Set(inkColorsOf(18+2)).size===1);  // 3索
+    ck('render:索子6は緑単色',new Set(inkColorsOf(18+5)).size===1);  // 6索
   }
   return done();
 }
