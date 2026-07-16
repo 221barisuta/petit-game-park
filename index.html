@@ -3448,7 +3448,8 @@ registerGame({
         if(!result){
           if(!online){
             const m=players[turn].mark;
-            outlinedText(g,(m==='black'?'●':'○')+'の ばん',W/2,140,27,m==='black'?'#1c1630':'#fff','#cdb892',7);
+            // #feedback4 2件目: 黒の番の「●」が濃紺の背景(#2b2550)に同化していたため、フチを白に強めて視認性を確保
+            outlinedText(g,(m==='black'?'●':'○')+'の ばん',W/2,140,27,m==='black'?'#1c1630':'#fff',m==='black'?'#fff':'#cdb892',7);
             if(players[turn].type==='cpu')outlinedText(g,'🤖 かんがえちゅう…',W/2,172,15,'#ffd23f','#5a3a10',4);
           }
         }else if(result.draw){
@@ -3521,9 +3522,9 @@ registerGame({
       },
       hudInfo(){
         if(screen==='setup')return 'モードを えらぶ';
-        if(screen==='online')return ''; // オンラインは上部DOMバー(onlineBar)が状態表示。右上hudと🔗リンクの重なりを防ぐため空に
-        if(result)return result.draw?'ひきわけ':STONE[result.winner]+'の かち';
-        return STONE[players[turn].mark]+'の ばん'+(players[turn].type==='cpu'?' (CPU)':'');
+        // #feedback4 1件目: playはcanvas側に手番/結果を描画済み(上のdraw()参照)のため
+        // 上部HUDバーは空にする(オセロ第3弾と同じ削除漏れパターン・二重表示の解消)
+        return '';
       },
       onlineBack(){screen='setup';setRoomUrl('');},      // 入室UIの「もどる」から
       destroy(){GomokuNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');setRoomUrl('');}, // ✕退出時クリーンアップ
@@ -6913,7 +6914,9 @@ registerGame({
       g.beginPath(); g.moveTo(0,yL); g.lineTo(EDGE_SX,yR); g.stroke(); g.setLineDash([]);
       g.restore();
     }
-    function drawCar(g,car,col,centerY,tilt){
+    // #feedback4 6件目: 車種(コンパクト/ダンプ/スポーツ)ごとに形状から違いが分かるよう描き分ける
+    // (性能特性: ダンプ=重量級で背が高く車輪も大きい/スポーツ=低くくさび形+スポイラー/コンパクト=従来の丸みボックス)
+    function drawCar(g,car,col,centerY,tilt,carKey){
       const cx=wx(car.x+CHK_CAR_W/2);
       let cy=roadY(centerY,cx,tilt)-13;
       let rot=tilt;
@@ -6928,16 +6931,35 @@ registerGame({
       }
       // 影
       g.save();g.globalAlpha=.25;g.fillStyle='#000';rr(g,-w/2,h/2-3,w,7,4);g.fill();g.restore();
-      // ボディ
-      g.fillStyle=col.car; rr(g,-w/2,-h/2,w,h,6); g.fill();
-      g.fillStyle=col.dark; rr(g,-w/2,h/2-7,w,7,4); g.fill();
-      // キャビン
-      g.fillStyle=col.glow; rr(g,-w*0.18,-h/2-9,w*0.5,12,4); g.fill();
-      g.fillStyle='rgba(20,24,40,.85)'; rr(g,-w*0.12,-h/2-7,w*0.4,8,3); g.fill();
-      // タイヤ
-      g.fillStyle='#1a1320';
-      g.beginPath();g.arc(-w*0.28,h/2,5,0,TAU);g.fill();
-      g.beginPath();g.arc(w*0.28,h/2,5,0,TAU);g.fill();
+      if(carKey==='dump'){ // ダンプ: 荷台が高く角ばった重量級シルエット・タイヤも大きめ
+        g.fillStyle=col.car; rr(g,-w/2,-h/2-6,w*0.66,h+6,3); g.fill(); // 荷台
+        g.fillStyle=col.dark; rr(g,w*0.1,-h/2+2,w*0.42,h-2,3); g.fill(); // キャブ側面
+        g.fillStyle=col.glow; rr(g,w*0.14,-h/2-4,w*0.28,10,2); g.fill(); // 窓
+        g.fillStyle='rgba(20,24,40,.85)'; rr(g,w*0.17,-h/2-2,w*0.22,6,2); g.fill();
+        g.fillStyle='#1a1320';
+        g.beginPath();g.arc(-w*0.3,h/2+1,6.5,0,TAU);g.fill();
+        g.beginPath();g.arc(w*0.32,h/2+1,6.5,0,TAU);g.fill();
+      }else if(carKey==='sports'){ // スポーツ: 低く前傾したくさび形+リアスポイラー
+        g.beginPath();
+        g.moveTo(-w/2,h/2-2); g.lineTo(-w/2+7,-h/2+7); g.lineTo(w*0.12,-h/2+1);
+        g.lineTo(w/2-5,-h/2+9); g.lineTo(w/2,h/2-2); g.closePath();
+        g.fillStyle=col.car; g.fill();
+        g.fillStyle=col.dark; rr(g,-w/2,h/2-4,w,4,2); g.fill(); // 底面
+        g.fillStyle=col.glow;
+        g.beginPath(); g.moveTo(-w*0.06,-h/2+6); g.lineTo(w*0.24,-h/2+3); g.lineTo(w*0.19,-h/2+9); g.lineTo(-w*0.11,-h/2+9); g.closePath(); g.fill();
+        g.fillStyle=col.dark; g.fillRect(-w/2-3,-h/2+3,4,9); // リアスポイラー
+        g.fillStyle='#1a1320';
+        g.beginPath();g.arc(-w*0.26,h/2,4.2,0,TAU);g.fill();
+        g.beginPath();g.arc(w*0.3,h/2,4.2,0,TAU);g.fill();
+      }else{ // コンパクト(既定): 丸みのあるボックス型
+        g.fillStyle=col.car; rr(g,-w/2,-h/2,w,h,6); g.fill();
+        g.fillStyle=col.dark; rr(g,-w/2,h/2-7,w,7,4); g.fill();
+        g.fillStyle=col.glow; rr(g,-w*0.18,-h/2-9,w*0.5,12,4); g.fill();
+        g.fillStyle='rgba(20,24,40,.85)'; rr(g,-w*0.12,-h/2-7,w*0.4,8,3); g.fill();
+        g.fillStyle='#1a1320';
+        g.beginPath();g.arc(-w*0.28,h/2,5,0,TAU);g.fill();
+        g.beginPath();g.arc(w*0.28,h/2,5,0,TAU);g.fill();
+      }
       g.restore();
     }
     function drawBtn(g,b,fill,stroke,label,sub){
@@ -7004,14 +7026,15 @@ registerGame({
         g.fillStyle=`rgba(255,60,70,${blink*0.5})`;
         for(let y=176;y<H-150;y+=18){g.beginPath();g.moveTo(EDGE_SX-7,y);g.lineTo(EDGE_SX,y+5);g.lineTo(EDGE_SX,y-5);g.closePath();g.fill();}
         g.restore();
-        // 車
-        drawCar(g,cCar,COLC,LANE_C,tilt);
-        drawCar(g,pCar,COLP,LANE_P,tilt);
+        // 車 (同ラウンドは自分/CPUとも同じ車種。色のみで区別)
+        drawCar(g,cCar,COLC,LANE_C,tilt,ROUND_PLAN[round].car);
+        drawCar(g,pCar,COLP,LANE_P,tilt,ROUND_PLAN[round].car);
       }
       parts.draw(g);
 
       // タイトル + スコア
-      outlinedText(g,'🏁 チキンレース',W/2,46,26,'#ffd9a0','#3a1f1a',7);
+      // #feedback4 5件目: 右上HUD(R1/3 崖xxxcm)とタイトルが近接/重なって見えるため、タイトルを少し縮小
+      outlinedText(g,'🏁 チキンレース',W/2,48,21,'#ffd9a0','#3a1f1a',6);
       const pw=results.filter(r=>r.winner==='p').length, cw=results.filter(r=>r.winner==='c').length;
       if(stPhase!=='title'){
         outlinedText(g,'あなた',W/2-92,84,15,COLP.car,'#2a1020',4);
