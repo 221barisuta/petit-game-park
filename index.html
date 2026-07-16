@@ -5357,6 +5357,9 @@ function ctzGenQuiz(rng, n, hardMin) { // 待ち3種以上を hardMin 問以上�
 
 registerGame({
   id:'chinitsu', emoji:'🀅', title:'チンイツ道場',
+  // #feedback4 12件目: メニューの發アイコンが絵文字任せだと緑背景の丸に緑がかった牌で同化していたため、
+  // 白い牌+厚み(影)+緑の發で立体的に見えるSVGに置き換え(メニューのアイコン表示はiconHtml優先)
+  iconHtml:`<svg viewBox="0 0 100 100" width="80%" height="80%" style="display:block"><rect x="16" y="12" width="70" height="82" rx="10" fill="#2a2010" opacity=".3"/><rect x="12" y="8" width="70" height="82" rx="10" fill="#fdfcf4" stroke="#b0a48e" stroke-width="3"/><text x="47" y="62" font-size="50" font-weight="800" text-anchor="middle" fill="#1d7a3d" font-family="sans-serif">發</text></svg>`,
   desc:'清一色の「待ち牌」をぜんぶ当てるクイズ！全10問',
   color:'#a8d8b8', duration:null,
   howto:[
