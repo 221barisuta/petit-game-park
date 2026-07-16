@@ -1,6 +1,7 @@
 /* ranking-worker (Cloudflare Workers + KV) headless テスト (モックKV)
    検証: /total 送信のuid優先照合(改名しても同一人物として追従・rank算出) /
-        uid未設定の旧データはnicknameでフォールバック照合 / レート制限 / 必須項目チェック
+        uid未設定の旧データはnicknameでフォールバック照合 / 新クライアント移行(レガシー行へのuid付与) /
+        レート制限(RL_MAX超過で429) / 必須項目チェック
    実行: node ranking-worker/worker.test.mjs   (非0終了で失敗) */
 import worker from './worker.js';
 
@@ -52,6 +53,18 @@ const ck = (n, c) => { c ? pass++ : (fail++, log.push(n)); };
   ck('legacy-value-updated', top[0].value === 80);
 }
 
+// ── 新クライアント移行経路: uidなしの既存レガシー行に、同名+uidありで送信 → 新規行にならずuidが付与される ──
+{
+  const env = { RANK: new MockKV() };
+  await env.RANK.put('total:lane', JSON.stringify([{ nickname: 'あおいネコ', value: 40, metric: 'best', n: 1, ts: 0 }]));
+  const r = await worker.fetch(req('POST', '/total', { game: 'lane', nickname: 'あおいネコ', value: 60, uid: 'uid-migrate' }), env);
+  ck('migrate-post-ok', (await r.json()).ok === true);
+  const top = await env.RANK.get('total:lane', 'json');
+  ck('migrate-still-single-entry', top.length === 1);
+  ck('migrate-uid-attached', top[0].uid === 'uid-migrate');
+  ck('migrate-value-updated', top[0].value === 60);
+}
+
 // ── uid違いは別人として新規エントリになる ──
 {
   const env = { RANK: new MockKV() };
@@ -70,6 +83,16 @@ const ck = (n, c) => { c ? pass++ : (fail++, log.push(n)); };
   ck('unknown-game-rejected', (await rBadGame.json()).ok === false);
   const rZero = await worker.fetch(req('POST', '/total', { game: 'tea', nickname: 'x', value: 0 }), env);
   ck('zero-value-rejected', (await rZero.json()).ok === false);
+}
+
+// ── レート制限: 同一IPでRL_MAX(20件)を超えると429 ──
+{
+  const env = { RANK: new MockKV() };
+  let last;
+  for (let i = 0; i < 21; i++) {
+    last = await worker.fetch(req('POST', '/total', { game: 'tea', nickname: 'れいと', value: 1 + i, uid: 'uid-rl' }), env);
+  }
+  ck('rate-limited-after-max', last.status === 429 && (await last.json()).ok === false);
 }
 
 console.log('[ranking-worker logic] pass=' + pass + ' / fail=' + fail, log.length ? log : '');
