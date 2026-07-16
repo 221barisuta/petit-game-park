@@ -1685,9 +1685,9 @@ registerGame({
   create(ctx){
     const A=ctx.audio,RNG=ctx.rng;
     const SKINS=[
-      {bgT:'#fdf3da',bgB:'#eed5a3',tatami:'#d9c283',cols:['#9ed0e8','#f2eede','#ffb3a7','#8d92ff','#d6f0fc'],moon:false},
-      {bgT:'#eaf5d8',bgB:'#cfe8b5',tatami:'#b5cf8a',cols:['#bfe3b2','#f4f0e0','#9fd8a8','#7fc97f','#e2f3d2'],moon:false},
-      {bgT:'#2c2a55',bgB:'#1c1a3d',tatami:'#3d3a6e',cols:['#7f8ad6','#cdd3ff','#9aa3e8','#5d68c4','#b9c2ff'],moon:true},
+      {bgT:'#fdf3da',bgB:'#eed5a3',tatami:'#d9c283',cols:['#9ed0e8','#f2eede','#ffb3a7','#8d92ff','#d6f0fc','#d8b98a'],moon:false},
+      {bgT:'#eaf5d8',bgB:'#cfe8b5',tatami:'#b5cf8a',cols:['#bfe3b2','#f4f0e0','#9fd8a8','#7fc97f','#e2f3d2','#c9b083'],moon:false},
+      {bgT:'#2c2a55',bgB:'#1c1a3d',tatami:'#3d3a6e',cols:['#7f8ad6','#cdd3ff','#9aa3e8','#5d68c4','#b9c2ff','#8f7fc4'],moon:true},
     ];
     const skin=SKINS[ctx.skinLevel]||SKINS[0];
     const CUPS=[
@@ -1696,6 +1696,9 @@ registerGame({
       {name:'マグカップ', topW:106,botW:100,h:116,line:.82,fill:1.8, deco:'flower',handle:true},
       {name:'どんぶり',   topW:182,botW:104,h:120,line:.85,fill:2.4, deco:'band'},
       {name:'ロンググラス',topW:90,botW:76, h:150,line:.86,fill:2.0, deco:'none',glass:true},
+      // #feedback4 10件目: 新ギミック「あなあきわん」。注いでいる間も一定量が漏れ続けるため、
+      // 普通のカップより速く/長く注ぐ判断が必要になるタイミング変化枠(leak=1秒あたりの減少量)
+      {name:'あなあきわん',topW:112,botW:92, h:100,line:.80,fill:2.0, deco:'hole',  leak:.11},
     ];
     CUPS.forEach((c,i)=>c.col=skin.cols[i]);
     const CX=232,BASE=566;
@@ -1817,11 +1820,13 @@ registerGame({
       else if(d.deco==='dot'){g.fillStyle='rgba(90,140,200,.5)';
         for(let i=-1;i<=1;i++){g.beginPath();g.arc(x+i*22,BASE-h*0.5,5,0,TAU);g.fill()}}
       else if(d.deco==='flower'){emojiText(g,'🌸',x,BASE-h*0.5,18)}
+      else if(d.deco==='hole'){ // #feedback4 10件目: 水漏れ穴の見た目(小さな暗い穴)
+        g.fillStyle='#2e2015';g.beginPath();g.arc(x,BASE-18,6,0,TAU);g.fill();
+        g.strokeStyle='rgba(0,0,0,.4)';g.lineWidth=2;g.stroke();}
       if(d.glass){g.fillStyle='rgba(255,255,255,.55)';rr(g,x-tw2+10,topY+12,9,h-30,5);g.fill()}
-      // 判定ゾーン帯 (GOOD帯=みどり, PERFECT帯=きん)
+      // #feedback4 9件目: 目標ラインの表示を1本+帯1つに整理(旧: GOOD緑帯+PERFECT金帯+線+縁取り文字が重なっていた)
+      // 許容帯(PERFECT帯)のみ残し、GOOD帯は廃止(判定ロジック自体は変更なし・表示のみ簡素化)
       const zy=(rr01)=>BASE-6-lineH*rr01;
-      g.fillStyle='rgba(120,220,140,.3)';
-      g.fillRect(x-tw2,zy(1),d.topW,zy(K.g2)-zy(1));
       g.fillStyle=inZone?'rgba(255,210,63,.65)':'rgba(255,210,63,.4)';
       g.fillRect(x-tw2,zy(1),d.topW,zy(K.p)-zy(1));
       // おちゃ (ゾーン内はキンいろに変化)
@@ -1847,7 +1852,9 @@ registerGame({
       g.restore();
       outlinedText(g,'ここまで',x+tw2+44,lineY,13,inZone?'#ffd23f':'#ff6b6b','#fff',3);
       if(d.handle){
-        g.beginPath();g.arc(x+tw2+10,BASE-h*0.5,20,-1.15,1.15);
+        // #feedback4 8件目: 旧座標(中心x+tw2+10・角度±1.15)だと弧の端が本体の縁(≒x+tw2-2)まで
+        // 届かず浮いて見えていたため、中心を縁に寄せ・角度を広げて弧の両端が本体に重なるようにする
+        g.beginPath();g.arc(x+tw2-4,BASE-h*0.5,22,-2.3,2.3);
         g.lineWidth=10;g.strokeStyle='#4a3b2a';g.stroke();
         g.lineWidth=5;g.strokeStyle=d.col;g.stroke();
       }
@@ -1868,6 +1875,7 @@ registerGame({
             holdT+=dt;
             lastM=Math.min(1,Math.pow(holdT/0.38,1.3));
             cup.fill+=dt*lastM*cup.spd;
+            if(cup.d.leak)cup.fill=Math.max(0,cup.fill-dt*cup.d.leak); // #feedback4 10件目: 穴あき器は注いでいる間も水位が減る
             A.pourLevel(cup.fill);
             if(cup.fill>=K.g2&&!zoneDinged){
               zoneDinged=true;
