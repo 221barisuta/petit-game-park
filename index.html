@@ -529,17 +529,22 @@ function setupAnalytics(){
 /* ── PROFILE: ニックネーム/アバター/ランキングオプトインの一元管理 (#14) ──
    オンライン対戦(makeOnlineNet)とランキング送信(#15)が共用する。localStorageのみ・PIIなし */
 const PROFILE=(()=>{
-  const NAME_KEY='pgp2_name',AV_KEY='pgp2_avatar',OPT_KEY='pgp2_rank_optin';
+  const NAME_KEY='pgp2_name',AV_KEY='pgp2_avatar',OPT_KEY='pgp2_rank_optin',UID_KEY='pgp2_uid';
   const ADJ=['あかい','あおい','きいろい','みどりの','しろい','むらさきの','ちゃいろい','オレンジの','ピンクの','きんいろの'];
   const ANI=['キツネ','クマ','ウサギ','ネコ','イヌ','パンダ','ペンギン','ライオン','トラ','ゾウ','カエル','フクロウ','リス','イルカ','コアラ','ハリネズミ'];
   const ri=n=>Math.floor(Math.random()*n);
   const randName=()=>ADJ[ri(ADJ.length)]+ANI[ri(ANI.length)];
   function getName(){let n=store.get(NAME_KEY,'');if(!n){n=randName();store.set(NAME_KEY,n);}return n;}
   function setName(n){const v=String(n||'').replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,12);store.set(NAME_KEY,v||randName());}
-  return {randName,getName,setName,
+  // 改名するとランキングのニックネーム一致キーが変わり別人扱いになっていた(旧名エントリが残留)ため、
+  // 端末ごとの匿名IDを発行しsubmitTotalに載せる。worker側は改名後もuidで同一人物を追従できる(PIIなし)
+  function getUid(){let u=store.get(UID_KEY,'');
+    if(!u){u=(crypto.randomUUID?crypto.randomUUID():'u-'+Date.now().toString(36)+Math.random().toString(36).slice(2));store.set(UID_KEY,u);}
+    return u;}
+  return {randName,getName,setName,getUid,
     getAvatar:()=>store.get(AV_KEY,''),setAvatar:a=>store.set(AV_KEY,a||''),
     dispName:()=>store.get(AV_KEY,'')+getName(), // オンライン席の表示名 (アバター前置。サーバー側で12文字に丸め)
-    optIn:()=>store.get(OPT_KEY,'0')==='1',setOptIn:v=>store.set(OPT_KEY,v?'1':'0')};
+    optIn:()=>store.get(OPT_KEY,'1')==='1',setOptIn:v=>store.set(OPT_KEY,v?'1':'0')};
 })();
 
 /* ランキングAPI: PGP_CONFIG.rankingBase 未設定なら no-op。
@@ -568,7 +573,7 @@ window.PGP_RANKING={
     if(!base||!(value>0)||!PROFILE.optIn())return null;
     const res=await fetch(base.replace(/\/$/,'')+'/total',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({game,nickname:PROFILE.getName(),value})});
+      body:JSON.stringify({game,nickname:PROFILE.getName(),value,uid:PROFILE.getUid()})});
     return res.ok?res.json():null;
   },
   async fetchTotal(game,limit){
@@ -1345,7 +1350,9 @@ function setupUserInfo(){
 /* #14/#15 セルフテスト: PROFILE と オプトイン送信ゲート (fetchモックで実送信なし) */
 function runProfileTests(){
   const {ck,done}=makeTest('profile');
-  const saved=['pgp2_name','pgp2_avatar','pgp2_rank_optin'].map(k=>[k,store.get(k,'')]);
+  const saved=['pgp2_name','pgp2_avatar','pgp2_rank_optin','pgp2_uid'].map(k=>[k,store.get(k,'')]);
+  try{localStorage.removeItem('pgp2_rank_optin');}catch(e){}
+  ck('optin-default-on',PROFILE.optIn()===true);
   PROFILE.setName('てすと');ck('name-set',PROFILE.getName()==='てすと');
   PROFILE.setName('   ');ck('name-empty-auto',PROFILE.getName().trim().length>0);
   PROFILE.setName('あいうえおかきくけこさしすせそ');ck('name-cap12',PROFILE.getName().length<=12);
@@ -1363,6 +1370,7 @@ function runProfileTests(){
       await window.PGP_RANKING.submitTotal('tea',100);
       ck('optin-sends-total',calls.length===1&&calls[0].u.indexOf('/total')>=0);
       ck('optin-payload',calls.length===1&&JSON.parse(calls[0].o.body).nickname==='ぷち'&&JSON.parse(calls[0].o.body).value===100);
+      ck('optin-payload-uid',calls.length===1&&typeof JSON.parse(calls[0].o.body).uid==='string'&&JSON.parse(calls[0].o.body).uid.length>0&&JSON.parse(calls[0].o.body).uid===PROFILE.getUid());
       await window.PGP_RANKING.submitTotal('tea',0);
       ck('zero-score-no-send',calls.length===1);
     }finally{

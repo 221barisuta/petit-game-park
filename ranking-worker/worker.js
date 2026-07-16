@@ -4,7 +4,7 @@
    エンドポイント:
      POST /score  ... スコア送信 {gameId, score, mode?, date?|dailyKey?, name?}
      GET  /top    ... 上位取得   ?game=&date=(YYYYMMDD|all)&mode=(daily|free)
-     POST /total  ... [Phase1] トータル成績送信（匿名オプトイン）{game, nickname, value}
+     POST /total  ... [Phase1] トータル成績送信（匿名オプトイン）{game, nickname, value, uid?}
      GET  /total  ... [Phase1] game別 Top-N トータル成績  ?game=&limit=
 
    デイリーチャレンジの seed (= 日付) と同じキーで集計するので、
@@ -20,7 +20,9 @@ const TTL_DAYS = 40;
 /* --- Phase1: game別トータル成績ランキング（案B: 匿名オプトイン） ---
    既存のデイリー/累計(top:)とは別keyspace(total:)で、nickname別に集計する。
    各ゲームの主指標は TOTAL_METRICS で設定（レビューで確定）。
-     agg 'max' = ベスト値 / agg 'sum' = 累計 */
+     agg 'max' = ベスト値 / agg 'sum' = 累計
+   uid(端末ごとの匿名ID)が来た場合はuid優先で同一人物を照合し、改名時も
+   同じエントリを追従更新する（nicknameのみの旧データはnicknameでフォールバック照合）。 */
 const TOTAL_METRICS = {
   tea:  { metric: 'best', agg: 'max' },
   lane: { metric: 'best', agg: 'max' },
@@ -59,6 +61,9 @@ function todayKey() { // JST基準の日付キー
 }
 function sanitizeName(v) {
   return String(v ?? '').replace(/[\x00-\x1F<>]/g, '').trim().slice(0, 12) || null;
+}
+function sanitizeUid(v) {
+  return String(v ?? '').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 64) || null;
 }
 function keyOf(date, game, mode) { return `top:${date}:${game}:${mode}`; }
 
@@ -112,12 +117,16 @@ async function rateLimited(env, ip) {
   return false;
 }
 
-async function pushTotal(env, game, nickname, value) {
+async function pushTotal(env, game, nickname, value, uid) {
   const cfg = metricOf(game);
   const key = `total:${game}`;
   const cur = (await env.RANK.get(key, 'json')) || [];
-  let e = cur.find(x => x.nickname === nickname);
-  if (!e) { e = { nickname, value: 0, metric: cfg.metric, n: 0, ts: 0 }; cur.push(e); }
+  // uid優先で同一人物を特定（改名しても追従）。uid未設定の古いエントリはnicknameでフォールバック照合
+  let e = uid ? cur.find(x => x.uid === uid) : null;
+  if (!e) e = cur.find(x => x.nickname === nickname && !x.uid);
+  if (!e) { e = { nickname, value: 0, metric: cfg.metric, n: 0, ts: 0 }; if (uid) e.uid = uid; cur.push(e); }
+  e.nickname = nickname; // 改名を反映（既存エントリを別人扱いにせず追従更新）
+  if (uid) e.uid = uid;
   e.value = cfg.agg === 'sum' ? e.value + value : Math.max(e.value, value);
   e.value = Math.min(TOTAL_MAX, e.value);
   e.metric = cfg.metric;
@@ -126,7 +135,7 @@ async function pushTotal(env, game, nickname, value) {
   cur.sort((a, b) => b.value - a.value || a.ts - b.ts);
   const top = cur.slice(0, TOTAL_N);
   await env.RANK.put(key, JSON.stringify(top), {}); // トータルは無期限
-  const idx = top.findIndex(x => x.nickname === nickname);
+  const idx = top.indexOf(e);
   return { rank: idx >= 0 ? idx + 1 : null, total: top.length, value: e.value };
 }
 
@@ -141,7 +150,8 @@ async function postTotal(req, env) {
   if (!nickname) return json({ ok: false, error: 'nickname required' }, 400);
   const value = Math.max(0, Math.min(TOTAL_MAX, Math.round(Number(b.value) || 0)));
   if (!(value > 0)) return json({ ok: false, error: 'no value' }, 400);
-  const res = await pushTotal(env, game, nickname, value);
+  const uid = sanitizeUid(b.uid);
+  const res = await pushTotal(env, game, nickname, value, uid);
   return json({ ok: true, game, metric: metricOf(game).metric, nickname, value: res.value, rank: res.rank, total: res.total });
 }
 
