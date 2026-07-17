@@ -5834,16 +5834,29 @@ function mjSafety(S,h,t){for(const e of MJ_SAFETY)if(e.hit(S,h,t))return e;}
 /* ---- Phase3: 他家個別の危険牌ヒートマップ (現物/スジ/裏スジ/間四軒/カベ/ワンチャンス・ノーチャンス/字牌の生き死に) ----
    既存のmjSuji/mjNoChance/mjWallCntは「リーチ済み他家の河を合算した1視点」向けだったため、
    Phase3では家ごとに現物(自分の河のみ)を見る個別ビューを新設し、4段階(tier 0=◎〜3=危険)へ統合する */
-const mjUraSuji=(river,t)=>{ // 裏スジ: 対象牌の±3を「手出し」で切っていたら危険信号(スジと同じ±3・手出し限定)
+// review must-fix(PR#49 3巡目): 裏スジは対象牌±3の手出しではない(それは通常のスジと同じ関係)。
+// 正しくは「手出し牌D(1-indexed)の裏スジは、D<=4ならD+1とD+4、D>=5ならD-1とD-4」(参考: 麻雀豆腐 裏筋解説)。
+// 例: 3m手出し→4m・7mが裏スジ危険(4m手出しなら5m・8mが裏スジ、1mは通常のスジであって裏スジではない)
+const mjUraSuji=(river,t)=>{
   if(t>=MJ.HONOR)return false;
   const n=t%9,b=t-n;
-  const tedAt=k=>k>=0&&k<=8&&river.some(e=>e.t===b+k&&e.ted);
-  return (n-3>=0&&tedAt(n-3))||(n+3<=8&&tedAt(n+3));
+  return river.some(e=>{
+    if(!e.ted||e.t<b||e.t>=b+9)return false; // 同色の手出しのみ対象
+    const d=e.t-b; // 手出し牌の0-indexedランク(0-8)
+    return (d<=4&&(n===d+1||n===d+4))||(d>=4&&(n===d-1||n===d-4));
+  });
 };
-const mjAidaYonken=(S,h,t)=>{ // 間四軒: 対象牌の隣(±1)のどちらかが壁(4枚見え)ならカンチャンが構成不能
+// review must-fix(PR#49 3巡目): 間四軒は対象牌自身の周辺牌が壁(4枚見え)かどうかのカベ系判定ではない。
+// 正しくは「同色で5差(1-indexedでD, D+5)の手出しが河に両方あれば、その内側の牌(D+1・D+4)が危険」
+// (=同じ牌の裏スジが2方向から重なって成立する、より強い危険信号。参考: 麻雀豆腐 間四軒解説)
+// 例: 2p・7p手出し(5差)→3p・6pが間四軒で危険
+const mjAidaYonken=(river,t)=>{
   if(t>=MJ.HONOR)return false;
-  const n=t%9,b=t-n,dead=k=>k>=0&&k<=8&&mjWallCnt(S,h,b+k)<=0;
-  return dead(n-1)||dead(n+1);
+  const n=t%9,b=t-n;
+  const ted=new Set();
+  for(const e of river)if(e.ted&&e.t>=b&&e.t<b+9)ted.add(e.t-b);
+  for(const d of ted)if(d<=3&&ted.has(d+5)&&(n===d+1||n===d+4))return true;
+  return false;
 };
 // review must-fix(PR#49): 壁/ワンチャンスは「待ちを構成する周辺牌(両面の相方)の枯れ方」で判定するべきで、
 // 対象牌t自身の残り枚数(mjWallCnt(S,h,t))を根拠にしてはいけない(現物残り1枚でも普通に放銃しうる)。
@@ -5860,10 +5873,11 @@ const mjOneChance=(S,h,t)=>{ // ワンチャンス: 両面が構成できる相�
 const MJ_DANGER=[
   {tier:0,label:'現物',hit:(S,h,t)=>S.genbutsu[t]},
   {tier:0,label:'壁(ノーチャンス)',hit:(S,h,t)=>t<MJ.HONOR&&mjNoChance(S,h,t)},
+  // review must-fix(PR#49 3巡目): 間四軒は裏スジが2方向から重なった、より強い危険信号(参考記事: 「裏スジよりさらに危険」)。
+  // 対象牌集合は理論上どちらか片方の裏スジ単独と一致するため、先に判定してより具体的なラベルを優先する
+  {tier:3,label:'間四軒',hit:(S,h,t,river)=>mjAidaYonken(river,t)},
   {tier:3,label:'裏スジ',hit:(S,h,t,river)=>mjUraSuji(river,t)},
   {tier:3,label:'生牌の字牌',hit:(S,h,t)=>t>=MJ.HONOR&&S.visible[t]+h[t]<2},
-  // 間四軒はカンチャン特有(隣接±1のみ)の枯れ判定なので、両面±1/±2を見るワンチャンスより先に評価しラベルを優先する
-  {tier:1,label:'間四軒',hit:(S,h,t)=>mjAidaYonken(S,h,t)},
   {tier:1,label:'ワンチャンス',hit:(S,h,t)=>t<MJ.HONOR&&mjOneChance(S,h,t)},
   {tier:1,label:'字牌2枚見え',hit:(S,h,t)=>t>=MJ.HONOR&&S.visible[t]+h[t]>=2},
   {tier:1,label:'スジ',hit:(S,h,t)=>t<MJ.HONOR&&mjSuji(S,t)},
@@ -6813,13 +6827,19 @@ function runMahjongTests(){
       const R=mkR();disc(R,1,3,false); // 4mをツモぎり→1mがスジ
       ck('danger:スジ',mj4Danger(R,1,0).tier===1&&mj4Danger(R,1,0).label==='スジ');
     }
-    { // 裏スジ: 同じ±3の関係でも「手出し」だと危険信号が優先される(tier3)
-      const R=mkR();disc(R,1,3,true); // 4mを手出し→1m/7mが裏スジ
-      ck('danger:裏スジ(手出しはスジより優先)',mj4Danger(R,1,0).tier===3&&mj4Danger(R,1,0).label==='裏スジ');
+    { // review must-fix(PR#49 3巡目)回帰: 裏スジは対象牌の±3手出しではない(それは通常のスジ)。
+      // 正しくは3m手出し→4m・7mが危険(1mはスジであって裏スジではない)
+      const R=mkR();disc(R,1,2,true); // 3mを手出し→4m/7mが裏スジ
+      ck('danger:裏スジ',mj4Danger(R,1,3).tier===3&&mj4Danger(R,1,3).label==='裏スジ'); // 4m
+      ck('danger:裏スジ(もう一方の7m)',mj4Danger(R,1,6).tier===3&&mj4Danger(R,1,6).label==='裏スジ'); // 7m
+      const R2=mkR();disc(R2,1,3,true); // 4mを手出し(review回帰: ±3の1mは裏スジではない)
+      ck('danger:4m手出しの±3(1m)は裏スジではなく通常スジ扱い(review回帰)',mj4Danger(R2,1,0).label!=='裏スジ');
     }
-    { // 間四軒: 対象牌の隣(5p→4pか6p)が壁ならカンチャン構成不能(tier1)
-      const R=mkR();for(let k=0;k<4;k++)disc(R,2,12,true); // 4p 4枚見え(壁)
-      ck('danger:間四軒',mj4Danger(R,1,13).tier===1&&mj4Danger(R,1,13).label==='間四軒');
+    { // review must-fix(PR#49 3巡目)回帰: 間四軒は対象牌隣接の壁判定ではなく、
+      // 同色で5差の手出し(2p・7p)が河にある時にその内側(3p・6p)が危険、という river ベースの判定
+      const R=mkR();disc(R,1,10,true);disc(R,1,15,true); // 下家(seat1)が2p・7p 手出し(5差)
+      ck('danger:間四軒',mj4Danger(R,1,11).tier===3&&mj4Danger(R,1,11).label==='間四軒'); // 3p
+      ck('danger:間四軒(もう一方の6p)',mj4Danger(R,1,14).tier===3&&mj4Danger(R,1,14).label==='間四軒'); // 6p
     }
     { // 字牌2枚見え: tier1
       const R=mkR();disc(R,2,27,true);disc(R,3,27,false); // 東2枚見え
@@ -6846,16 +6866,16 @@ function runMahjongTests(){
     { // コーチング1行: 安全なら null / 危険な家があれば家名+理由を含む文字列
       const Rsafe=mkR();disc(Rsafe,1,13,true);disc(Rsafe,2,13,true);disc(Rsafe,3,13,true); // 全員現物
       ck('coach:全員安全ならnull',mj4CoachLine(Rsafe,13)===null);
-      const Rdanger=mkR();disc(Rdanger,1,3,true); // 下家(seat1)に裏スジ危険
-      const line=mj4CoachLine(Rdanger,0);
+      const Rdanger=mkR();disc(Rdanger,1,2,true); // 下家(seat1)に3m手出し→4mが裏スジ危険
+      const line=mj4CoachLine(Rdanger,3);
       ck('coach:危険な家名と理由を含む',line!==null&&line.indexOf('下家')>=0&&line.indexOf('危険')>=0);
     }
     { // 押し引き採点: 脅威下で安全な代替(現物=全員から見て安全)があるのに危険牌を選ぶ→pushedDanger / 安全な牌を選ぶ→avoidedDanger
       const R=mkR();R.players[1].riichi=3; // 下家リーチ→脅威あり
-      disc(R,1,3,true); // 1mが裏スジ(危険)
+      disc(R,1,2,true); // 3mを手出し→4mが裏スジ(危険)
       disc(R,1,20,true);disc(R,2,20,true);disc(R,3,20,true); // 7sは全員が現物(安全な代替)
-      const an={cands:[{tile:0},{tile:20}]}; // 0=1m(危険) / 20=7s(全員現物で安全)
-      const pushed=mj4PushEval(R,0,an);
+      const an={cands:[{tile:3},{tile:20}]}; // 3=4m(危険) / 20=7s(全員現物で安全)
+      const pushed=mj4PushEval(R,3,an);
       ck('push:危険牌を選ぶとpushedDanger',pushed&&pushed.pushedDanger===true&&pushed.avoidedDanger===false);
       const avoided=mj4PushEval(R,20,an);
       ck('push:安全な牌を選ぶとavoidedDanger',avoided&&avoided.avoidedDanger===true&&avoided.pushedDanger===false);
