@@ -6919,8 +6919,9 @@ function runMahjongTests(){
     ck('render:索子6は緑単色',new Set(inkColorsOf(18+5)).size===1);  // 6索
   }
   { // #feedback4 7件目: 大富豪(#51)と共通のキャラプールを他家3人(下家/対面/上家)に適用
-    ck('char:下家/対面/上家それぞれに固有キャラ名',
-      MJ4_CHAR_NAMES.length===4&&[1,2,3].every(s=>MJ4_CHAR_NAMES[s]&&MJ4_CHAR_NAMES[s].length>0));
+    // review nit(PR#56): 非空/重複なしだけでなく、共通プールとのずれを機械的に検知できるよう期待値を直接assertする
+    ck('char:下家/対面/上家それぞれに固有キャラ名(大富豪#51の先頭3人と一致)',
+      MJ4_CHAR_NAMES.length===4&&MJ4_CHAR_NAMES[1]==='🐶ぽち'&&MJ4_CHAR_NAMES[2]==='🐱みけ'&&MJ4_CHAR_NAMES[3]==='🐰うさこ');
     ck('char:キャラ名が重複していない',new Set([1,2,3].map(s=>MJ4_CHAR_NAMES[s])).size===3);
     ck('char:戦略テキスト用の席位置名(下家/対面/上家)は従来どおり維持',
       MJ4_NAMES[1]==='下家'&&MJ4_NAMES[2]==='対面'&&MJ4_NAMES[3]==='上家');
