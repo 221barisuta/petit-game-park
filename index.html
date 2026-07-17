@@ -6172,7 +6172,7 @@ function mj4ApplyCall(R,call){ // 鳴きを手牌へ適用。呼ばれた牌は�
     R.visible[a]++;R.visible[b]++;}
   p.melds.push({type:call.type,tile:call.tile,tiles,from:call.from});
 }
-function mj4CpuDiscardAfterCall(R,s){ // 鳴き直後の打牌(ツモなし)。→{cut,why}
+function mj4CpuDiscardAfterCall(R,s){ // 鳴き直後の打牌(ポン/チーはツモなし・明カンは嶺上ツモ後に呼ぶ)。→{cut,why}
   const p=R.players[s];
   const an=mjAnalyze(p.hand,mj4SafetyView(R,s),
     {threat:mj4Threat(R,s),turn:R.turnNo,seatWind:mj4SeatWind(R,s),roundWind:R.roundWind,numMelds:p.melds.length});
@@ -6468,8 +6468,13 @@ registerGame({
         const call=mj4CallCandidates(R,s,r.cut);
         if(call&&mj4WantsCall(R,call)){
           mj4ApplyCall(R,call);
-          const cr=mj4CpuDiscardAfterCall(R,call.seat); // 鳴いた家は即座に打牌(ツモなし)
           callInfo={seat:call.seat,type:call.type,from:call.from};
+          // review must-fix(PR#57): 明カンは嶺上牌相当を1枚ツモしてから打牌(手牌枚数を保つ・嶺上ツモ和了も判定)
+          if(call.type==='kan'){
+            mj4Draw(R,call.seat);
+            if(R.end){aiInfo={seat:call.seat,why:''};lastDiscSeat=call.seat;discHiT=1;endKyoku();return;}
+          }
+          const cr=mj4CpuDiscardAfterCall(R,call.seat); // 鳴いた家は即座に打牌
           aiInfo={seat:call.seat,why:cr.why};
           lastDiscSeat=call.seat;discHiT=1;
           A.bad(); // 鳴き演出音(リーチ宣言と同じ効果音を流用)
@@ -6947,6 +6952,7 @@ function runMahjongTests(){
               if(call&&mj4WantsCall(R4,call)){
                 anyCall=true;
                 mj4ApplyCall(R4,call);
+                if(call.type==='kan'){mj4Draw(R4,call.seat);if(R4.end)break;} // 嶺上ツモ相当
                 mj4CpuDiscardAfterCall(R4,call.seat);
                 if(R4.end)break;
                 s=mj4NextSeat(R4,call.seat);
@@ -7120,6 +7126,23 @@ function runMahjongTests(){
       ck('p4a:apply:meldsに記録',R4.players[2].melds.length===1&&R4.players[2].melds[0].type==='pon'&&
         R4.players[2].melds[0].tiles.length===3);
       ck('p4a:apply:視認カウントは新規露出分(2枚)だけ加算',R4.visible[5]===3); // 元の捨て牌1+新規2=3
+    }
+    { // review must-fix(PR#57): 明カンは打牌前に嶺上牌相当を1枚ツモする(手牌枚数を保つ)
+      const g4=mj4GameNew(mulberry32(2),false),R4=mj4RoundNew(g4);
+      R4.players[2].hand=new Array(34).fill(0);
+      R4.players[2].hand[5]=3; // 6m3枚(明カン材料)
+      for(let i=0;i<10;i++)R4.players[2].hand[9+i]++; // 残り10枚(1p〜10種、非和了形)
+      const call=mj4CallCandidates(R4,1,5); // seat1が6m切り→seat2が明カン
+      ck('p4a:kan回帰:明カン検知',call&&call.type==='kan'&&call.seat===2);
+      mj4ApplyCall(R4,call);
+      ck('p4a:kan回帰:カン直後は手牌10枚(13-3)',R4.players[2].hand.reduce((a,b)=>a+b,0)===10);
+      mj4Draw(R4,call.seat); // 嶺上牌相当
+      if(!R4.end){
+        ck('p4a:kan回帰:嶺上ツモ後は11枚',R4.players[2].hand.reduce((a,b)=>a+b,0)===11);
+        mj4CpuDiscardAfterCall(R4,call.seat);
+        ck('p4a:kan回帰:打牌後は10枚に戻る(副露4枚+濃縮手牌10枚=14枚相当)',
+          R4.players[2].hand.reduce((a,b)=>a+b,0)===10);
+      }
     }
     { // 鳴き適用(チー): with牌のみ控除・視認カウントもwith牌のみ加算
       const R4=mkCall();R4.players[2].hand[6]=1;R4.players[2].hand[7]=1;R4.visible[5]=1;
