@@ -5669,7 +5669,10 @@ const MJ=(()=>{
     if(!v){v=[];enumSuit(c9.slice(),0,v,0,0);suitMemo.set(key,v);}
     return v;
   }
-  function bestMT(h){ // ブロック数(面子+塔子)≤4 で 2m+t 最大
+  // Phase4a: 副露(ポン/チー/明カン)は既に確定した面子として外部で保持するため、
+  // シャンテン計算は「残り必要ブロック数」をnumMelds分だけ圧縮して評価する(既定0=門前・従来どおり)
+  function bestMT(h,numMelds){ // ブロック数(面子+塔子)≤(4-numMelds) で 2m+t 最大
+    const cap=4-(numMelds||0);
     const hon=[[0,0]];let hm=0,ht=0;
     for(let i=HONOR;i<34;i++){if(h[i]>=3)hm++;else if(h[i]===2)ht++;}
     hon[0]=[hm,ht];
@@ -5677,56 +5680,64 @@ const MJ=(()=>{
     for(const list of[suitPat(h.slice(0,9)),suitPat(h.slice(9,18)),suitPat(h.slice(18,27)),hon]){
       const next=[];
       for(const a of acc)for(const b of list){
-        const m=a[0]+b[0];if(m>4)continue;
-        pPush(next,m,Math.min(a[1]+b[1],4-m));
+        const m=a[0]+b[0];if(m>cap)continue;
+        pPush(next,m,Math.min(a[1]+b[1],cap-m));
       }
       acc=next;
     }
     let best=0;for(const[m,t]of acc)best=Math.max(best,2*m+t);
     return best;
   }
-  const shCache=new Map(); // 手牌ハッシュ→シャンテン数
-  function shanten(h){
-    const key=h.join('');const hit=shCache.get(key);
+  const shCache=new Map(); // (副露数:手牌ハッシュ)→シャンテン数
+  function shanten(h,numMelds){
+    numMelds=numMelds||0;
+    const key=numMelds+':'+h.join('');const hit=shCache.get(key);
     if(hit!==undefined)return hit;
-    let std=8-bestMT(h);
+    let std=8-2*numMelds-bestMT(h,numMelds);
     for(let hd=0;hd<34;hd++){ // 雀頭を固定して再計算
       if(h[hd]<2)continue;
-      h[hd]-=2;std=Math.min(std,7-bestMT(h));h[hd]+=2;
+      h[hd]-=2;std=Math.min(std,7-2*numMelds-bestMT(h,numMelds));h[hd]+=2;
     }
-    let pairs=0,kinds=0,yK=0,yP=0;
-    for(let i=0;i<34;i++){
-      if(h[i]>0){kinds++;if(YAOCHU[i]){yK++;if(h[i]>=2)yP=1;}}
-      if(h[i]>=2)pairs++;
+    let s=std;
+    if(!numMelds){ // 七対子/国士は副露があると成立不可能(門前限定)
+      let pairs=0,kinds=0,yK=0,yP=0;
+      for(let i=0;i<34;i++){
+        if(h[i]>0){kinds++;if(YAOCHU[i]){yK++;if(h[i]>=2)yP=1;}}
+        if(h[i]>=2)pairs++;
+      }
+      s=Math.min(std,6-pairs+Math.max(0,7-kinds),13-yK-yP);
     }
-    const s=Math.min(std,6-pairs+Math.max(0,7-kinds),13-yK-yP); // 七対子/国士
     shCache.set(key,s);
     return s;
   }
-  function ukeire(h,vis){ // 13枚手牌の有効牌: {shanten,tiles:[{tile,left}],count,kinds}
-    const s0=shanten(h);const tiles=[];let count=0;
+  function ukeire(h,vis,numMelds){ // 手牌の有効牌: {shanten,tiles:[{tile,left}],count,kinds}
+    const s0=shanten(h,numMelds);const tiles=[];let count=0;
     for(let t=0;t<34;t++){
       const left=4-h[t]-(vis?vis[t]:0);
       if(left<=0)continue;
       h[t]++;
-      if(shanten(h)<s0){tiles.push({tile:t,left});count+=left;}
+      if(shanten(h,numMelds)<s0){tiles.push({tile:t,left});count+=left;}
       h[t]--;
     }
     return {shanten:s0,tiles,count,kinds:tiles.length};
   }
-  function winTiles(h13){ // 和了牌リスト (聴牌でなければ空)
+  function winTiles(h13,numMelds){ // 和了牌リスト (聴牌でなければ空)
     const out=[];
     for(let t=0;t<34;t++){
       if(h13[t]>=4)continue;
-      h13[t]++;if(shanten(h13)===-1)out.push(t);h13[t]--;
+      h13[t]++;if(shanten(h13,numMelds)===-1)out.push(t);h13[t]--;
     }
     return out;
   }
-  /* --- 和了形分解 (役判定用: 雀頭+面子の全分解と七対子) --- */
-  function decompose(h){
+  /* --- 和了形分解 (役判定用: 雀頭+面子の全分解と七対子)
+     numMelds>0(副露あり)の時は七対子を除外(副露していると成立不可能)。
+     残り必要面子数は副露分だけ手牌が小さくなっているため、既存の再帰はそのまま使い回せる --- */
+  function decompose(h,numMelds){
     const res=[];
-    let pr=0;for(let i=0;i<34;i++)if(h[i]===2)pr++;
-    if(pr===7)res.push({chiitoi:true,pair:-1,sets:[]});
+    if(!numMelds){
+      let pr=0;for(let i=0;i<34;i++)if(h[i]===2)pr++;
+      if(pr===7)res.push({chiitoi:true,pair:-1,sets:[]});
+    }
     for(let hd=0;hd<34;hd++){
       if(h[hd]<2)continue;
       h[hd]-=2;
@@ -5760,22 +5771,29 @@ const MJ=(()=>{
     {name:'混一色',han:3,suitLimit:'half'},
     {name:'清一色',han:6,suitLimit:'full'},
   ];
+  function meldTiles(m){return m.type==='run'?[m.tile,m.tile+1,m.tile+2]:[m.tile,m.tile,m.tile];}
   function judgeOne(y,ctx,d){
     if(y.menzenOnly&&!ctx.menzen)return false;
     if(y.flag)return !!ctx[y.flag];
     if(y.chiitoi)return !!d.chiitoi;
     if(d.chiitoi&&(y.pinfu||y.setType||y.iipeiko||y.tripletOf!==undefined))return false;
-    if(y.tileTest){for(let t=0;t<34;t++)if(ctx.hand[t]>0&&!y.tileTest(t))return false;return true;}
+    const melds=ctx.melds||[],allSets=d.sets.concat(melds); // 副露も刻子/順子判定に含める(#Phase4a)
+    if(y.tileTest){
+      for(let t=0;t<34;t++)if(ctx.hand[t]>0&&!y.tileTest(t))return false;
+      for(const m of melds)for(const t of meldTiles(m))if(!y.tileTest(t))return false;
+      return true;
+    }
     if(y.tripletOf!==undefined){
       const tg=typeof y.tripletOf==='number'?y.tripletOf:ctx[y.tripletOf];
-      return d.sets.some(s=>s.type==='tri'&&s.tile===tg);
+      return allSets.some(s=>s.type==='tri'&&s.tile===tg);
     }
-    if(y.setType)return d.sets.every(s=>s.type===y.setType);
+    if(y.setType)return allSets.every(s=>s.type===y.setType);
     if(y.iipeiko){const r=d.sets.filter(s=>s.type==='run').map(s=>s.tile);
       return r.some((t,i)=>r.indexOf(t)<i);}
     if(y.suitLimit){
       const su=new Set();let hon=false;
       for(let i=0;i<34;i++)if(ctx.hand[i]>0){if(i<HONOR)su.add(i/9|0);else hon=true;}
+      for(const m of melds){if(m.tile<HONOR)su.add(m.tile/9|0);else hon=true;}
       return su.size===1&&(y.suitLimit==='full'?!hon:hon);
     }
     if(y.pinfu){
@@ -5789,7 +5807,7 @@ const MJ=(()=>{
   }
   function judgeYaku(ctx){ // 全分解を試し最大翻の役リスト
     let best={han:0,yaku:[]};
-    for(const d of decompose(ctx.hand)){
+    for(const d of decompose(ctx.hand,(ctx.melds||[]).length)){
       const yaku=[];let han=0;
       for(const y of YAKU)if(judgeOne(y,ctx,d)){yaku.push(y);han+=y.han;}
       if(han>best.han)best={han,yaku,decomp:d};
@@ -5951,12 +5969,13 @@ function mjPushW(sh,threat,turn){
 }
 
 /* ---- 打牌候補の分析: 14枚→全候補の {効率/安全/役} スコアと理由 ---- */
-function mjAnalyze(h14,S,c){ // c:{threat,turn,seatWind,roundWind}
+function mjAnalyze(h14,S,c){ // c:{threat,turn,seatWind,roundWind,numMelds}(#Phase4a: 副露があるとシャンテン計算に反映)
   const cands=[];
+  const numMelds=c.numMelds||0;
   for(let t=0;t<34;t++){
     if(h14[t]===0)continue;
     h14[t]--;
-    const u=MJ.ukeire(h14,S.visible);
+    const u=MJ.ukeire(h14,S.visible,numMelds);
     const eyes=mjYakuEyes(h14,c);
     cands.push({tile:t,sh:u.shanten,uke:u,eyes,safe:mjSafety(S,h14,t)});
     h14[t]++;
@@ -6043,7 +6062,7 @@ function mj4RoundNew(g){
   for(let s=0;s<4;s++){
     const hand=new Array(34).fill(0);
     for(let i=0;i<13;i++)hand[wall.pop()]++;
-    players.push({hand,river:[],riichi:0,lastDraw:-1});
+    players.push({hand,river:[],riichi:0,lastDraw:-1,melds:[]}); // #Phase4a: 副露(ポン/チー/明カン)の記録
   }
   const doraIndicator=wall[0]; // wall.pop()は末尾から取るため先頭14枚(王牌)は局中ずっと不可侵
   return {g,dealer,wall,players,turn:dealer,turnNo:1,end:null,
@@ -6052,8 +6071,13 @@ function mj4RoundNew(g){
     visible:new Array(34).fill(0)}; // 全河の見え枚数 (増分更新・全席共有)
 }
 const mj4SeatWind=(R,s)=>mj4SeatWindOf(R.dealer,s);
-const mj4WinCtx=(R,s,hand,winTile,tsumo)=>({hand,winTile,menzen:true,
-  riichi:!!R.players[s].riichi,tsumo,seatWind:mj4SeatWind(R,s),roundWind:R.roundWind});
+// #Phase4a: 副露(ポン/チー/明カン)を役判定用のset形状{type:'tri'|'run',tile}へ変換
+const mj4MeldSets=melds=>melds.map(m=>({type:m.type==='chi'?'run':'tri',tile:m.tile}));
+const mj4WinCtx=(R,s,hand,winTile,tsumo)=>{
+  const melds=R.players[s].melds;
+  return {hand,winTile,menzen:melds.length===0,melds:mj4MeldSets(melds),
+    riichi:!!R.players[s].riichi,tsumo,seatWind:mj4SeatWind(R,s),roundWind:R.roundWind};
+};
 const mj4Threat=(R,seat)=>R.players.some((p,s)=>s!==seat&&p.riichi); // 他家のリーチ有無
 function mj4SafetyView(R,seat){ // seat視点の安全度: 現物=リーチ済み他家の河の合算
   const S={visible:R.visible,genbutsu:new Array(34).fill(false)};
@@ -6066,7 +6090,7 @@ function mj4SafetyView(R,seat){ // seat視点の安全度: 現物=リーチ済�
 function mj4Draw(R,s){ // ツモ → {tile, win|null}。win時は R.end 設定
   const p=R.players[s],t=R.wall.pop();
   p.hand[t]++;p.lastDraw=t;
-  if(MJ.shanten(p.hand)===-1){
+  if(MJ.shanten(p.hand,p.melds.length)===-1){
     const w=MJ.judgeYaku(mj4WinCtx(R,s,p.hand,t,true));
     if(w.han>0){R.end={type:'tsumo',seat:s,win:w,winTile:t};return {tile:t,win:w};}
     if(s===0)R.g.noYaku++; // 役なし: あがれない教材ポイント (自分のみ表示)
@@ -6078,8 +6102,8 @@ function mj4Discard(R,s,t){ // 打牌 → 'ron'|null。ロンは打牌者の下�
   p.hand[t]--;p.river.push({t,ted:t!==p.lastDraw});R.visible[t]++;
   for(let k=1;k<4;k++){
     const o=(s+k)%4,q=R.players[o];
-    if(MJ.shanten(q.hand)!==0)continue;
-    const wins=MJ.winTiles(q.hand);
+    if(MJ.shanten(q.hand,q.melds.length)!==0)continue;
+    const wins=MJ.winTiles(q.hand,q.melds.length);
     if(!wins.includes(t))continue;
     if(wins.some(wt=>q.river.some(e=>e.t===wt)))continue; // フリテン
     q.hand[t]++;
@@ -6095,12 +6119,66 @@ function mj4CpuTurn(R,s){ // AI席の1手: ツモ→(和了)→打牌→リー�
   const p=R.players[s];
   if(p.riichi){mj4Discard(R,s,d.tile);return {...d,cut:d.tile,why:'ツモぎり'};}
   const an=mjAnalyze(p.hand,mj4SafetyView(R,s),
-    {threat:mj4Threat(R,s),turn:R.turnNo,seatWind:mj4SeatWind(R,s),roundWind:R.roundWind});
+    {threat:mj4Threat(R,s),turn:R.turnNo,seatWind:mj4SeatWind(R,s),roundWind:R.roundWind,numMelds:p.melds.length});
   const cut=an.cands[0].tile;
   if(mj4Discard(R,s,cut)==='ron')return {...d,cut,why:''};
   let why=an.cands[0].sh===0?'テンパイ！':'手なり';
-  if(!p.riichi&&MJ.shanten(p.hand)===0){p.riichi=R.turnNo;why='リーチ！';}
+  if(!p.riichi&&p.melds.length===0&&MJ.shanten(p.hand,p.melds.length)===0){p.riichi=R.turnNo;why='リーチ！';} // 副露済みはリーチ不可
   return {...d,cut,why};
+}
+/* ---- Phase4a: 他家同士の鳴み(ポン/チー/明カン)。4aスコープは自分(seat0)の捨て牌には反応せず、
+   自分も鳴かない(=4bで対応)。判定はシンプルに: 役牌がらみはポン、上家からの牌はタンヤオ寄りでチー ---- */
+function mj4CallCandidates(R,discarderSeat,t){ // 優先度: 明カン>ポン(誰でも)>チー(下家のみ)
+  if(discarderSeat===0)return null; // 自分の捨て牌は4aでは鳴きの対象外
+  const others=[1,2,3].filter(s=>s!==discarderSeat);
+  for(const s of others)if(R.players[s].hand[t]>=3)return {seat:s,type:'kan',tile:t,from:discarderSeat};
+  for(const s of others)if(R.players[s].hand[t]>=2)return {seat:s,type:'pon',tile:t,from:discarderSeat};
+  if(t<MJ.HONOR){
+    const s=(discarderSeat+1)%4;
+    if(s!==0){
+      const h=R.players[s].hand,n=t%9,b=t-n;
+      const combos=[[n-2,n-1],[n-1,n+1],[n+1,n+2]].filter(([a,c])=>a>=0&&c<=8);
+      for(const[a,c]of combos)if(h[b+a]>0&&h[b+c]>0)return {seat:s,type:'chi',tile:t,with:[b+a,b+c],from:discarderSeat};
+    }
+  }
+  return null;
+}
+// #Phase4a鳴き判断: 役牌(自風/場風/白發中)が対子なら常にポン・カンできるなら明カン優先。
+// チーは受け入れ改善(シャンテンが浅くなる、または同シャンテンで受け入れ枚数が増える)時のみ
+function mj4WantsCall(R,call){
+  const p=R.players[call.seat];
+  if(call.type==='kan'||call.type==='pon'){
+    const t=call.tile;
+    if(t>=31)return true; // 白發中は無条件でポン/カン(役確定)
+    if(t===mj4SeatWind(R,call.seat)||t===R.roundWind)return true; // 自風・場風
+    return false; // 客風・数牌の理由なきポン/カンは今回は見送り(4aはシンプルに)
+  }
+  // チー: 仮に鳴いた場合とスルーした場合でシャンテン/受け入れを比較し、改善する時だけ鳴く
+  const h=p.hand.slice();h[call.with[0]]--;h[call.with[1]]--;
+  const before=MJ.shanten(p.hand,p.melds.length),after=MJ.shanten(h,p.melds.length+1);
+  if(after<before)return true;
+  if(after===before){
+    const u0=MJ.ukeire(p.hand,R.visible,p.melds.length),u1=MJ.ukeire(h,R.visible,p.melds.length+1);
+    return u1.count>u0.count;
+  }
+  return false;
+}
+function mj4ApplyCall(R,call){ // 鳴きを手牌へ適用。呼ばれた牌は捨てた家の河に残したまま(視認カウントは既に加算済み)、
+  const p=R.players[call.seat]; // 副露で新たに見える手出し分だけvisibleへ反映(Phase3ヒートマップとの整合)
+  let tiles;
+  if(call.type==='kan'){p.hand[call.tile]-=3;tiles=[call.tile,call.tile,call.tile,call.tile];R.visible[call.tile]+=3;}
+  else if(call.type==='pon'){p.hand[call.tile]-=2;tiles=[call.tile,call.tile,call.tile];R.visible[call.tile]+=2;}
+  else{const[a,b]=call.with;p.hand[a]--;p.hand[b]--;tiles=[call.tile,a,b].sort((x,y)=>x-y);
+    R.visible[a]++;R.visible[b]++;}
+  p.melds.push({type:call.type,tile:call.tile,tiles,from:call.from});
+}
+function mj4CpuDiscardAfterCall(R,s){ // 鳴き直後の打牌(ツモなし)。→{cut,why}
+  const p=R.players[s];
+  const an=mjAnalyze(p.hand,mj4SafetyView(R,s),
+    {threat:mj4Threat(R,s),turn:R.turnNo,seatWind:mj4SeatWind(R,s),roundWind:R.roundWind,numMelds:p.melds.length});
+  const cut=an.cands[0].tile;
+  if(mj4Discard(R,s,cut)==='ron')return {cut,why:''};
+  return {cut,why:an.cands[0].sh===0?'テンパイ！':'手なり'};
 }
 function mj4Settle(R){ // 局の清算(ゼロサム) → moves[4]。g.results へ局サマリ、kyoku++
   const g=R.g,moves=[0,0,0,0];
@@ -6304,7 +6382,7 @@ registerGame({
     let hanchan=store.get('pgp2_mj_hanchan','0')==='1';
     let G=mj4GameNew(RNG,hanchan);
     let R=mj4RoundNew(G);
-    let mjPhase='draw',sel=-1,an=null,drawn=-1,fb=null,timer=0,aiSeat=0,aiInfo=null;
+    let mjPhase='draw',sel=-1,an=null,drawn=-1,fb=null,timer=0,aiSeat=0,aiInfo=null,callInfo=null;
     let hintOn=ctx.rookie,riichiArm=false,rep=null,page=0,kyokuMoves=null;
     let tedashiShow=store.get('pgp2_mj_tedashi','1')==='1';
     let readOn=false; // Phase3: 危険牌ヒートマップ表示トグル(常時表示にせずテンポ優先・既定OFF)
@@ -6382,9 +6460,26 @@ registerGame({
       if(R.wall.length<=14){endKyoku();return;}
       const r=mj4CpuTurn(R,s);
       aiInfo={seat:s,why:r.why||''};
+      callInfo=null;
       if(r.cut!==undefined){lastDiscSeat=s;discHiT=1;} // 打牌があった時だけハイライト(ツモ和了時はcutなし)
       if(R.end){endKyoku();return;}
       if(r.why==='リーチ！')A.bad();
+      if(r.cut!==undefined){ // #Phase4a: 他家同士の鳴み(自分=seat0の捨て牌には反応しない・自分も鳴かない)
+        const call=mj4CallCandidates(R,s,r.cut);
+        if(call&&mj4WantsCall(R,call)){
+          mj4ApplyCall(R,call);
+          const cr=mj4CpuDiscardAfterCall(R,call.seat); // 鳴いた家は即座に打牌(ツモなし)
+          callInfo={seat:call.seat,type:call.type,from:call.from};
+          aiInfo={seat:call.seat,why:cr.why};
+          lastDiscSeat=call.seat;discHiT=1;
+          A.bad(); // 鳴き演出音(リーチ宣言と同じ効果音を流用)
+          if(R.end){endKyoku();return;}
+          const nxc=mj4NextSeat(R,call.seat); // 手番は鳴いた家からの通常進行を再開(飛ばされた家はこの巡パスのまま)
+          if(nxc===0){mjPhase='draw';timer=MJ_SPEED[speed].trans;}
+          else{aiSeat=nxc;timer=MJ_SPEED[speed].seat;}
+          return;
+        }
+      }
       const nx=mj4NextSeat(R,s);
       if(nx===0){mjPhase='draw';timer=MJ_SPEED[speed].trans;} // 次は自分
       else{aiSeat=nx;timer=MJ_SPEED[speed].seat;}
@@ -6457,6 +6552,10 @@ registerGame({
       outlinedText(g,G.scores[s]+'点',x,80,10,'#dceadf','#12331f',3,1,'left');
       if(p.riichi){rr(g,x+66,58,54,14,7);g.fillStyle='#e5578a';g.fill();
         text(g,'リーチ',x+93,65,9,'#fff','center');}
+      else if(p.melds.length){ // #Phase4a: 副露牌のミニ表示(リーチと同じ枠を共用。副露済みはリーチ不可のため両立しない)
+        let mx=x+66;
+        for(const m of p.melds){for(const tl of m.tiles.slice(0,3)){tile(g,mx,58,9,13,tl,{});mx+=10;}mx+=3;}
+      }
       river(g,p.river,x,88,OW,OH,18,lastDiscSeat===s&&discHiT>0); // ミニ河は最新18枚
     }
     return {
@@ -6518,7 +6617,10 @@ registerGame({
             text(g,'タップですすむ ▶',W-30,py+182,12.5,'#999','right');
           }
         }else if(mjPhase==='ai'){
-          text(g,MJ4_NAMES[aiSeat]+'の番…',px,py+8,14,'#3a3f52');
+          if(callInfo){ // #Phase4a: 鳴み発生の告知(ポン/チー/カン)
+            const kind=callInfo.type==='pon'?'ポン':callInfo.type==='chi'?'チー':'カン';
+            text(g,'📣'+MJ4_NAMES[callInfo.seat]+'が'+MJ4_NAMES[callInfo.from]+'の牌に'+kind+'！',px,py+8,13.5,'#c0392b');
+          }else text(g,MJ4_NAMES[aiSeat]+'の番…',px,py+8,14,'#3a3f52');
           if(aiInfo&&aiInfo.why)text(g,'🤖'+MJ4_NAMES[aiInfo.seat]+'「'+aiInfo.why+'」',px,py+32,12,'#5a7a6a');
         }else if(mjPhase==='kyokuEnd'){
           const res=G.results[G.results.length-1],e=res.end;
@@ -6704,6 +6806,20 @@ function runMahjongTests(){
     ===['場風牌','混一色','自風牌'].sort().join(','));
   ck('yaku:iipeiko-pinfu',yk('112233m456p789s99s',{winTile:26})===['一盃口','平和'].sort().join(','));
   ck('yaku:chinitsu',yk('111222333789m99m',{})===['一盃口','清一色'].sort().join(','));
+  // Phase4a: 副露(ポン/チー/明カン)ありの役判定(ctx.melds/menzen:falseを渡す)
+  const yk2=(hand,melds,opts)=>MJ.judgeYaku(Object.assign({hand:MJ.parse(hand),menzen:false,melds,
+    riichi:false,tsumo:false,seatWind:27,roundWind:27,winTile:-1},opts))
+    .yaku.map(y=>y.name).sort().join(',');
+  ck('yaku:副露(役牌ポン)でも成立',yk2('123m456p789s55z',[{type:'tri',tile:31}])==='役牌(白)');
+  ck('yaku:副露の牌も混一色の判定に含む',
+    yk2('123m456m789m55z',[{type:'tri',tile:31}])===['役牌(白)','混一色'].sort().join(','));
+  ck('yaku:副露があってもタンヤオは成立(副露牌も幺九チェック対象)',
+    yk2('234m567m234p55p',[{type:'run',tile:20}])==='断幺九'); // meld=345s(全て断幺九牌)
+  ck('yaku:副露牌に幺九が混ざるとタンヤオ不成立',
+    yk2('234m567m234p55p',[{type:'run',tile:18}])===''); // meld=123s(1sを含む)
+  ck('yaku:副露があるとピンフ等の門前限定役は不成立',
+    yk2('234567m234p56788s',[{type:'run',tile:20}],{winTile:24})==='断幺九'); // 平和は出ない
+  ck('shanten:副露分だけ必要面子数が減る(完成形でシャンテン-1)',MJ.shanten(MJ.parse('123m456p789s55z'),1)===-1);
   // 安全度テーブル (現物>スジ>無スジ、壁)
   {const S=mjRiverNew(),h=new Array(34).fill(0);
    mjThreatDiscard(S,12);            // 4p切り → 1p/7pがスジ
@@ -6804,6 +6920,51 @@ function runMahjongTests(){
       dealins:g4.results.filter(x=>x.end.type==='ron'&&x.end.from===0).length,
       tenpaiRyu:g4.results.filter(x=>x.end.type==='ryuukyoku'&&x.end.tenpai[0]).length});
     ck('p2:report#'+seed,rep.score>=0&&rep.score<=100&&['SS','S','A','B','C'].indexOf(rep.rank[1])>=0);
+  }
+  { // Phase4a: 鳴みを有効にした対局(東風4局)を複数シードで完走確認・ゼロサム・実際に鳴みが発生することも確認
+    let anyCall=false,allOk=true;
+    for(const seed of[1,2,3,4,5,6,7,8]){
+      const g4=mj4GameNew(mulberry32(seed),false);
+      let ok=true,guard=0;
+      while(g4.kyoku<g4.maxKyoku&&guard++<20){
+        const R4=mj4RoundNew(g4);
+        let s=R4.dealer,inner=0;
+        while(!R4.end&&R4.wall.length>14&&inner++<300){
+          if(s===0){
+            const d=mj4Draw(R4,0);
+            if(R4.end)break;
+            const an=mjAnalyze(R4.players[0].hand,mj4SafetyView(R4,0),
+              {threat:mj4Threat(R4,0),turn:R4.turnNo,seatWind:mj4SeatWind(R4,0),roundWind:R4.roundWind,numMelds:0});
+            const top=an.cands[0];
+            if(!R4.players[0].riichi&&top.sh===0)R4.players[0].riichi=R4.turnNo;
+            if(mj4Discard(R4,0,top.tile))break;
+            s=mj4NextSeat(R4,0);
+          }else{
+            const r=mj4CpuTurn(R4,s);
+            if(R4.end)break;
+            if(r.cut!==undefined){
+              const call=mj4CallCandidates(R4,s,r.cut);
+              if(call&&mj4WantsCall(R4,call)){
+                anyCall=true;
+                mj4ApplyCall(R4,call);
+                mj4CpuDiscardAfterCall(R4,call.seat);
+                if(R4.end)break;
+                s=mj4NextSeat(R4,call.seat);
+                continue;
+              }
+            }
+            s=mj4NextSeat(R4,s);
+          }
+        }
+        const expectedDealer=g4.kyoku%4;
+        if(R4.dealer!==expectedDealer)ok=false;
+        mj4Settle(R4);
+        if(g4.scores.reduce((a,b)=>a+b,0)!==100000)ok=false;
+      }
+      if(g4.kyoku!==g4.maxKyoku||!ok)allOk=false;
+    }
+    ck('p4a:鳴みありで複数対局が完走・ゼロサム維持',allOk);
+    ck('p4a:シード群のいずれかで実際に鳴みが発生する',anyCall);
   }
   { // Phase3: 危険牌ヒートマップ(現物/カベ/ワンチャンス/スジ/裏スジ/間四軒/字牌の生き死に)
     const mkR=()=>({visible:new Array(34).fill(0),
@@ -6917,6 +7078,76 @@ function runMahjongTests(){
     ck('render:索子9が複数色(中央列が赤)',new Set(inkColorsOf(18+8)).size>=2); // 9索
     ck('render:索子3は緑単色',new Set(inkColorsOf(18+2)).size===1);  // 3索
     ck('render:索子6は緑単色',new Set(inkColorsOf(18+5)).size===1);  // 6索
+  }
+  { // Phase4a: 他家同士の鳴み判定(CPU間のみ・自分は鳴かない/鳴かれない)
+    const mkCall=()=>{const g4=mj4GameNew(mulberry32(1)),R4=mj4RoundNew(g4);
+      for(const p of R4.players)p.hand=new Array(34).fill(0);
+      return R4;};
+    {const R4=mkCall();R4.players[3].hand[5]=2; // 下家(seat1=discarderの下家は2)以外のseat3に6m2枚
+      const call=mj4CallCandidates(R4,1,5); // seat1(CPU)が6m切り→seat3がポン可能
+      ck('p4a:call:ポン検知',call&&call.seat===3&&call.type==='pon'&&call.tile===5);}
+    {const R4=mkCall();R4.players[3].hand[5]=3; // seat3に6m3枚(ポンもカンも成立しうる)
+      const call=mj4CallCandidates(R4,1,5);
+      ck('p4a:call:カンをポンより優先',call&&call.type==='kan'&&call.seat===3);}
+    {const R4=mkCall();R4.players[2].hand[6]=1;R4.players[2].hand[7]=1; // discarder1の下家(seat2)に7m8m
+      const call=mj4CallCandidates(R4,1,5); // 6m切り→6-7-8mでチー
+      ck('p4a:call:チー検知(下家)',call&&call.seat===2&&call.type==='chi'&&
+        JSON.stringify(call.with.slice().sort((a,b)=>a-b))===JSON.stringify([6,7]));}
+    {const R4=mkCall();R4.players[3].hand[6]=1;R4.players[3].hand[7]=1; // 下家でないseat3に同じ牌を置く
+      const call=mj4CallCandidates(R4,1,5);
+      ck('p4a:call:チーは下家以外には成立しない',call===null);}
+    {const R4=mkCall();R4.players[1].hand[5]=2; // seat1に材料があっても discarderSeat=0(自分)なら反応しない
+      const call=mj4CallCandidates(R4,0,5);
+      ck('p4a:call:自分(seat0)の捨て牌には反応しない(4aスコープ外)',call===null);}
+    {const R4=mkCall(); // 誰も鳴けない
+      ck('p4a:call:候補なしはnull',mj4CallCandidates(R4,1,5)===null);}
+    { // 鳴き判断: 役牌(白發中・自風・場風)は常にポン/カン、それ以外の数牌ポンは見送り
+      const R4=mkCall();
+      ck('p4a:want:白發中は常にポン',mj4WantsCall(R4,{seat:2,type:'pon',tile:31}));
+      ck('p4a:want:自風/場風は常にポン',mj4WantsCall(R4,{seat:2,type:'pon',tile:R4.roundWind}));
+      ck('p4a:want:役なし数牌ポンは見送り',!mj4WantsCall(R4,{seat:2,type:'pon',tile:5}));
+      ck('p4a:want:カンも役牌なら常に成立',mj4WantsCall(R4,{seat:2,type:'kan',tile:32}));
+    }
+    { // チーの是非: シャンテン/受け入れが改善する時だけ鳴く(実際にMJ.shanten/ukeireで検証した具体例)
+      const R4=mkCall();R4.players[2].hand=MJ.parse('111p234s99m46m79p1z'); // 1シャンテン
+      ck('p4a:want:受け入れ改善するチーは鳴く',mj4WantsCall(R4,{seat:2,type:'chi',tile:16,with:[15,17]})); // 8p待ちの79pを埋める
+      ck('p4a:want:シャンテン改善しないチーは見送り',!mj4WantsCall(R4,{seat:2,type:'chi',tile:21,with:[19,20]})); // 234sの中抜き
+    }
+    { // 鳴き適用: 手牌から控除・meldsに記録・視認カウントは新たに見える分だけ加算(呼ばれた牌は既にmj4Discardで加算済み)
+      const R4=mkCall();R4.players[2].hand[5]=2;R4.visible[5]=1; // discardでR.visible[5]++済みという前提を模す
+      mj4ApplyCall(R4,{seat:2,type:'pon',tile:5,from:1});
+      ck('p4a:apply:ポンで手牌から2枚控除',R4.players[2].hand[5]===0);
+      ck('p4a:apply:meldsに記録',R4.players[2].melds.length===1&&R4.players[2].melds[0].type==='pon'&&
+        R4.players[2].melds[0].tiles.length===3);
+      ck('p4a:apply:視認カウントは新規露出分(2枚)だけ加算',R4.visible[5]===3); // 元の捨て牌1+新規2=3
+    }
+    { // 鳴き適用(チー): with牌のみ控除・視認カウントもwith牌のみ加算
+      const R4=mkCall();R4.players[2].hand[6]=1;R4.players[2].hand[7]=1;R4.visible[5]=1;
+      mj4ApplyCall(R4,{seat:2,type:'chi',tile:5,with:[6,7],from:1});
+      ck('p4a:apply:チーでwith牌が控除',R4.players[2].hand[6]===0&&R4.players[2].hand[7]===0);
+      ck('p4a:apply:チーのmeldsは3枚(呼んだ牌含む)昇順',
+        JSON.stringify(R4.players[2].melds[0].tiles)===JSON.stringify([5,6,7]));
+      ck('p4a:apply:視認カウントはwith牌2枚分のみ新規加算',R4.visible[6]===1&&R4.visible[7]===1&&R4.visible[5]===1);
+    }
+    { // 副露済みはリーチ不可 (mj4CpuTurn): 白ポン済み+単騎テンパイ(123m456p789s+9m単騎)でも宣言しない
+      const g4=mj4GameNew(mulberry32(3)),R4=mj4RoundNew(g4);
+      R4.players[2].hand=MJ.parse('123m456p789s9m');
+      R4.players[2].melds.push({type:'pon',tile:31,tiles:[31,31,31],from:0});
+      R4.wall.push(0); // 次のツモを1m固定(和了牌9mを引かせない・偶発和了を回避)
+      mj4CpuTurn(R4,2);
+      ck('p4a:riichi:副露済みはシャンテン0でも宣言しない',!R4.players[2].riichi);
+    }
+    // 手番飛び: 鳴きが起きると鳴いた家に直接手番が移り、間の家は今巡スキップされる(PR#40型の巡目回帰)
+    // 東1局(親=seat0)で seat1(下家)が6m切り→seat2がポン可能(seat0への手番は今巡素通り)
+    {const g4=mj4GameNew(mulberry32(1),false),R4=mj4RoundNew(g4);
+      for(const p of R4.players)p.hand=new Array(34).fill(0);
+      R4.players[2].hand[5]=2;
+      const call=mj4CallCandidates(R4,1,5);
+      mj4ApplyCall(R4,call);
+      const before=R4.turnNo;
+      const nx=mj4NextSeat(R4,call.seat); // 鳴いた家(seat2)からの通常進行を再開
+      ck('p4a:turn:鳴いた家から次の家へ通常進行',nx===3&&R4.turnNo===before); // 3は親(0)ではないのでturnNo不変
+    }
   }
   { // #feedback4 7件目: 大富豪(#51)と共通のキャラプールを他家3人(下家/対面/上家)に適用
     // review nit(PR#56): 非空/重複なしだけでなく、共通プールとのずれを機械的に検知できるよう期待値を直接assertする
