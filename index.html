@@ -6008,6 +6008,10 @@ function mjJudgeKind(chosen,an){ // コア共通JUDGE(スコア/コンボ)への
    卓は seat0=自分, 1=下家, 2=対面, 3=上家。鳴きなし(門前のみ)・東風戦(既定)/半荘。
    AI打牌は自分と同じ mjAnalyze を使用 (Phase3の手牌読み確率はこの分離点に乗せる想定) */
 const MJ4_NAMES=['あなた','下家','対面','上家'];
+// #feedback4 7件目: 席の見た目表示に大富豪(#51)と共通のキャラプールを使い、統一感を出す。
+// MJ4_NAMESは「下家に危険」等の戦略テキストで席位置の意味を伝えるため引き続き使用し、
+// こちらは卓の相手パネル(drawOpp、画面上の位置で上家/対面/下家がすでに分かる)専用の見た目だけの表示名
+const MJ4_CHAR_NAMES=['','🐶ぽち','🐱みけ','🐰うさこ'];
 const MJ_SPEED_ORDER=['slow','normal','fast'];
 const MJ_SPEED={ // 他家の打牌テンポ(秒)。normalが既定=1手0.7秒ほど見せてから次へ
   slow:{seat:1.1,trans:.55,init:.45,label:'🐢ゆっくり'},
@@ -6449,7 +6453,7 @@ registerGame({
       g.strokeStyle='#d8ceba';g.lineWidth=1.5;g.stroke();}
     function drawOpp(g,s,x){ // 他家1人分 (名前/点/リーチ/ミニ河)
       const p=R.players[s],active=mjPhase==='ai'&&aiSeat===s;
-      outlinedText(g,MJ4_NAMES[s]+(R.dealer===s?'(親)':''),x,66,11,active?'#ffd77a':'#fff','#12331f',3,1,'left');
+      outlinedText(g,'🤖'+MJ4_CHAR_NAMES[s]+(R.dealer===s?'(親)':''),x,66,11,active?'#ffd77a':'#fff','#12331f',3,1,'left');
       outlinedText(g,G.scores[s]+'点',x,80,10,'#dceadf','#12331f',3,1,'left');
       if(p.riichi){rr(g,x+66,58,54,14,7);g.fillStyle='#e5578a';g.fill();
         text(g,'リーチ',x+93,65,9,'#fff','center');}
@@ -6913,6 +6917,13 @@ function runMahjongTests(){
     ck('render:索子9が複数色(中央列が赤)',new Set(inkColorsOf(18+8)).size>=2); // 9索
     ck('render:索子3は緑単色',new Set(inkColorsOf(18+2)).size===1);  // 3索
     ck('render:索子6は緑単色',new Set(inkColorsOf(18+5)).size===1);  // 6索
+  }
+  { // #feedback4 7件目: 大富豪(#51)と共通のキャラプールを他家3人(下家/対面/上家)に適用
+    ck('char:下家/対面/上家それぞれに固有キャラ名',
+      MJ4_CHAR_NAMES.length===4&&[1,2,3].every(s=>MJ4_CHAR_NAMES[s]&&MJ4_CHAR_NAMES[s].length>0));
+    ck('char:キャラ名が重複していない',new Set([1,2,3].map(s=>MJ4_CHAR_NAMES[s])).size===3);
+    ck('char:戦略テキスト用の席位置名(下家/対面/上家)は従来どおり維持',
+      MJ4_NAMES[1]==='下家'&&MJ4_NAMES[2]==='対面'&&MJ4_NAMES[3]==='上家');
   }
   return done();
 }
