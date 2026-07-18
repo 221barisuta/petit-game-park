@@ -6171,6 +6171,32 @@ function mj4ApplyCall(R,call){ // 鳴きを手牌へ適用。呼ばれた牌は�
   else{const[a,b]=call.with;p.hand[a]--;p.hand[b]--;tiles=[call.tile,a,b].sort((x,y)=>x-y);
     R.visible[a]++;R.visible[b]++;}
   p.melds.push({type:call.type,tile:call.tile,tiles,from:call.from});
+  // review気づき(Phase4b着手時): ポン/チー直後はツモ牌がないため、鳴いた家の次の打牌は必ず手出し扱いにする
+  // (lastDrawを更新しないと数巡前のツモ牌と偶然一致した時に誤ってツモぎり判定されうる。カンは直後にmj4Drawで上書きされる)
+  if(call.type!=='kan')p.lastDraw=-1;
+}
+/* ---- Phase4b: 自分(seat0)も鳴ける ---- */
+function mj4PlayerCallOptions(R,discarderSeat,t){ // 自分がdiscarderSeatの捨て牌tに対して選べる鳴き選択肢({pon,kan,chi:[[a,b],...]|null}) / 無ければnull
+  if(discarderSeat===0)return null; // 自分の捨て牌には鳴けない
+  const h=R.players[0].hand;
+  const pon=h[t]>=2,kan=h[t]>=3;
+  let chi=null;
+  if(t<MJ.HONOR&&(discarderSeat+1)%4===0){ // チーは自分が下家(discarderSeat+1===自分)の時のみ
+    const n=t%9,b=t-n;
+    const combos=[[n-2,n-1],[n-1,n+1],[n+1,n+2]]
+      .filter(([a,c])=>a>=0&&c<=8&&h[b+a]>0&&h[b+c]>0)
+      .map(([a,c])=>[b+a,b+c]);
+    if(combos.length)chi=combos;
+  }
+  if(!pon&&!kan&&!chi)return null;
+  return {pon,kan,chi,tile:t,from:discarderSeat};
+}
+function mj4CallWouldLoseYaku(hand,type,tile,withPair,ctx){ // この鳴きを適用した仮の手牌に役の芽が無いか(コーチング警告用)
+  const h=hand.slice();
+  if(type==='kan')h[tile]-=3;
+  else if(type==='pon')h[tile]-=2;
+  else{h[withPair[0]]--;h[withPair[1]]--;}
+  return mjYakuEyes(h,ctx).labels.length===0;
 }
 function mj4CpuDiscardAfterCall(R,s){ // 鳴き直後の打牌(ポン/チーはツモなし・明カンは嶺上ツモ後に呼ぶ)。→{cut,why}
   const p=R.players[s];
@@ -6383,6 +6409,8 @@ registerGame({
     let G=mj4GameNew(RNG,hanchan);
     let R=mj4RoundNew(G);
     let mjPhase='draw',sel=-1,an=null,drawn=-1,fb=null,timer=0,aiSeat=0,aiInfo=null,callInfo=null;
+    let callChoice=null; // #Phase4b: 自分への鳴み選択肢({pon,kan,chi,tile,from,timeLeft})。null=非表示
+    const CALL_TIMEOUT=6; // 鳴き選択のタイムアウト秒数(未応答はスルー扱い)
     let hintOn=ctx.rookie,riichiArm=false,rep=null,page=0,kyokuMoves=null;
     let tedashiShow=store.get('pgp2_mj_tedashi','1')==='1';
     let readOn=false; // Phase3: 危険牌ヒートマップ表示トグル(常時表示にせずテンポ優先・既定OFF)
@@ -6412,7 +6440,8 @@ registerGame({
       {id:'hint',x:8,y:624,w:126,h:44,label:()=>hintOn?'💡ヒント中':'💡ヒント',
         on:()=>{if(!hintOn){hintOn=true;G.hintsUsed++;A.pop();}else{hintOn=false;A.tick();}}},
       {id:'riichi',x:142,y:624,w:126,h:44,label:()=>riichiArm?'リーチやめる':'リーチ！',
-        able:()=>mjPhase==='select'&&!R.players[0].riichi&&an&&an.cands.some(c=>c.sh===0),
+        // #Phase4b: 副露済み(鳴いた後)はリーチ不可(mj4CpuTurnの制約と同じ)
+        able:()=>mjPhase==='select'&&!R.players[0].riichi&&R.players[0].melds.length===0&&an&&an.cands.some(c=>c.sh===0),
         on:()=>{riichiArm=!riichiArm;sel=-1;A.go();}},
       {id:'ted',x:276,y:624,w:136,h:44,label:()=>'🌗ツモぎり:'+(tedashiShow?'うすく':'同じ'),
         on:()=>{tedashiShow=!tedashiShow;store.set('pgp2_mj_tedashi',tedashiShow?'1':'0');A.tick();}},
@@ -6422,6 +6451,17 @@ registerGame({
     const me=()=>R.players[0];
     const handTiles=()=>{const o=[];for(let t=0;t<34;t++)for(let k=0;k<me().hand[t];k++)o.push(t);return o;};
     const gameStarted=()=>G.kyoku>0||R.players.some(p=>p.river.length>0);
+    function callButtonsList(){ // #Phase4b: callChoice中に表示するボタン一覧(利用可能なものだけ・スルーは常時)
+      if(!callChoice)return [];
+      const list=[];
+      if(callChoice.pon)list.push({type:'pon',label:'ポン'});
+      if(callChoice.kan)list.push({type:'kan',label:'カン'});
+      if(callChoice.chi)list.push({type:'chi',label:'チー'});
+      list.push({type:'skip',label:'スルー'});
+      const n=list.length,bw=Math.min(150,(W-16-(n-1)*8)/n),bx0=(W-(bw*n+8*(n-1)))/2;
+      list.forEach((b,i)=>{b.x=bx0+i*(bw+8);b.y=624;b.w=bw;b.h=44;});
+      return list;
+    }
 
     function startMyTurn(){ // 自分の番: 壁チェック→ツモ→分析
       if(R.wall.length<=14){endKyoku();return;}
@@ -6455,6 +6495,33 @@ registerGame({
       fb={chosen,an,auto:!!auto};
       mjPhase='fb';timer=auto?.5:0;
     }
+    // #Phase4a/4b共通: discarderSeatの捨て牌tに対し、CPU間の鳴みを判定・適用するか、無ければ通常進行(次の家へ)
+    function tryCpuCallOrAdvance(discarderSeat,t){
+      const call=mj4CallCandidates(R,discarderSeat,t);
+      if(call&&mj4WantsCall(R,call)){
+        mj4ApplyCall(R,call);
+        callInfo={seat:call.seat,type:call.type,from:call.from};
+        // review must-fix(PR#57): 明カンは嶺上牌相当を1枚ツモしてから打牌(手牌枚数を保つ・嶺上ツモ和了も判定)
+        if(call.type==='kan'){
+          mj4Draw(R,call.seat);
+          if(R.end){aiInfo={seat:call.seat,why:''};lastDiscSeat=call.seat;discHiT=1;endKyoku();return;}
+        }
+        const cr=mj4CpuDiscardAfterCall(R,call.seat); // 鳴いた家は即座に打牌
+        aiInfo={seat:call.seat,why:cr.why};
+        lastDiscSeat=call.seat;discHiT=1;
+        A.bad(); // 鳴き演出音(リーチ宣言と同じ効果音を流用)
+        if(R.end){endKyoku();return;}
+        const nxc=mj4NextSeat(R,call.seat); // 手番は鳴いた家からの通常進行を再開(飛ばされた家はこの巡パスのまま)
+        mjPhase='ai';
+        if(nxc===0){mjPhase='draw';timer=MJ_SPEED[speed].trans;}
+        else{aiSeat=nxc;timer=MJ_SPEED[speed].seat;}
+        return;
+      }
+      const nx=mj4NextSeat(R,discarderSeat);
+      mjPhase='ai';
+      if(nx===0){mjPhase='draw';timer=MJ_SPEED[speed].trans;} // 次は自分
+      else{aiSeat=nx;timer=MJ_SPEED[speed].seat;}
+    }
     function stepAi(){ // AI1席ずつ進める (speed設定の秒数ずつ見せる)
       const s=aiSeat;
       if(R.wall.length<=14){endKyoku();return;}
@@ -6464,30 +6531,32 @@ registerGame({
       if(r.cut!==undefined){lastDiscSeat=s;discHiT=1;} // 打牌があった時だけハイライト(ツモ和了時はcutなし)
       if(R.end){endKyoku();return;}
       if(r.why==='リーチ！')A.bad();
-      if(r.cut!==undefined){ // #Phase4a: 他家同士の鳴み(自分=seat0の捨て牌には反応しない・自分も鳴かない)
-        const call=mj4CallCandidates(R,s,r.cut);
-        if(call&&mj4WantsCall(R,call)){
-          mj4ApplyCall(R,call);
-          callInfo={seat:call.seat,type:call.type,from:call.from};
-          // review must-fix(PR#57): 明カンは嶺上牌相当を1枚ツモしてから打牌(手牌枚数を保つ・嶺上ツモ和了も判定)
-          if(call.type==='kan'){
-            mj4Draw(R,call.seat);
-            if(R.end){aiInfo={seat:call.seat,why:''};lastDiscSeat=call.seat;discHiT=1;endKyoku();return;}
-          }
-          const cr=mj4CpuDiscardAfterCall(R,call.seat); // 鳴いた家は即座に打牌
-          aiInfo={seat:call.seat,why:cr.why};
-          lastDiscSeat=call.seat;discHiT=1;
-          A.bad(); // 鳴き演出音(リーチ宣言と同じ効果音を流用)
-          if(R.end){endKyoku();return;}
-          const nxc=mj4NextSeat(R,call.seat); // 手番は鳴いた家からの通常進行を再開(飛ばされた家はこの巡パスのまま)
-          if(nxc===0){mjPhase='draw';timer=MJ_SPEED[speed].trans;}
-          else{aiSeat=nxc;timer=MJ_SPEED[speed].seat;}
-          return;
-        }
+      if(r.cut!==undefined){
+        // #Phase4b: 自分に鳴み選択肢があれば先にたずねる(数秒タイムアウト・未応答はスルー)
+        const pOpts=mj4PlayerCallOptions(R,s,r.cut);
+        if(pOpts){callChoice={...pOpts,timeLeft:CALL_TIMEOUT};mjPhase='callChoice';return;}
+        tryCpuCallOrAdvance(s,r.cut); // #Phase4a: 他家同士の鳴み(自分=seat0の捨て牌には反応しない)
+        return;
       }
       const nx=mj4NextSeat(R,s);
       if(nx===0){mjPhase='draw';timer=MJ_SPEED[speed].trans;} // 次は自分
       else{aiSeat=nx;timer=MJ_SPEED[speed].seat;}
+    }
+    function resolvePlayerCall(type){ // #Phase4b: 鳴み選択の確定(pon/chi/kan/skip)
+      const cc=callChoice;callChoice=null;
+      if(type==='skip'){tryCpuCallOrAdvance(cc.from,cc.tile);return;} // スルー→通常どおりCPU鳴み判定へ
+      const call={seat:0,type,tile:cc.tile,from:cc.from};
+      if(type==='chi')call.with=cc.chi[0]; // #Phase4b簡略化: 複数チー候補時は最初の組を採用
+      mj4ApplyCall(R,call);
+      callInfo={seat:0,type,from:cc.from};
+      if(type==='kan'){
+        mj4Draw(R,0);
+        if(R.end){endKyoku();return;}
+      }
+      an=mjAnalyze(me().hand,mj4SafetyView(R,0),
+        {threat:mj4Threat(R,0),turn:R.turnNo,seatWind:mj4SeatWind(R,0),roundWind:R.roundWind,numMelds:me().melds.length});
+      sel=-1;riichiArm=false;A.go();
+      mjPhase='select';
     }
     function endKyoku(){
       kyokuMoves=mj4Settle(R);
@@ -6569,6 +6638,9 @@ registerGame({
         if(mjPhase==='fb'&&fb&&fb.auto){timer-=dt;if(timer<=0){fb=null;mjPhase='ai';aiSeat=1;timer=MJ_SPEED[speed].seat;}}
         else if(mjPhase==='draw'){timer-=dt;if(timer<=0)startMyTurn();}
         else if(mjPhase==='ai'){timer-=dt;if(timer<=0)stepAi();}
+        else if(mjPhase==='callChoice'&&callChoice){ // #Phase4b: 未応答はタイムアウトでスルー扱い
+          callChoice.timeLeft-=dt;if(callChoice.timeLeft<=0)resolvePlayerCall('skip');
+        }
       },
       draw(g){
         g.drawImage(FELT,0,0);
@@ -6627,6 +6699,9 @@ registerGame({
             text(g,'📣'+MJ4_NAMES[callInfo.seat]+'が'+MJ4_NAMES[callInfo.from]+'の牌に'+kind+'！',px,py+8,13.5,'#c0392b');
           }else text(g,MJ4_NAMES[aiSeat]+'の番…',px,py+8,14,'#3a3f52');
           if(aiInfo&&aiInfo.why)text(g,'🤖'+MJ4_NAMES[aiInfo.seat]+'「'+aiInfo.why+'」',px,py+32,12,'#5a7a6a');
+        }else if(mjPhase==='callChoice'&&callChoice){ // #Phase4b: 自分への鳴み選択
+          text(g,MJ4_NAMES[callChoice.from]+'の'+MJ.NAMES[callChoice.tile]+'に鳴く？',px,py+2,14,'#3a3f52');
+          text(g,'のこり'+Math.max(0,Math.ceil(callChoice.timeLeft))+'びょう',W-28,py+2,12.5,'#c0392b','right');
         }else if(mjPhase==='kyokuEnd'){
           const res=G.results[G.results.length-1],e=res.end;
           text(g,res.label+' けっか',px,py+4,15,'#3a3f52');
@@ -6651,6 +6726,9 @@ registerGame({
         outlinedText(g,'あなた'+(R.dealer===0?'(親)':'')+' '+G.scores[0]+'点',16,404,12,'#fff','#12331f',3,1,'left');
         if(me().riichi){rr(g,150,396,64,16,8);g.fillStyle='#e5578a';g.fill();
           text(g,'リーチ！',182,404,10,'#fff','center');}
+        else if(me().melds.length){ // #Phase4b: 自分の副露牌も相手パネルと同様にミニ表示
+          let mx=150;for(const m of me().melds){for(const tl of m.tiles.slice(0,3)){tile(g,mx,396,11,15,tl,{});mx+=12;}mx+=3;}
+        }
         river(g,me().river,W/2-((RW+2)*6-2)/2,414,RW,RH,24,lastDiscSeat===0&&discHiT>0);
         if(mjPhase==='select'&&sel>=0)drawLoupe(g);
         if(mjPhase!=='report'&&mjPhase!=='kyokuEnd'){
@@ -6681,9 +6759,22 @@ registerGame({
             g.strokeStyle='rgba(0,0,0,.14)';g.stroke();
             text(g,b.label(),b.x+b.w/2,b.y+b.h/2,13,'#4a3a2a','center');
           }
+        }else if(mjPhase==='callChoice'&&callChoice){ // #Phase4b: 鳴み選択ボタン(役なし警告つき)
+          const c={seatWind:mj4SeatWind(R,0),roundWind:R.roundWind};
+          for(const b of callButtonsList()){
+            const warn=b.type!=='skip'&&mj4CallWouldLoseYaku(me().hand,b.type,callChoice.tile,
+              b.type==='chi'?callChoice.chi[0]:undefined,c);
+            drawBtn(g,b,b.label,b.type==='skip'?'#9aa0a8':warn?'#e5a04a':'#ffd77a',false,15);
+            if(warn)text(g,'⚠役なしかも',b.x+b.w/2,b.y-8,9.5,'#c0392b','center');
+          }
         }
       },
       onDown(x,y){
+        if(mjPhase==='callChoice'&&callChoice){ // #Phase4b: 鳴み選択ボタンのタップ判定
+          for(const b of callButtonsList())
+            if(x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h){A.pop();resolvePlayerCall(b.type);return;}
+          return;
+        }
         if(mjPhase==='fb'&&fb&&!fb.auto){fb=null;mjPhase='ai';aiSeat=1;timer=MJ_SPEED[speed].trans;A.tick();return;}
         if(mjPhase==='kyokuEnd'){nextKyoku();A.pop();return;}
         if(mjPhase==='report'){reportTap(x,y);return;}
@@ -7170,6 +7261,49 @@ function runMahjongTests(){
       const before=R4.turnNo;
       const nx=mj4NextSeat(R4,call.seat); // 鳴いた家(seat2)からの通常進行を再開
       ck('p4a:turn:鳴いた家から次の家へ通常進行',nx===3&&R4.turnNo===before); // 3は親(0)ではないのでturnNo不変
+    }
+  }
+  { // Phase4b: 自分も鳴ける(選択肢判定・役なし警告・鳴き直後の視認/リーチ制約)
+    const mkR=()=>{const g4=mj4GameNew(mulberry32(1)),R4=mj4RoundNew(g4);
+      for(const p of R4.players)p.hand=new Array(34).fill(0);return R4;};
+    { // 選択肢判定: ポン/カンは誰の捨て牌でも(自分以外)、チーは自分の上家(discarderSeat+1===0)からのみ
+      const R4=mkR();R4.players[0].hand[5]=2;
+      ck('p4b:call:自分にポン材料があれば検知',mj4PlayerCallOptions(R4,1,5)&&mj4PlayerCallOptions(R4,1,5).pon===true);
+      ck('p4b:call:自分の捨て牌には反応しない',mj4PlayerCallOptions(R4,0,5)===null);
+    }
+    { // カン検知
+      const R4=mkR();R4.players[0].hand[5]=3;
+      const o=mj4PlayerCallOptions(R4,2,5);
+      ck('p4b:call:カン材料があれば検知',o&&o.kan===true);
+    }
+    { // チーは自分の上家(seat3)からのみ・他の家からは成立しない
+      const R4=mkR();R4.players[0].hand[6]=1;R4.players[0].hand[7]=1;
+      const fromKamicha=mj4PlayerCallOptions(R4,3,5); // 上家=seat3
+      const fromOther=mj4PlayerCallOptions(R4,1,5);   // 上家でないseat1
+      ck('p4b:call:上家からの捨て牌はチー検知',fromKamicha&&JSON.stringify(fromKamicha.chi)===JSON.stringify([[6,7]]));
+      ck('p4b:call:上家以外からはチー不成立(ポン/カン材料もなければnull)',fromOther===null);
+    }
+    { // 役なし警告: 白のみが唯一の役の芽の手で白をポンすると役の芽が消える(実際にmjYakuEyesで確認した具体例)
+      const c={seatWind:27,roundWind:27};
+      const hSafe=new Array(34).fill(0);hSafe[31]=2;hSafe[0]=1;hSafe[10]=1;hSafe[20]=1;hSafe[8]=1;hSafe[26]=1;
+      const hLose=new Array(34).fill(0);hLose[0]=3;hLose[10]=1;hLose[20]=1;hLose[32]=1;hLose[31]=2;
+      ck('p4b:warn:役の芽が残るポンは警告なし',mj4CallWouldLoseYaku(hSafe,'pon',31,undefined,c)===false);
+      ck('p4b:warn:役の芽が消えるポンは警告あり',mj4CallWouldLoseYaku(hLose,'pon',31,undefined,c)===true);
+    }
+    { // review気づき回帰: ポン/チー直後はlastDrawが-1になり、次の打牌が必ず手出し扱いになること
+      const R4=mkR();R4.players[2].hand[5]=2;R4.players[2].lastDraw=5; // 偶然ポン牌と同じ値が残っていた状態を再現
+      mj4ApplyCall(R4,{seat:2,type:'pon',tile:5,from:1});
+      ck('p4b:lastDraw回帰:ポン直後はlastDrawが-1にリセットされる',R4.players[2].lastDraw===-1);
+      mj4Discard(R4,2,9); // 何か別の牌を打牌
+      ck('p4b:lastDraw回帰:ポン直後の打牌は必ず手出し扱い',R4.players[2].river[0].ted===true);
+    }
+    { // review気づき回帰: 明カン直後はmj4Drawで直後にlastDrawが上書きされる(ツモぎり判定が正しく機能する)
+      const R4=mkR();R4.players[2].hand=new Array(34).fill(0);
+      R4.players[2].hand[5]=3;
+      for(let i=0;i<10;i++)R4.players[2].hand[9+i]++;
+      mj4ApplyCall(R4,{seat:2,type:'kan',tile:5,from:1});
+      const d=mj4Draw(R4,2);
+      ck('p4b:lastDraw回帰:明カン後のmj4Drawでlastdrawが嶺上牌に更新',R4.players[2].lastDraw===d.tile);
     }
   }
   { // #feedback4 7件目: 大富豪(#51)と共通のキャラプールを他家3人(下家/対面/上家)に適用
