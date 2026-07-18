@@ -2,20 +2,25 @@
    Cloudflare Workers + KV (binding: RANK)
 
    エンドポイント:
-     POST /score  ... スコア送信 {gameId, score, mode?, date?|dailyKey?, name?}
-     GET  /top    ... 上位取得   ?game=&date=(YYYYMMDD|all)&mode=(daily|free)
-     POST /total  ... [Phase1] トータル成績送信（匿名オプトイン）{game, nickname, value, uid?}
-     GET  /total  ... [Phase1] game別 Top-N トータル成績  ?game=&limit=
+     POST /score   ... スコア送信 {gameId, score, mode?, date?|dailyKey?, name?}
+     GET  /top     ... 上位取得   ?game=&date=(YYYYMMDD|all)&mode=(daily|free)
+     POST /total   ... [Phase1] トータル成績送信（匿名オプトイン）{game, nickname, value, uid?}
+     GET  /total   ... [Phase1] game別 Top-N トータル成績  ?game=&limit=
+     POST /weekly  ... [backlog1] 週間成績送信（/totalと同じ形式）{game, nickname, value, uid?}
+     GET  /weekly  ... [backlog1] game別 Top-N 週間成績  ?game=&limit=(&week=YYYY-Www 省略時は今週)
 
    デイリーチャレンジの seed (= 日付) と同じキーで集計するので、
    date を揃えれば「同じ問題を解いた人同士」のランキングになる。
    累計は date=all。エントリは各キー上位50件・40日で自動失効 (all は無期限)。
-   /total は独立keyspace total: で nickname 別に集計（既存挙動に影響なし）。 */
+   /total は独立keyspace total: で nickname 別に集計（既存挙動に影響なし）。
+   /weekly は weekly:<ISO週>:<game> keyspaceで同様に集計(uid照合・改名追従は/totalと共通ロジックを流用)。
+   週の切り替えは月曜0時JST基準(ISO週番号が自然に切り替わる)。エントリは5週間で自動失効。 */
 
 const GAMES = new Set(['tea', 'lane', 'spot']);
 const MAX_SCORE = 99990;
 const TOP_N = 50;
 const TTL_DAYS = 40;
+const WEEKLY_TTL_DAYS = 5 * 7; // 5週間で自動失効
 
 /* --- Phase1: game別トータル成績ランキング（案B: 匿名オプトイン） ---
    既存のデイリー/累計(top:)とは別keyspace(total:)で、nickname別に集計する。
@@ -58,6 +63,21 @@ function normDate(v) {
 function todayKey() { // JST基準の日付キー
   const jst = new Date(Date.now() + 9 * 3600 * 1000);
   return jst.toISOString().slice(0, 10).replace(/-/g, '');
+}
+function isoWeekKey() { // JST基準のISO週キー 'YYYY-Www'(月曜0時で自然に切替)。クライアント側index.htmlのisoWeekKey()と同一ロジック
+  const jst = new Date(Date.now() + 9 * 3600 * 1000);
+  const date = new Date(Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth(), jst.getUTCDate()));
+  const day = (date.getUTCDay() + 6) % 7; // Mon=0..Sun=6
+  date.setUTCDate(date.getUTCDate() - day + 3); // その週の木曜
+  const firstThu = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
+  const fDay = (firstThu.getUTCDay() + 6) % 7;
+  firstThu.setUTCDate(firstThu.getUTCDate() - fDay + 3);
+  const week = 1 + Math.round((date - firstThu) / (7 * 86400000));
+  return date.getUTCFullYear() + '-W' + String(week).padStart(2, '0');
+}
+function sanitizeWeek(v) { // 'YYYY-Www' 形式のみ許可。不正/未指定なら今週
+  const s = String(v ?? '').trim();
+  return /^\d{4}-W\d{2}$/.test(s) ? s : isoWeekKey();
 }
 function sanitizeName(v) {
   return String(v ?? '').replace(/[\x00-\x1F<>]/g, '').trim().slice(0, 12) || null;
@@ -105,10 +125,10 @@ async function getTop(url, env) {
 /* --- game別トータル成績（nickname集計） --- */
 function metricOf(game) { return TOTAL_METRICS[game] || DEFAULT_METRIC; }
 
-/* 軽いレート制限: 同一IPで RL_TTL 秒あたり RL_MAX 件まで（スライディングウィンドウ） */
-async function rateLimited(env, ip) {
+/* 軽いレート制限: 同一IPで RL_TTL 秒あたり RL_MAX 件まで（スライディングウィンドウ）。scopeでtotal/weeklyの枠を分ける */
+async function rateLimited(env, ip, scope) {
   if (!ip) return false;
-  const key = `rl:total:${ip}`;
+  const key = `rl:${scope || 'total'}:${ip}`;
   const now = Date.now();
   const arr = ((await env.RANK.get(key, 'json')) || []).filter(t => now - t < RL_TTL * 1000);
   if (arr.length >= RL_MAX) return true;
@@ -117,9 +137,9 @@ async function rateLimited(env, ip) {
   return false;
 }
 
-async function pushTotal(env, game, nickname, value, uid) {
-  const cfg = metricOf(game);
-  const key = `total:${game}`;
+// /total と /weekly で共用するランキング更新ロジック(uid優先照合・改名追従・agg集計)。
+// keyとttlOptsだけがkeyspaceごとに異なる(totalは無期限・weeklyは5週間で失効)
+async function pushRanked(env, key, nickname, value, uid, cfg, ttlOpts) {
   const cur = (await env.RANK.get(key, 'json')) || [];
   // uid優先で同一人物を特定（改名しても追従）。uid未設定の古いエントリはnicknameでフォールバック照合
   let e = uid ? cur.find(x => x.uid === uid) : null;
@@ -134,9 +154,16 @@ async function pushTotal(env, game, nickname, value, uid) {
   e.ts = Date.now();
   cur.sort((a, b) => b.value - a.value || a.ts - b.ts);
   const top = cur.slice(0, TOTAL_N);
-  await env.RANK.put(key, JSON.stringify(top), {}); // トータルは無期限
+  await env.RANK.put(key, JSON.stringify(top), ttlOpts);
   const idx = top.indexOf(e);
   return { rank: idx >= 0 ? idx + 1 : null, total: top.length, value: e.value };
+}
+async function pushTotal(env, game, nickname, value, uid) {
+  return pushRanked(env, `total:${game}`, nickname, value, uid, metricOf(game), {}); // トータルは無期限
+}
+async function pushWeekly(env, game, nickname, value, uid, week) {
+  return pushRanked(env, `weekly:${week}:${game}`, nickname, value, uid, metricOf(game),
+    { expirationTtl: WEEKLY_TTL_DAYS * 86400 });
 }
 
 async function postTotal(req, env) {
@@ -164,6 +191,34 @@ async function getTotal(url, env) {
   return json({ ok: true, game, metric: metricOf(game).metric, entries });
 }
 
+/* --- backlog1: 週間ランキング(weekly:<ISO週>:<game>)。/totalと同じuid照合・改名追従ロジックを流用 --- */
+async function postWeekly(req, env) {
+  const ip = req.headers.get('CF-Connecting-IP') || '';
+  if (await rateLimited(env, ip, 'weekly')) return json({ ok: false, error: 'rate limited' }, 429);
+  let b;
+  try { b = await req.json(); } catch { return json({ ok: false, error: 'bad json' }, 400); }
+  const game = String(b.game || b.gameId || '').slice(0, 16);
+  if (!GAMES.has(game)) return json({ ok: false, error: 'unknown game' }, 400);
+  const nickname = sanitizeName(b.nickname ?? b.name);
+  if (!nickname) return json({ ok: false, error: 'nickname required' }, 400);
+  const value = Math.max(0, Math.min(TOTAL_MAX, Math.round(Number(b.value) || 0)));
+  if (!(value > 0)) return json({ ok: false, error: 'no value' }, 400);
+  const uid = sanitizeUid(b.uid);
+  const week = isoWeekKey(); // 送信は常に「今週」(過去週への遡り投稿はさせない)
+  const res = await pushWeekly(env, game, nickname, value, uid, week);
+  return json({ ok: true, game, week, metric: metricOf(game).metric, nickname, value: res.value, rank: res.rank, total: res.total });
+}
+
+async function getWeekly(url, env) {
+  const game = String(url.searchParams.get('game') || '').slice(0, 16);
+  if (!GAMES.has(game)) return json({ ok: false, error: 'unknown game' }, 400);
+  const week = sanitizeWeek(url.searchParams.get('week')); // 省略時は今週
+  const limit = Math.max(1, Math.min(TOTAL_N, parseInt(url.searchParams.get('limit') || '50', 10) || 50));
+  const all = (await env.RANK.get(`weekly:${week}:${game}`, 'json')) || [];
+  const entries = all.slice(0, limit).map(e => ({ nickname: e.nickname, value: e.value, n: e.n }));
+  return json({ ok: true, game, week, metric: metricOf(game).metric, entries });
+}
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -172,6 +227,8 @@ export default {
     if (req.method === 'GET' && url.pathname === '/top') return getTop(url, env);
     if (req.method === 'POST' && url.pathname === '/total') return postTotal(req, env);
     if (req.method === 'GET' && url.pathname === '/total') return getTotal(url, env);
+    if (req.method === 'POST' && url.pathname === '/weekly') return postWeekly(req, env);
+    if (req.method === 'GET' && url.pathname === '/weekly') return getWeekly(url, env);
     return json({ ok: false, error: 'not found' }, 404);
   },
 };

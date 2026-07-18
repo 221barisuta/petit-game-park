@@ -208,10 +208,10 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 
 /* ---- オンライン対戦 UI ---- */
 #onlineSetup{z-index:12}
-#onlineCard,#userCard{width:84cqw;background:#fffdf6;border:1cqw solid #3a2d56;border-radius:7cqw;padding:5.5cqw 5cqw;
+#onlineCard,#userCard,#recCard{width:84cqw;background:#fffdf6;border:1cqw solid #3a2d56;border-radius:7cqw;padding:5.5cqw 5cqw;
   display:flex;flex-direction:column;align-items:center;gap:3cqw;
   box-shadow:0 2cqw 0 rgba(0,0,0,.25);animation:popIn .38s cubic-bezier(.34,1.56,.64,1)}
-#onlineCard .ol-title,#userCard .ol-title{font-size:5.2cqw;font-weight:800;color:#39304f}
+#onlineCard .ol-title,#userCard .ol-title,#recCard .ol-title{font-size:5.2cqw;font-weight:800;color:#39304f}
 #onlineCard .ol-field,#userCard .ol-field{display:flex;align-items:center;gap:2cqw;width:100%}
 #onlineCard .ol-lbl,#userCard .ol-lbl{font-size:3.4cqw;font-weight:800;color:#6a5f86;flex:none;width:18cqw}
 #onlineCard input,#userCard input{flex:1;min-width:0;font-family:inherit;font-size:4cqw;font-weight:700;color:#39304f;
@@ -226,7 +226,17 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 #onlineCard .ol-field #olJoin,#userCard .ol-field #olJoin{width:24cqw;flex:none;padding:2.6cqw 0;background:linear-gradient(180deg,#7ab0ff,#4d8cff)}
 #onlineCard .ol-or,#userCard .ol-or{font-size:3.2cqw;font-weight:800;color:#a99fc4}
 #onlineCard .ol-msg,#userCard .ol-msg{font-size:3.2cqw;font-weight:700;color:#c0392b;min-height:4cqw;text-align:center;line-height:1.4}
-#onlineCard .ol-back,#userCard .ol-back{font-size:3.6cqw;font-weight:800;color:#6a5f86;background:none;padding:1cqw 3cqw}
+#onlineCard .ol-back,#userCard .ol-back,#recCard .ol-back{font-size:3.6cqw;font-weight:800;color:#6a5f86;background:none;padding:1cqw 3cqw}
+/* #backlog1 きろく画面 */
+#records{z-index:40}
+#recCard{max-height:82cqh}
+#recList{width:100%;overflow-y:auto;max-height:64cqh;display:flex;flex-direction:column;gap:2.6cqw}
+.rec-row{width:100%;background:#f4f0fc;border-radius:3.4cqw;padding:2.6cqw 3.2cqw;display:flex;flex-direction:column;gap:1.2cqw}
+.rec-head{display:flex;align-items:center;justify-content:space-between;font-size:3.6cqw;font-weight:800;color:#39304f}
+.rec-sub{font-size:3cqw;font-weight:700;color:#6a5f86;display:flex;flex-wrap:wrap;gap:2cqw 3cqw}
+.rec-bars{display:flex;align-items:flex-end;gap:.8cqw;height:9cqw}
+.rec-bar{width:2.4cqw;background:linear-gradient(180deg,#7ab0ff,#4d8cff);border-radius:.6cqw;min-height:.6cqw}
+.rec-empty{font-size:3cqw;font-weight:700;color:#a99fc4}
 /* 対局中の情報バー (canvasの上に重ねる。✕ボタンを避けて左パディング) */
 #onlineBar{position:absolute;top:0;left:0;right:0;z-index:4;pointer-events:none;
   padding:2.2cqw 3cqw 2cqw 13cqw;display:flex;flex-direction:column;gap:.5cqw;
@@ -296,6 +306,12 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 #resRank .rrow{display:flex;justify-content:space-between;font-size:3.6cqw;font-weight:800;color:#fff}
 #resRank .rrow.you{color:#7cf29c}
 #resRank .rrow .rn{opacity:.75;min-width:9cqw}
+/* #backlog1 トータル/週間ランキングのタブ切替UI */
+#resTotalRank{display:flex;flex-direction:column;gap:.6cqw;margin-top:.4cqw}
+.rttabs{display:flex;gap:1.6cqw;justify-content:center}
+.rttab{font-size:3.2cqw;font-weight:800;color:#c9c0e6;background:rgba(255,255,255,.08);
+  border:none;border-radius:3cqw;padding:1cqw 3.2cqw}
+.rttab.active{color:#39304f;background:#ffd23f}
 #resUnlock{font-size:3.8cqw;font-weight:800;color:#7a5200;background:linear-gradient(180deg,#fff7d6,#ffe9a8);
   border:.6cqw solid #c98f00;border-radius:99px;padding:1.2cqw 4.6cqw;animation:recBounce .8s ease infinite}
 #resUnlock.hidden{display:none}
@@ -362,6 +378,15 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
     <div id="selFoot">
       <button class="text-btn" id="btnBackTitle">← タイトルへ</button>
       <button class="text-btn" id="btnUserInfo">👤 なまえ・ランキング</button>
+      <button class="text-btn" id="btnRecords">📈 きろく</button>
+    </div>
+    <!-- #backlog1 じぶんのきろく (ベストスコア・直近10回推移・プレイ回数・週間プレイ日数・対戦成績) -->
+    <div id="records" class="overlay hidden">
+      <div id="recCard">
+        <div class="ol-title">📈 じぶんの きろく</div>
+        <div id="recList"></div>
+        <button id="recClose" class="ol-back">とじる</button>
+      </div>
     </div>
     <!-- #14 ユーザー情報 (ニックネーム/アバター/ランキングオプトイン) -->
     <div id="userInfo" class="overlay hidden">
@@ -580,6 +605,21 @@ window.PGP_RANKING={
     const base=(window.PGP_CONFIG||{}).rankingBase;
     if(!base)return null;
     const res=await fetch(`${base.replace(/\/$/,'')}/total?game=${encodeURIComponent(game)}&limit=${limit||50}`);
+    return res.ok?res.json():null;
+  },
+  /* #backlog1 週間成績 (匿名オプトイン)。送信ゲート・uid同伴はsubmitTotalと同じ */
+  async submitWeekly(game,value){
+    const base=(window.PGP_CONFIG||{}).rankingBase;
+    if(!base||!(value>0)||!PROFILE.optIn())return null;
+    const res=await fetch(base.replace(/\/$/,'')+'/weekly',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({game,nickname:PROFILE.getName(),value,uid:PROFILE.getUid()})});
+    return res.ok?res.json():null;
+  },
+  async fetchWeekly(game,limit){
+    const base=(window.PGP_CONFIG||{}).rankingBase;
+    if(!base)return null;
+    const res=await fetch(`${base.replace(/\/$/,'')}/weekly?game=${encodeURIComponent(game)}&limit=${limit||50}`);
     return res.ok?res.json():null;
   }
 };
@@ -913,7 +953,73 @@ function resizeCanvas(){
 }
 window.addEventListener('resize',()=>{resizeCanvas()});
 
+/* #backlog1 きろく: 既存のpgp2_best_ / pgp2_last_ とは別に、直近10回のスコア推移・今週のプレイ日数・
+   対戦成績(勝敗・連勝記録)を新規キーpgp2_stats_*で記録する。既存データの書き換えはしない */
+function isoWeekKey(d){ // ISO週番号(JST基準)。月曜0時で自然に切り替わる
+  const date=new Date((d||new Date()).getTime()+9*3600*1000);
+  date.setUTCHours(0,0,0,0);
+  const day=(date.getUTCDay()+6)%7; // Mon=0..Sun=6
+  date.setUTCDate(date.getUTCDate()-day+3); // その週の木曜
+  const firstThu=new Date(Date.UTC(date.getUTCFullYear(),0,4));
+  const fDay=(firstThu.getUTCDay()+6)%7;
+  firstThu.setUTCDate(firstThu.getUTCDate()-fDay+3);
+  const week=1+Math.round((date-firstThu)/(7*86400000));
+  return date.getUTCFullYear()+'-W'+String(week).padStart(2,'0');
+}
+function todayDateKey(){const jst=new Date(Date.now()+9*3600*1000);return jst.toISOString().slice(0,10);}
+function statsLast10(id){try{return JSON.parse(store.get('pgp2_stats_last10_'+id,'[]'))||[];}catch(e){return [];}}
+function statsBumpDay(id){ // 今週(月曜始まり)のプレイ日数を更新(直近10回推移/勝敗いずれからも呼ばれる共通処理)
+  const dk='pgp2_stats_days_'+id;
+  let d;try{d=JSON.parse(store.get(dk,'null'));}catch(e){d=null;}
+  const wk=isoWeekKey(),today=todayDateKey();
+  if(!d||d.week!==wk)d={week:wk,dates:[]};
+  if(!d.dates.includes(today))d.dates.push(today);
+  store.set(dk,JSON.stringify(d));
+}
+function statsRecordPlay(id,score){ // 直近10回のスコア推移 + 今週のプレイ日数
+  const arr=statsLast10(id);arr.push(score);
+  store.set('pgp2_stats_last10_'+id,JSON.stringify(arr.slice(-10)));
+  statsBumpDay(id);
+}
+function statsWeekDays(id){ // 今週(月曜始まり)のプレイ日数
+  let d;try{d=JSON.parse(store.get('pgp2_stats_days_'+id,'null'));}catch(e){d=null;}
+  if(!d||d.week!==isoWeekKey())return 0;
+  return d.dates.length;
+}
+function statsWL(id){ // 対戦成績: {win,lose,draw,streak,streakType,bestStreak}
+  try{return Object.assign({win:0,lose:0,draw:0,streak:0,streakType:'',bestStreak:0},
+    JSON.parse(store.get('pgp2_stats_wl_'+id,'null'))||{});}
+  catch(e){return {win:0,lose:0,draw:0,streak:0,streakType:'',bestStreak:0};}
+}
+function statsRecordWL(id,outcome){ // outcome: 'win'|'lose'|'draw'。ローカル対局のみ呼び出す(オンラインは#2便で別途)
+  const s=statsWL(id);
+  s[outcome]=(s[outcome]||0)+1;
+  if(outcome==='win'){s.streak=s.streakType==='win'?s.streak+1:1;s.streakType='win';s.bestStreak=Math.max(s.bestStreak,s.streak);}
+  else if(outcome==='lose'){s.streak=s.streakType==='lose'?s.streak+1:1;s.streakType='lose';}
+  else{s.streak=0;s.streakType='';}
+  store.set('pgp2_stats_wl_'+id,JSON.stringify(s));
+}
 function playsOf(id){return getInt('pgp2_plays_'+id,0)}
+/* #backlog1 レビュー対応: 対戦系(ox/gomoku/othello/daifugo/mahjong)はshowResult()を通らないため
+   プレイ回数/週間プレイ日数がこれまで記録されていなかった。1試合につき1回、勝敗と同時に記録する */
+function statsRecordMatch(id,outcome){
+  store.set('pgp2_plays_'+id,String(playsOf(id)+1));
+  statsBumpDay(id);
+  statsRecordWL(id,outcome);
+}
+/* #backlog1 レビュー対応: 五目/オセロは決着後も「まった」で直前手に戻せるため、
+   決着直後にstatsRecordMatchした内容を丸ごとスナップショット→undo時に復元して二重計上を防ぐ */
+function statsMatchSnapshot(id){
+  return {plays:localStorage.getItem('pgp2_plays_'+id),
+    days:localStorage.getItem('pgp2_stats_days_'+id),
+    wl:localStorage.getItem('pgp2_stats_wl_'+id)};
+}
+function statsMatchRestore(id,snap){
+  const set=(k,v)=>{if(v===null)localStorage.removeItem(k);else localStorage.setItem(k,v);};
+  set('pgp2_plays_'+id,snap.plays);
+  set('pgp2_stats_days_'+id,snap.days);
+  set('pgp2_stats_wl_'+id,snap.wl);
+}
 function skinLevelFor(id){
   const p=playsOf(id);
   const lv=p>=15?2:p>=5?1:0;
@@ -1214,6 +1320,7 @@ function showResult(extra){
   const last=getInt(lk,-1);store.set(lk,String(score));
   const isRec=score>best;
   if(isRec)store.set(bestKey,String(score));
+  statsRecordPlay(def.id,score); // #backlog1 きろく: 直近10回推移+今週のプレイ日数(デイリー/フリー問わず記録)
   const c=judgeCounts;
   resultInfo={def,score,daily:isDaily,seed,counts:c,maxCombo,isRec};
   // DOM
@@ -1270,16 +1377,18 @@ function showResult(extra){
     try{
       const sub=await window.PGP_RANKING.submitScore(def.id,score,{daily:isDaily,seed,date:todaySeed()});
       const tsub=await window.PGP_RANKING.submitTotal(def.id,score); // #15 オプトインON時のみ送信
+      const wsub=await window.PGP_RANKING.submitWeekly(def.id,score); // #backlog1 週間ランキングも同時送信
       if(myRankGen!==rankGen)return; // #feedback2 1件目: 離脱後に次のプレイの結果画面が既に始まっている→古い応答は破棄
       if(isDaily){
         const top=await window.PGP_RANKING.fetchTop(def.id,{mode:'daily'});
         if(myRankGen!==rankGen)return;
         renderRank(top,sub,score); // box.innerHTML=''で自前クリアするためpending解除は不要
       }
-      if(RANK_TOTAL_GAMES.includes(def.id)){ // #15 デイリーの近くに「トータル」
+      if(RANK_TOTAL_GAMES.includes(def.id)){ // #15 デイリーの近くに「トータル」+ #backlog1「こんしゅう」タブ
         const tt=await window.PGP_RANKING.fetchTotal(def.id,5);
+        const wt=await window.PGP_RANKING.fetchWeekly(def.id,5);
         if(myRankGen!==rankGen)return;
-        clearPending();renderTotalRank(tt,tsub);
+        clearPending();renderTotalRank(tt,tsub,wt,wsub);
       }
     }catch(e){
       if(myRankGen===rankGen)clearPending();
@@ -1309,23 +1418,97 @@ function renderRank(top,sub,myScore){
   });
   box.classList.remove('hidden');
 }
-/* #15 トータルランキング表示 (デイリー枠の下に追記。エントリが無ければ何も出さない) */
-function renderTotalRank(tt,tsub){
-  if(!tt||!tt.ok||!Array.isArray(tt.entries)||tt.entries.length===0)return;
+/* #15/#backlog1 トータル/週間ランキング表示 (デイリー枠の下に追記。「こんしゅう」「トータル」タブで切替)
+   タブ切替は#resTotalRank配下だけを再描画(resRank全体は再クリアしない) */
+function renderTotalRank(tt,tsub,wt,wsub){
+  const hasTotal=tt&&tt.ok&&Array.isArray(tt.entries)&&tt.entries.length>0;
+  const hasWeekly=wt&&wt.ok&&Array.isArray(wt.entries)&&wt.entries.length>0;
+  if(!hasTotal&&!hasWeekly)return;
   const box=$('resRank');
-  const ttl=document.createElement('div');ttl.className='rttl';
-  ttl.textContent='🌏 トータルランキング'+(tsub&&tsub.rank?`　あなたは ${tsub.rank}い！`:'');
-  box.appendChild(ttl);
-  tt.entries.slice(0,5).forEach((e,i)=>{
-    const row=document.createElement('div');row.className='rrow';
-    if(tsub&&tsub.rank===i+1&&e.nickname===tsub.nickname)row.classList.add('you');
-    const a=document.createElement('span');a.className='rn';a.textContent=(i+1)+'い';
-    const b=document.createElement('span');b.textContent=e.nickname+'　'+e.value+'てん'; // nicknameはユーザー入力→textContent
-    row.appendChild(a);row.appendChild(b);box.appendChild(row);
-  });
+  const wrap=document.createElement('div');wrap.id='resTotalRank';
+  const tabs=document.createElement('div');tabs.className='rttabs';
+  const bW=document.createElement('button');bW.className='rttab';bW.textContent='こんしゅう';
+  const bT=document.createElement('button');bT.className='rttab';bT.textContent='トータル';
+  tabs.appendChild(bW);tabs.appendChild(bT);
+  const body=document.createElement('div');body.className='rtbody';
+  const renderBody=(entries,sub,label,mark)=>{
+    body.innerHTML='';
+    const ttl=document.createElement('div');ttl.className='rttl';
+    if(entries&&entries.length){
+      ttl.textContent=mark+' '+label+(sub&&sub.rank?`　あなたは ${sub.rank}い！`:'');
+      body.appendChild(ttl);
+      entries.slice(0,5).forEach((e,i)=>{
+        const row=document.createElement('div');row.className='rrow';
+        if(sub&&sub.rank===i+1&&e.nickname===sub.nickname)row.classList.add('you');
+        const a=document.createElement('span');a.className='rn';a.textContent=(i+1)+'い';
+        const b=document.createElement('span');b.textContent=e.nickname+'　'+e.value+'てん'; // nicknameはユーザー入力→textContent
+        row.appendChild(a);row.appendChild(b);body.appendChild(row);
+      });
+    }else{
+      ttl.textContent=label+': まだ きろくがありません';
+      body.appendChild(ttl);
+    }
+  };
+  const setActive=(which)=>{
+    bW.classList.toggle('active',which==='weekly');
+    bT.classList.toggle('active',which==='total');
+    if(which==='weekly')renderBody(hasWeekly?wt.entries:null,wsub,'週間ランキング','📅');
+    else renderBody(hasTotal?tt.entries:null,tsub,'トータルランキング','🌏');
+  };
+  bW.addEventListener('click',()=>setActive('weekly'));
+  bT.addEventListener('click',()=>setActive('total'));
+  wrap.appendChild(tabs);wrap.appendChild(body);
+  box.appendChild(wrap);
+  setActive(hasWeekly?'weekly':'total'); // 週間データがあれば既定でこんしゅうタブ
   box.classList.remove('hidden');
 }
 /* #14 ユーザー情報画面: PROFILE の編集UI (開くのは scr-select の「👤なまえ・ランキング」) */
+/* #backlog1 じぶんのきろく画面: スコア系はGAMES登録順のうちscore対象のみ、対戦系は勝敗/連勝も表示 */
+const REC_SCORE_GAMES=['tea','lane','spot','mole','chinitsu','chicken'];
+const REC_VS_GAMES=['ox','gomoku','othello','daifugo','mahjong'];
+function setupRecords(){
+  const list=$('recList');
+  const render=()=>{
+    list.innerHTML='';
+    const rows=[];
+    for(const id of REC_SCORE_GAMES){
+      const def=GAMES.find(x=>x.id===id);if(!def)continue;
+      const best=getInt('pgp2_best_'+id,0),plays=playsOf(id),days=statsWeekDays(id),last10=statsLast10(id);
+      const row=document.createElement('div');row.className='rec-row';
+      const head=document.createElement('div');head.className='rec-head';
+      head.innerHTML=`<span>${def.emoji} ${def.title}</span><span>ベスト ${best}</span>`;
+      const sub=document.createElement('div');sub.className='rec-sub';
+      sub.innerHTML=`<span>プレイ ${plays}かい</span><span>こんしゅう ${days}にちプレイ</span>`;
+      row.appendChild(head);row.appendChild(sub);
+      if(last10.length){
+        const mx=Math.max(...last10,1);
+        const bars=document.createElement('div');bars.className='rec-bars';
+        last10.forEach(v=>{const b=document.createElement('div');b.className='rec-bar';
+          b.style.height=Math.max(6,Math.round(v/mx*100))+'%';bars.appendChild(b);});
+        row.appendChild(bars);
+      }else{
+        const e=document.createElement('div');e.className='rec-empty';e.textContent='きょうから きろくスタート！';
+        row.appendChild(e);
+      }
+      rows.push(row);
+    }
+    for(const id of REC_VS_GAMES){
+      const def=GAMES.find(x=>x.id===id);if(!def)continue;
+      const wl=statsWL(id),plays=playsOf(id),days=statsWeekDays(id);
+      const row=document.createElement('div');row.className='rec-row';
+      const head=document.createElement('div');head.className='rec-head';
+      head.innerHTML=`<span>${def.emoji} ${def.title}</span><span>${wl.win}勝${wl.lose}敗${wl.draw?wl.draw+'分':''}</span>`;
+      const sub=document.createElement('div');sub.className='rec-sub';
+      sub.innerHTML=`<span>さいだい${wl.bestStreak}れんしょう</span><span>プレイ ${plays}かい</span><span>こんしゅう ${days}にちプレイ</span>`;
+      row.appendChild(head);row.appendChild(sub);
+      rows.push(row);
+    }
+    if(!rows.length){const e=document.createElement('div');e.className='rec-empty';e.textContent='まだ きろくがありません';list.appendChild(e);}
+    else rows.forEach(r=>list.appendChild(r));
+  };
+  $('btnRecords').addEventListener('click',()=>{AudioKit.ensure();AudioKit.pop();render();$('records').classList.remove('hidden');});
+  $('recClose').addEventListener('click',()=>{AudioKit.pop();$('records').classList.add('hidden');});
+}
 function setupUserInfo(){
   const AVS=['','🦊','🐻','🐰','🐱','🐶','🐼','🐧','🦁','🐸','🦉','🐬'];
   const box=$('uiAvatars');
@@ -1373,6 +1556,13 @@ function runProfileTests(){
       ck('optin-payload-uid',calls.length===1&&typeof JSON.parse(calls[0].o.body).uid==='string'&&JSON.parse(calls[0].o.body).uid.length>0&&JSON.parse(calls[0].o.body).uid===PROFILE.getUid());
       await window.PGP_RANKING.submitTotal('tea',0);
       ck('zero-score-no-send',calls.length===1);
+      // #backlog1 週間ランキング送信もsubmitTotalと同じfetchモック枠内で検証(別testにすると
+      // SELFTESTS.forEach(f=>f())が待たずに次々起動するため、fetchモックを取り合うレースになる)
+      const r=await window.PGP_RANKING.submitWeekly('tea',100);
+      ck('weekly-submit-calls-endpoint',calls.length===2&&calls[1].u.indexOf('/weekly')>=0);
+      window.fetch=(u,o)=>{calls.push({u,o});return Promise.resolve({ok:true,json:()=>Promise.resolve({ok:true,week:'2026-W01',entries:[]})});};
+      const wt=await window.PGP_RANKING.fetchWeekly('tea',5);
+      ck('weekly-fetch-ok',wt&&wt.ok===true&&Array.isArray(wt.entries));
     }finally{
       window.fetch=realFetch;
       saved.forEach(([k,v])=>store.set(k,v));
@@ -1381,6 +1571,50 @@ function runProfileTests(){
   })();
 }
 SELFTESTS.push(runProfileTests);
+/* #backlog1 セルフテスト: きろく統計関数(isoWeekKey/last10/週間プレイ日数/勝敗連勝)。
+   純同期のみ(forEach(f=>f())は待たずに次を起動するため、非同期fetchモックはここに置かない→runProfileTests側で検証) */
+function runStatsTests(){
+  const {ck,done}=makeTest('stats');
+  const id='__selftest__';
+  const keys=['pgp2_stats_last10_'+id,'pgp2_stats_days_'+id,'pgp2_stats_wl_'+id,'pgp2_plays_'+id];
+  const saved=keys.map(k=>[k,store.get(k,'')]);
+  try{keys.forEach(k=>localStorage.removeItem(k));}catch(e){}
+  ck('isoweek-format',/^\d{4}-W\d{2}$/.test(isoWeekKey()));
+  ck('isoweek-jan1-2026',isoWeekKey(new Date('2026-01-01T00:00:00Z'))==='2026-W01');
+  for(let i=1;i<=12;i++)statsRecordPlay(id,i*10);
+  const last10=statsLast10(id);
+  ck('last10-capped',last10.length===10);
+  ck('last10-latest',last10[last10.length-1]===120&&last10[0]===30);
+  ck('week-days-counted',statsWeekDays(id)===1); // 同日中の連続呼び出しは1日として数える
+  statsRecordWL(id,'win');statsRecordWL(id,'win');
+  let wl=statsWL(id);
+  ck('wl-win-count',wl.win===2);ck('wl-streak',wl.streak===2&&wl.streakType==='win'&&wl.bestStreak===2);
+  statsRecordWL(id,'lose');
+  wl=statsWL(id);
+  ck('wl-lose-resets-streak',wl.lose===1&&wl.streak===1&&wl.streakType==='lose'&&wl.bestStreak===2);
+  statsRecordWL(id,'draw');
+  wl=statsWL(id);
+  ck('wl-draw-clears-streak',wl.draw===1&&wl.streak===0&&wl.streakType==='');
+  // #backlog1 レビュー対応: 対戦系のプレイ回数/週間日数もstatsRecordMatchで同時に記録されること(上のwl-*テストと
+  // 状態を共有しないよう別id"__selftest_match__"を使う)
+  const mid='__selftest_match__';
+  ['pgp2_plays_'+mid,'pgp2_stats_days_'+mid,'pgp2_stats_wl_'+mid].forEach(k=>{try{localStorage.removeItem(k);}catch(e){}});
+  statsRecordMatch(mid,'win');
+  ck('match-increments-plays',playsOf(mid)===1);
+  ck('match-bumps-day',statsWeekDays(mid)>=1);
+  ck('match-records-wl',statsWL(mid).win===1);
+  // #backlog1 レビュー対応: 決着後の「まった」を想定したスナップショット/復元(五目・オセロの二重計上防止)
+  const snap=statsMatchSnapshot(mid);
+  statsRecordMatch(mid,'win');
+  ck('match-second-win-recorded',statsWL(mid).win===2&&playsOf(mid)===2);
+  statsMatchRestore(mid,snap);
+  ck('match-restore-reverts-plays',playsOf(mid)===1);
+  ck('match-restore-reverts-wl',statsWL(mid).win===1);
+  ['pgp2_plays_'+mid,'pgp2_stats_days_'+mid,'pgp2_stats_wl_'+mid].forEach(k=>{try{localStorage.removeItem(k);}catch(e){}});
+  keys.forEach((k,i)=>store.set(k,saved[i][1]));
+  return done();
+}
+SELFTESTS.push(runStatsTests);
 function confetti(){
   const stage=$('stage');
   const cols=['#ff5c8a','#ffd23f','#41d97c','#5fd0ff','#c39bff'];
@@ -1645,6 +1879,7 @@ function boot(){
   }
   setupOnlineUI();
   setupUserInfo();
+  setupRecords();
   // ?room=CODE[&g=<gameId>] で開いたら該当ゲームのオンライン対戦へ自動参加 (g省略=五目・従来互換)
   {const sp=new URLSearchParams(location.search),rp=sp.get('room'),gid=(sp.get('g')||'gomoku').toLowerCase();
    const net=gid==='othello'?OthelloNet:gid==='daifugo'?DaifugoNet:GomokuNet; // 部屋のparty空間を持つnetで可用性判定
@@ -2612,9 +2847,12 @@ registerGame({
         banner(r.winner+'の かち！');A.fever();vib([30,50,30,50,30]);
         for(const idx of r.line){const c=center(idx);parts.burst(c.x,c.y,10,{shape:'star',col:COL[r.winner],grav:160});}
         confetti();
+        // #backlog1 きろく: 常に2人局所プレイなのでplayers[0](○)視点で記録(まった非対応ゲームなのでスナップショット不要)
+        statsRecordMatch('ox',r.winner===players[0].mark?'win':'lose');
       }else if(board.every(c=>c)){
         result={draw:true};
         banner('ひきわけ！');A.ok();vib([20,40,20]);
+        statsRecordMatch('ox','draw');
       }else{
         turn=1-turn;
         // 将来CPU: if(players[turn].type==='cpu') place(getCpuMove(board,players[turn].mark));
@@ -3259,7 +3497,17 @@ registerGame({
     let confirmSel=-1; // PR-2: CPU対戦2タップ確定の選択中マス(-1=未選択)。1回目タップでハイライト→同マス2回目で確定
     let twoTapVs=store.get('pgp2_twotap_vs','1')==='1'; // #feedback2 5件目: ふたりで/オンラインの2タップ確定(誤タップ防止・既定ON)
     const parts=new Particles();
+    let lastStatSnap=null; // #backlog1 決着直後の記録スナップショット(決着後「まった」で巻き戻す用)
 
+    // #backlog1 きろく: ローカル対局(pvp/pvc)のみ記録。cvcは観戦なので対象外。
+    // pvpは両者humanなので先手(players[0])を「あなた」とみなす(オンラインは別scope・#2便)
+    function recordGomokuWL(winnerMark){
+      if(cfg.mode==='cvc')return;
+      const youIdx=players.findIndex(p=>p.type==='human');
+      const youMark=players[youIdx>=0?youIdx:0].mark;
+      lastStatSnap=statsMatchSnapshot('gomoku');
+      statsRecordMatch('gomoku',winnerMark===null?'draw':(winnerMark===youMark?'win':'lose'));
+    }
     function applyCfg(){ // cfg → players
       if(cfg.mode==='cvc')players=[{mark:'black',type:'cpu',level:cfg.levelL},{mark:'white',type:'cpu',level:cfg.levelR}];
       else if(cfg.mode==='pvc')players=cfg.humanFirst
@@ -3297,6 +3545,7 @@ registerGame({
     }
     function undo(){ // 待った: pvp=直前1手 / pvc=人間の手番まで(CPU応手も一緒に)戻す
       if(!undoable()){A.bad();return}
+      if(result&&lastStatSnap){statsMatchRestore('gomoku',lastStatSnap);lastStatSnap=null;} // #backlog1 決着後の「まった」は記録も巻き戻す(二重計上防止)
       do{ board[history.pop()]=null; } // pvcは手番が人間に戻るまで巻き戻す
       while(cfg.mode==='pvc'&&history.length&&players[history.length%2].type==='cpu');
       result=null;winLine=null;parts.list=[]; // 決着解除 + 勝利演出クリア
@@ -3321,9 +3570,11 @@ registerGame({
         banner((r.winner==='black'?'●':'○')+'の かち！');A.fever();vib([30,50,30,50,30]);
         for(const idx of r.line){const c=center(idx);parts.burst(c.x,c.y,8,{shape:'star',col:'#ffd23f',grav:160});}
         confetti();
+        recordGomokuWL(r.winner);
       }else if(board.every(c=>c)){
         result={draw:true};cpuTimer=0;
         banner('ひきわけ！');A.ok();vib([20,40,20]);
+        recordGomokuWL(null);
       }else{
         turn=1-turn;scheduleCpu(); // 次がCPUなら思考ディレイ開始 (cvcは連鎖、pvcは人間なら0)
       }
@@ -4153,6 +4404,7 @@ registerGame({
     let confirmSel=-1;         // PR-2: CPU対戦2タップ確定の選択中マス(-1=未選択)。1回目タップでハイライト→同マス2回目で確定
     let assistOn=store.get('pgp2_othello_assist','0')==='1'; // #8 合法手アシスト表示(既定OFF・localStorageで永続。五目ヒントと同方式)
     let twoTapVs=store.get('pgp2_twotap_vs','1')==='1'; // #feedback2 5件目: ふたりで/オンラインの2タップ確定(誤タップ防止・既定ON・五目と共通設定)
+    let lastStatSnap=null; // #backlog1 決着直後の記録スナップショット(決着後「まった」で巻き戻す用)
     // #10 CPU対戦: setup画面/モード設定/CPU思考タイマー/おに解放
     let screen='setup';        // 'setup'(あいて選択) | 'play'(対局)。openGame→howto→setup→play
     let cfg={ mode:['pvp','pvc','cvc'].includes(store.get('pgp2_othello_mode','pvp'))?store.get('pgp2_othello_mode','pvp'):'pvp',
@@ -4191,6 +4443,14 @@ registerGame({
       }
       if(result.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
       else{banner(winLabel(w));A.fever();vib([30,50,30,50,30]);confetti();}
+      // #backlog1 レビュー対応: pvcで後手(humanFirst=false)を選ぶとplayers[0]がCPUになるため、
+      // seat0固定ではなくhuman player自身の色を「あなた」として勝敗を記録する(cvcは観戦なので対象外)
+      if(cfg.mode!=='cvc'){
+        const human=players.find(p=>p.type==='human');
+        const youColor=human?human.color:players[0].color;
+        lastStatSnap=statsMatchSnapshot('othello');
+        statsRecordMatch('othello',result.draw?'draw':(w===youColor?'win':'lose'));
+      }
     }
     function advanceTurn(){ // 着手後の手番送り (相手番 / 自動パス / 終局 を判定)
       const oppIdx=1-turn,oppColor=players[oppIdx].color,myColor=players[turn].color;
@@ -4223,6 +4483,7 @@ registerGame({
     }
     function undo(){ // 待った: pvp=直前1手 / pvc=CPU応手も一緒に人間の着手直前まで戻す(自動パス含む)
       if(!undoable()){A.bad();return;}
+      if(result&&lastStatSnap){statsMatchRestore('othello',lastStatSnap);lastStatSnap=null;} // #backlog1 決着後の「まった」は記録も巻き戻す(二重計上防止)
       let s=history.pop();
       if(cfg.mode==='pvc')while(players[s.turn].type==='cpu')s=history.pop();
       board=s.board;turn=s.turn;last=s.last;lastPass=s.lastPass;
@@ -4988,7 +5249,12 @@ registerGame({
       if(r.fx&&r.fx.revolution){banner('かくめい！');A.fever();vib([30,50,30]);confetti();}
       else if(r.fx&&r.fx.flow){banner('8ぎり！');A.coin();}
       if(r.finishedSeat!=null&&!r.ended){banner(name+' あがり！');A.ok();}
-      if(r.ended){A.fever();confetti();vib([30,50,30,50,30]);}
+      if(r.ended){
+        A.fever();confetti();vib([30,50,30,50,30]);
+        // #backlog1 きろく: ローカル対局のみ(feedbackはscreen==='play'経路でのみ呼ばれる)。seat0が1位=win、それ以外=lose
+        const rank=L.finished.indexOf(0);
+        statsRecordMatch('daifugo',rank===0?'win':'lose');
+      }
     }
 
     /* ── 描画/入力の統一ビュー (ローカルL / オンラインstate を同じ形に正規化) ── */
@@ -6590,6 +6856,7 @@ registerGame({
         tenpaiRyu:G.results.filter(x=>x.end.type==='ryuukyoku'&&x.end.tenpai[0]).length});
       const rank=mj4Ranking(G).indexOf(0)+1;
       rep.rank4=rank;rep.finalScore=G.scores[0];page=0;
+      statsRecordMatch('mahjong',rank===1?'win':'lose'); // #backlog1 きろく: 1局ごとでなく対局(半荘/東風)全体の最終順位で記録
       let hist=[];try{hist=JSON.parse(store.get('pgp2_mj_hist','[]'))||[];}catch(e){}
       hist.push({r:rep.rank[1],opt:rep.optRate,
         lateRi:G.log.filter(l=>l.couldRiichi&&!l.riichied&&!l.auto).length?1:0,
@@ -7492,6 +7759,9 @@ registerGame({
         let mps=0;for(const rr of results)mps+=rr.pScore;
         matchIsRec=mps>getInt('pgp2_best_chicken',0);
         if(matchIsRec)store.set('pgp2_best_chicken',String(mps));
+        // #backlog1 レビュー対応: showResult()を経由しないためpgp2_plays_chickenもここで個別に加算(他ゲームと同様1試合1回)
+        store.set('pgp2_plays_chicken',String(playsOf('chicken')+1));
+        statsRecordPlay('chicken',mps); // きろく: 直近10回推移+今週のプレイ日数
         if(w==='p'){A.coin();confetti();vib([30,50,30,50,30]);}
         else if(w==='c'){A.bad();vib([60,40,60]);}
         else A.ok();
