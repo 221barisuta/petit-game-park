@@ -6178,6 +6178,8 @@ function mj4ApplyCall(R,call){ // 鳴きを手牌へ適用。呼ばれた牌は�
 /* ---- Phase4b: 自分(seat0)も鳴ける ---- */
 function mj4PlayerCallOptions(R,discarderSeat,t){ // 自分がdiscarderSeatの捨て牌tに対して選べる鳴き選択肢({pon,kan,chi:[[a,b],...]|null}) / 無ければnull
   if(discarderSeat===0)return null; // 自分の捨て牌には鳴けない
+  // review must-fix(PR#58): リーチ後は手牌固定のため鳴けない(リーチ後鳴きという不正状態を防ぐ)
+  if(R.players[0].riichi)return null;
   const h=R.players[0].hand;
   const pon=h[t]>=2,kan=h[t]>=3;
   let chi=null;
@@ -6192,6 +6194,9 @@ function mj4PlayerCallOptions(R,discarderSeat,t){ // 自分がdiscarderSeatの�
   return {pon,kan,chi,tile:t,from:discarderSeat};
 }
 function mj4CallWouldLoseYaku(hand,type,tile,withPair,ctx){ // この鳴きを適用した仮の手牌に役の芽が無いか(コーチング警告用)
+  // review nit(PR#58): 役牌(白發中・自風・場風)のポン/カンはその副露自体が役になるため、
+  // 手牌に役の芽が残っていなくても警告しない(mjYakuEyesは手牌のみを見て副露を含まないため個別に判定)
+  if((type==='pon'||type==='kan')&&(tile>=31||tile===ctx.seatWind||tile===ctx.roundWind))return false;
   const h=hand.slice();
   if(type==='kan')h[tile]-=3;
   else if(type==='pon')h[tile]-=2;
@@ -6544,6 +6549,9 @@ registerGame({
     }
     function resolvePlayerCall(type){ // #Phase4b: 鳴み選択の確定(pon/chi/kan/skip)
       const cc=callChoice;callChoice=null;
+      // review must-fix(PR#58)防御: リーチ後は鳴み選択自体をmj4PlayerCallOptionsで出さないが、
+      // 万一の状態不整合に備えresolve側でも二重に拒否する
+      if(type!=='skip'&&R.players[0].riichi){tryCpuCallOrAdvance(cc.from,cc.tile);return;}
       if(type==='skip'){tryCpuCallOrAdvance(cc.from,cc.tile);return;} // スルー→通常どおりCPU鳴み判定へ
       const call={seat:0,type,tile:cc.tile,from:cc.from};
       if(type==='chi')call.with=cc.chi[0]; // #Phase4b簡略化: 複数チー候補時は最初の組を採用
@@ -6555,7 +6563,7 @@ registerGame({
       }
       an=mjAnalyze(me().hand,mj4SafetyView(R,0),
         {threat:mj4Threat(R,0),turn:R.turnNo,seatWind:mj4SeatWind(R,0),roundWind:R.roundWind,numMelds:me().melds.length});
-      sel=-1;riichiArm=false;A.go();
+      sel=-1;drawn=-1;riichiArm=false;A.go(); // review nit(PR#58): drawnをリセットし旧ツモ牌位置の誤表示を防ぐ
       mjPhase='select';
     }
     function endKyoku(){
@@ -7286,9 +7294,19 @@ function runMahjongTests(){
     { // 役なし警告: 白のみが唯一の役の芽の手で白をポンすると役の芽が消える(実際にmjYakuEyesで確認した具体例)
       const c={seatWind:27,roundWind:27};
       const hSafe=new Array(34).fill(0);hSafe[31]=2;hSafe[0]=1;hSafe[10]=1;hSafe[20]=1;hSafe[8]=1;hSafe[26]=1;
-      const hLose=new Array(34).fill(0);hLose[0]=3;hLose[10]=1;hLose[20]=1;hLose[32]=1;hLose[31]=2;
       ck('p4b:warn:役の芽が残るポンは警告なし',mj4CallWouldLoseYaku(hSafe,'pon',31,undefined,c)===false);
-      ck('p4b:warn:役の芽が消えるポンは警告あり',mj4CallWouldLoseYaku(hLose,'pon',31,undefined,c)===true);
+      // 数牌のポンで役の芽が全て消える具体例(役牌ではないtileで検証)
+      const hLoseNum=new Array(34).fill(0);hLoseNum[0]=3;hLoseNum[10]=1;hLoseNum[20]=1;hLoseNum[32]=1;hLoseNum[13]=2;
+      ck('p4b:warn:役の芽が消える数牌ポンは警告あり',mj4CallWouldLoseYaku(hLoseNum,'pon',13,undefined,c)===true);
+      // review nit(PR#58): 役牌(白發中・自風・場風)のポン/カンは副露自体が役になるため、手牌の芽が消えても警告しない
+      ck('p4b:warn:役牌のポンは手牌の芽が消えても警告なし(副露自体が役)',
+        mj4CallWouldLoseYaku(hLoseNum,'pon',31,undefined,c)===false);
+      ck('p4b:warn:自風/場風のポンも副露自体が役なので警告なし',
+        mj4CallWouldLoseYaku(hLoseNum,'pon',27,undefined,c)===false);
+    }
+    { // review must-fix(PR#58): リーチ後は鳴めない(手牌固定のため)
+      const R4=mkR();R4.players[0].hand[5]=2;R4.players[0].riichi=1;
+      ck('p4b:riichi後は鳴み選択肢を返さない',mj4PlayerCallOptions(R4,1,5)===null);
     }
     { // review気づき回帰: ポン/チー直後はlastDrawが-1になり、次の打牌が必ず手出し扱いになること
       const R4=mkR();R4.players[2].hand[5]=2;R4.players[2].lastDraw=5; // 偶然ポン牌と同じ値が残っていた状態を再現
