@@ -2869,7 +2869,7 @@ registerGame({
     // オンライン専用の盤下ボタン矩形: [まった][ヒント] + [たいきょ] (H=740内に収める)
     const oBtnL={x:BX,y:BY+BOARD+16,w:BOARD/2-8,h:52}, oBtnR={x:BX+BOARD/2+8,y:BY+BOARD+16,w:BOARD/2-8,h:52};
     const oBtnExit={x:BX,y:BY+BOARD+80,w:BOARD,h:44};
-    const backBtn={x:14,y:60,w:104,h:40}; // playからあいて選択へ戻る
+    const backBtn={x:14,y:62,w:84,h:36}; // playからあいて選択へ戻る (左上✕(y≲48)の下・中央タイトル(x≳110)の左に収める)
 
     function center(idx){
       return {x:BX+(idx%3)*CELL+CELL/2, y:BY+Math.floor(idx/3)*CELL+CELL/2};
@@ -2991,7 +2991,7 @@ registerGame({
         g.fillStyle='#2b2550';g.fillRect(0,0,W,H);
         if(!online){
           outlinedText(g,'まるばつ たいせん',W/2,92,25,'#fff','#3a2a4a',7);
-          drawBtn(g,backBtn,'◀ せんたく','#5a5278',false,14); // あいて選択へ
+          drawBtn(g,backBtn,'◀ もどる','#5a5278',false,14); // あいて選択へ
           // 手番 / 結果 (大きく)
           if(!result){
             const m=players[turn].mark;
