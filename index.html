@@ -306,6 +306,12 @@ button{font-family:inherit;cursor:pointer;border:none;touch-action:manipulation}
 #resRank .rrow{display:flex;justify-content:space-between;font-size:3.6cqw;font-weight:800;color:#fff}
 #resRank .rrow.you{color:#7cf29c}
 #resRank .rrow .rn{opacity:.75;min-width:9cqw}
+/* #backlog1 トータル/週間ランキングのタブ切替UI */
+#resTotalRank{display:flex;flex-direction:column;gap:.6cqw;margin-top:.4cqw}
+.rttabs{display:flex;gap:1.6cqw;justify-content:center}
+.rttab{font-size:3.2cqw;font-weight:800;color:#c9c0e6;background:rgba(255,255,255,.08);
+  border:none;border-radius:3cqw;padding:1cqw 3.2cqw}
+.rttab.active{color:#39304f;background:#ffd23f}
 #resUnlock{font-size:3.8cqw;font-weight:800;color:#7a5200;background:linear-gradient(180deg,#fff7d6,#ffe9a8);
   border:.6cqw solid #c98f00;border-radius:99px;padding:1.2cqw 4.6cqw;animation:recBounce .8s ease infinite}
 #resUnlock.hidden{display:none}
@@ -599,6 +605,21 @@ window.PGP_RANKING={
     const base=(window.PGP_CONFIG||{}).rankingBase;
     if(!base)return null;
     const res=await fetch(`${base.replace(/\/$/,'')}/total?game=${encodeURIComponent(game)}&limit=${limit||50}`);
+    return res.ok?res.json():null;
+  },
+  /* #backlog1 週間成績 (匿名オプトイン)。送信ゲート・uid同伴はsubmitTotalと同じ */
+  async submitWeekly(game,value){
+    const base=(window.PGP_CONFIG||{}).rankingBase;
+    if(!base||!(value>0)||!PROFILE.optIn())return null;
+    const res=await fetch(base.replace(/\/$/,'')+'/weekly',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({game,nickname:PROFILE.getName(),value,uid:PROFILE.getUid()})});
+    return res.ok?res.json():null;
+  },
+  async fetchWeekly(game,limit){
+    const base=(window.PGP_CONFIG||{}).rankingBase;
+    if(!base)return null;
+    const res=await fetch(`${base.replace(/\/$/,'')}/weekly?game=${encodeURIComponent(game)}&limit=${limit||50}`);
     return res.ok?res.json():null;
   }
 };
@@ -1333,16 +1354,18 @@ function showResult(extra){
     try{
       const sub=await window.PGP_RANKING.submitScore(def.id,score,{daily:isDaily,seed,date:todaySeed()});
       const tsub=await window.PGP_RANKING.submitTotal(def.id,score); // #15 オプトインON時のみ送信
+      const wsub=await window.PGP_RANKING.submitWeekly(def.id,score); // #backlog1 週間ランキングも同時送信
       if(myRankGen!==rankGen)return; // #feedback2 1件目: 離脱後に次のプレイの結果画面が既に始まっている→古い応答は破棄
       if(isDaily){
         const top=await window.PGP_RANKING.fetchTop(def.id,{mode:'daily'});
         if(myRankGen!==rankGen)return;
         renderRank(top,sub,score); // box.innerHTML=''で自前クリアするためpending解除は不要
       }
-      if(RANK_TOTAL_GAMES.includes(def.id)){ // #15 デイリーの近くに「トータル」
+      if(RANK_TOTAL_GAMES.includes(def.id)){ // #15 デイリーの近くに「トータル」+ #backlog1「こんしゅう」タブ
         const tt=await window.PGP_RANKING.fetchTotal(def.id,5);
+        const wt=await window.PGP_RANKING.fetchWeekly(def.id,5);
         if(myRankGen!==rankGen)return;
-        clearPending();renderTotalRank(tt,tsub);
+        clearPending();renderTotalRank(tt,tsub,wt,wsub);
       }
     }catch(e){
       if(myRankGen===rankGen)clearPending();
@@ -1372,20 +1395,48 @@ function renderRank(top,sub,myScore){
   });
   box.classList.remove('hidden');
 }
-/* #15 トータルランキング表示 (デイリー枠の下に追記。エントリが無ければ何も出さない) */
-function renderTotalRank(tt,tsub){
-  if(!tt||!tt.ok||!Array.isArray(tt.entries)||tt.entries.length===0)return;
+/* #15/#backlog1 トータル/週間ランキング表示 (デイリー枠の下に追記。「こんしゅう」「トータル」タブで切替)
+   タブ切替は#resTotalRank配下だけを再描画(resRank全体は再クリアしない) */
+function renderTotalRank(tt,tsub,wt,wsub){
+  const hasTotal=tt&&tt.ok&&Array.isArray(tt.entries)&&tt.entries.length>0;
+  const hasWeekly=wt&&wt.ok&&Array.isArray(wt.entries)&&wt.entries.length>0;
+  if(!hasTotal&&!hasWeekly)return;
   const box=$('resRank');
-  const ttl=document.createElement('div');ttl.className='rttl';
-  ttl.textContent='🌏 トータルランキング'+(tsub&&tsub.rank?`　あなたは ${tsub.rank}い！`:'');
-  box.appendChild(ttl);
-  tt.entries.slice(0,5).forEach((e,i)=>{
-    const row=document.createElement('div');row.className='rrow';
-    if(tsub&&tsub.rank===i+1&&e.nickname===tsub.nickname)row.classList.add('you');
-    const a=document.createElement('span');a.className='rn';a.textContent=(i+1)+'い';
-    const b=document.createElement('span');b.textContent=e.nickname+'　'+e.value+'てん'; // nicknameはユーザー入力→textContent
-    row.appendChild(a);row.appendChild(b);box.appendChild(row);
-  });
+  const wrap=document.createElement('div');wrap.id='resTotalRank';
+  const tabs=document.createElement('div');tabs.className='rttabs';
+  const bW=document.createElement('button');bW.className='rttab';bW.textContent='こんしゅう';
+  const bT=document.createElement('button');bT.className='rttab';bT.textContent='トータル';
+  tabs.appendChild(bW);tabs.appendChild(bT);
+  const body=document.createElement('div');body.className='rtbody';
+  const renderBody=(entries,sub,label,mark)=>{
+    body.innerHTML='';
+    const ttl=document.createElement('div');ttl.className='rttl';
+    if(entries&&entries.length){
+      ttl.textContent=mark+' '+label+(sub&&sub.rank?`　あなたは ${sub.rank}い！`:'');
+      body.appendChild(ttl);
+      entries.slice(0,5).forEach((e,i)=>{
+        const row=document.createElement('div');row.className='rrow';
+        if(sub&&sub.rank===i+1&&e.nickname===sub.nickname)row.classList.add('you');
+        const a=document.createElement('span');a.className='rn';a.textContent=(i+1)+'い';
+        const b=document.createElement('span');b.textContent=e.nickname+'　'+e.value+'てん'; // nicknameはユーザー入力→textContent
+        row.appendChild(a);row.appendChild(b);body.appendChild(row);
+      });
+    }else{
+      ttl.textContent=label+': まだ きろくがありません';
+      body.appendChild(ttl);
+    }
+  };
+  const setActive=(which)=>{
+    bW.classList.toggle('active',which==='weekly');
+    bT.classList.toggle('active',which==='total');
+    if(which==='weekly')renderBody(hasWeekly?wt.entries:null,wsub,'週間ランキング','📅');
+    else renderBody(hasTotal?tt.entries:null,tsub,'トータルランキング','🌏');
+  };
+  bW.addEventListener('click',()=>setActive('weekly'));
+  bT.addEventListener('click',()=>setActive('total'));
+  wrap.appendChild(tabs);wrap.appendChild(body);
+  box.appendChild(wrap);
+  setActive(hasWeekly?'weekly':'total'); // 週間データがあれば既定でこんしゅうタブ
   box.classList.remove('hidden');
 }
 /* #14 ユーザー情報画面: PROFILE の編集UI (開くのは scr-select の「👤なまえ・ランキング」) */
@@ -1482,6 +1533,13 @@ function runProfileTests(){
       ck('optin-payload-uid',calls.length===1&&typeof JSON.parse(calls[0].o.body).uid==='string'&&JSON.parse(calls[0].o.body).uid.length>0&&JSON.parse(calls[0].o.body).uid===PROFILE.getUid());
       await window.PGP_RANKING.submitTotal('tea',0);
       ck('zero-score-no-send',calls.length===1);
+      // #backlog1 週間ランキング送信もsubmitTotalと同じfetchモック枠内で検証(別testにすると
+      // SELFTESTS.forEach(f=>f())が待たずに次々起動するため、fetchモックを取り合うレースになる)
+      const r=await window.PGP_RANKING.submitWeekly('tea',100);
+      ck('weekly-submit-calls-endpoint',calls.length===2&&calls[1].u.indexOf('/weekly')>=0);
+      window.fetch=(u,o)=>{calls.push({u,o});return Promise.resolve({ok:true,json:()=>Promise.resolve({ok:true,week:'2026-W01',entries:[]})});};
+      const wt=await window.PGP_RANKING.fetchWeekly('tea',5);
+      ck('weekly-fetch-ok',wt&&wt.ok===true&&Array.isArray(wt.entries));
     }finally{
       window.fetch=realFetch;
       saved.forEach(([k,v])=>store.set(k,v));
