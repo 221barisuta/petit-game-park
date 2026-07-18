@@ -968,15 +968,18 @@ function isoWeekKey(d){ // ISO週番号(JST基準)。月曜0時で自然に切�
 }
 function todayDateKey(){const jst=new Date(Date.now()+9*3600*1000);return jst.toISOString().slice(0,10);}
 function statsLast10(id){try{return JSON.parse(store.get('pgp2_stats_last10_'+id,'[]'))||[];}catch(e){return [];}}
-function statsRecordPlay(id,score){ // 直近10回のスコア推移 + 今週のプレイ日数
-  const arr=statsLast10(id);arr.push(score);
-  store.set('pgp2_stats_last10_'+id,JSON.stringify(arr.slice(-10)));
+function statsBumpDay(id){ // 今週(月曜始まり)のプレイ日数を更新(直近10回推移/勝敗いずれからも呼ばれる共通処理)
   const dk='pgp2_stats_days_'+id;
   let d;try{d=JSON.parse(store.get(dk,'null'));}catch(e){d=null;}
   const wk=isoWeekKey(),today=todayDateKey();
   if(!d||d.week!==wk)d={week:wk,dates:[]};
   if(!d.dates.includes(today))d.dates.push(today);
   store.set(dk,JSON.stringify(d));
+}
+function statsRecordPlay(id,score){ // 直近10回のスコア推移 + 今週のプレイ日数
+  const arr=statsLast10(id);arr.push(score);
+  store.set('pgp2_stats_last10_'+id,JSON.stringify(arr.slice(-10)));
+  statsBumpDay(id);
 }
 function statsWeekDays(id){ // 今週(月曜始まり)のプレイ日数
   let d;try{d=JSON.parse(store.get('pgp2_stats_days_'+id,'null'));}catch(e){d=null;}
@@ -997,6 +1000,26 @@ function statsRecordWL(id,outcome){ // outcome: 'win'|'lose'|'draw'。ローカ�
   store.set('pgp2_stats_wl_'+id,JSON.stringify(s));
 }
 function playsOf(id){return getInt('pgp2_plays_'+id,0)}
+/* #backlog1 レビュー対応: 対戦系(ox/gomoku/othello/daifugo/mahjong)はshowResult()を通らないため
+   プレイ回数/週間プレイ日数がこれまで記録されていなかった。1試合につき1回、勝敗と同時に記録する */
+function statsRecordMatch(id,outcome){
+  store.set('pgp2_plays_'+id,String(playsOf(id)+1));
+  statsBumpDay(id);
+  statsRecordWL(id,outcome);
+}
+/* #backlog1 レビュー対応: 五目/オセロは決着後も「まった」で直前手に戻せるため、
+   決着直後にstatsRecordMatchした内容を丸ごとスナップショット→undo時に復元して二重計上を防ぐ */
+function statsMatchSnapshot(id){
+  return {plays:localStorage.getItem('pgp2_plays_'+id),
+    days:localStorage.getItem('pgp2_stats_days_'+id),
+    wl:localStorage.getItem('pgp2_stats_wl_'+id)};
+}
+function statsMatchRestore(id,snap){
+  const set=(k,v)=>{if(v===null)localStorage.removeItem(k);else localStorage.setItem(k,v);};
+  set('pgp2_plays_'+id,snap.plays);
+  set('pgp2_stats_days_'+id,snap.days);
+  set('pgp2_stats_wl_'+id,snap.wl);
+}
 function skinLevelFor(id){
   const p=playsOf(id);
   const lv=p>=15?2:p>=5?1:0;
@@ -1553,7 +1576,7 @@ SELFTESTS.push(runProfileTests);
 function runStatsTests(){
   const {ck,done}=makeTest('stats');
   const id='__selftest__';
-  const keys=['pgp2_stats_last10_'+id,'pgp2_stats_days_'+id,'pgp2_stats_wl_'+id];
+  const keys=['pgp2_stats_last10_'+id,'pgp2_stats_days_'+id,'pgp2_stats_wl_'+id,'pgp2_plays_'+id];
   const saved=keys.map(k=>[k,store.get(k,'')]);
   try{keys.forEach(k=>localStorage.removeItem(k));}catch(e){}
   ck('isoweek-format',/^\d{4}-W\d{2}$/.test(isoWeekKey()));
@@ -1572,6 +1595,22 @@ function runStatsTests(){
   statsRecordWL(id,'draw');
   wl=statsWL(id);
   ck('wl-draw-clears-streak',wl.draw===1&&wl.streak===0&&wl.streakType==='');
+  // #backlog1 レビュー対応: 対戦系のプレイ回数/週間日数もstatsRecordMatchで同時に記録されること(上のwl-*テストと
+  // 状態を共有しないよう別id"__selftest_match__"を使う)
+  const mid='__selftest_match__';
+  ['pgp2_plays_'+mid,'pgp2_stats_days_'+mid,'pgp2_stats_wl_'+mid].forEach(k=>{try{localStorage.removeItem(k);}catch(e){}});
+  statsRecordMatch(mid,'win');
+  ck('match-increments-plays',playsOf(mid)===1);
+  ck('match-bumps-day',statsWeekDays(mid)>=1);
+  ck('match-records-wl',statsWL(mid).win===1);
+  // #backlog1 レビュー対応: 決着後の「まった」を想定したスナップショット/復元(五目・オセロの二重計上防止)
+  const snap=statsMatchSnapshot(mid);
+  statsRecordMatch(mid,'win');
+  ck('match-second-win-recorded',statsWL(mid).win===2&&playsOf(mid)===2);
+  statsMatchRestore(mid,snap);
+  ck('match-restore-reverts-plays',playsOf(mid)===1);
+  ck('match-restore-reverts-wl',statsWL(mid).win===1);
+  ['pgp2_plays_'+mid,'pgp2_stats_days_'+mid,'pgp2_stats_wl_'+mid].forEach(k=>{try{localStorage.removeItem(k);}catch(e){}});
   keys.forEach((k,i)=>store.set(k,saved[i][1]));
   return done();
 }
@@ -2808,12 +2847,12 @@ registerGame({
         banner(r.winner+'の かち！');A.fever();vib([30,50,30,50,30]);
         for(const idx of r.line){const c=center(idx);parts.burst(c.x,c.y,10,{shape:'star',col:COL[r.winner],grav:160});}
         confetti();
-        // #backlog1 きろく: 常に2人局所プレイなのでplayers[0](○)視点で記録
-        statsRecordWL('ox',r.winner===players[0].mark?'win':'lose');
+        // #backlog1 きろく: 常に2人局所プレイなのでplayers[0](○)視点で記録(まった非対応ゲームなのでスナップショット不要)
+        statsRecordMatch('ox',r.winner===players[0].mark?'win':'lose');
       }else if(board.every(c=>c)){
         result={draw:true};
         banner('ひきわけ！');A.ok();vib([20,40,20]);
-        statsRecordWL('ox','draw');
+        statsRecordMatch('ox','draw');
       }else{
         turn=1-turn;
         // 将来CPU: if(players[turn].type==='cpu') place(getCpuMove(board,players[turn].mark));
@@ -3458,6 +3497,7 @@ registerGame({
     let confirmSel=-1; // PR-2: CPU対戦2タップ確定の選択中マス(-1=未選択)。1回目タップでハイライト→同マス2回目で確定
     let twoTapVs=store.get('pgp2_twotap_vs','1')==='1'; // #feedback2 5件目: ふたりで/オンラインの2タップ確定(誤タップ防止・既定ON)
     const parts=new Particles();
+    let lastStatSnap=null; // #backlog1 決着直後の記録スナップショット(決着後「まった」で巻き戻す用)
 
     // #backlog1 きろく: ローカル対局(pvp/pvc)のみ記録。cvcは観戦なので対象外。
     // pvpは両者humanなので先手(players[0])を「あなた」とみなす(オンラインは別scope・#2便)
@@ -3465,7 +3505,8 @@ registerGame({
       if(cfg.mode==='cvc')return;
       const youIdx=players.findIndex(p=>p.type==='human');
       const youMark=players[youIdx>=0?youIdx:0].mark;
-      statsRecordWL('gomoku',winnerMark===null?'draw':(winnerMark===youMark?'win':'lose'));
+      lastStatSnap=statsMatchSnapshot('gomoku');
+      statsRecordMatch('gomoku',winnerMark===null?'draw':(winnerMark===youMark?'win':'lose'));
     }
     function applyCfg(){ // cfg → players
       if(cfg.mode==='cvc')players=[{mark:'black',type:'cpu',level:cfg.levelL},{mark:'white',type:'cpu',level:cfg.levelR}];
@@ -3504,6 +3545,7 @@ registerGame({
     }
     function undo(){ // 待った: pvp=直前1手 / pvc=人間の手番まで(CPU応手も一緒に)戻す
       if(!undoable()){A.bad();return}
+      if(result&&lastStatSnap){statsMatchRestore('gomoku',lastStatSnap);lastStatSnap=null;} // #backlog1 決着後の「まった」は記録も巻き戻す(二重計上防止)
       do{ board[history.pop()]=null; } // pvcは手番が人間に戻るまで巻き戻す
       while(cfg.mode==='pvc'&&history.length&&players[history.length%2].type==='cpu');
       result=null;winLine=null;parts.list=[]; // 決着解除 + 勝利演出クリア
@@ -4362,6 +4404,7 @@ registerGame({
     let confirmSel=-1;         // PR-2: CPU対戦2タップ確定の選択中マス(-1=未選択)。1回目タップでハイライト→同マス2回目で確定
     let assistOn=store.get('pgp2_othello_assist','0')==='1'; // #8 合法手アシスト表示(既定OFF・localStorageで永続。五目ヒントと同方式)
     let twoTapVs=store.get('pgp2_twotap_vs','1')==='1'; // #feedback2 5件目: ふたりで/オンラインの2タップ確定(誤タップ防止・既定ON・五目と共通設定)
+    let lastStatSnap=null; // #backlog1 決着直後の記録スナップショット(決着後「まった」で巻き戻す用)
     // #10 CPU対戦: setup画面/モード設定/CPU思考タイマー/おに解放
     let screen='setup';        // 'setup'(あいて選択) | 'play'(対局)。openGame→howto→setup→play
     let cfg={ mode:['pvp','pvc','cvc'].includes(store.get('pgp2_othello_mode','pvp'))?store.get('pgp2_othello_mode','pvp'):'pvp',
@@ -4400,10 +4443,13 @@ registerGame({
       }
       if(result.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
       else{banner(winLabel(w));A.fever();vib([30,50,30,50,30]);confetti();}
-      // #backlog1 きろく: ローカル対局(pvp/pvc)のみ、seat0視点で勝敗を記録(cvcは観戦なので対象外)
+      // #backlog1 レビュー対応: pvcで後手(humanFirst=false)を選ぶとplayers[0]がCPUになるため、
+      // seat0固定ではなくhuman player自身の色を「あなた」として勝敗を記録する(cvcは観戦なので対象外)
       if(cfg.mode!=='cvc'){
-        const youColor=players[0].color;
-        statsRecordWL('othello',result.draw?'draw':(w===youColor?'win':'lose'));
+        const human=players.find(p=>p.type==='human');
+        const youColor=human?human.color:players[0].color;
+        lastStatSnap=statsMatchSnapshot('othello');
+        statsRecordMatch('othello',result.draw?'draw':(w===youColor?'win':'lose'));
       }
     }
     function advanceTurn(){ // 着手後の手番送り (相手番 / 自動パス / 終局 を判定)
@@ -4437,6 +4483,7 @@ registerGame({
     }
     function undo(){ // 待った: pvp=直前1手 / pvc=CPU応手も一緒に人間の着手直前まで戻す(自動パス含む)
       if(!undoable()){A.bad();return;}
+      if(result&&lastStatSnap){statsMatchRestore('othello',lastStatSnap);lastStatSnap=null;} // #backlog1 決着後の「まった」は記録も巻き戻す(二重計上防止)
       let s=history.pop();
       if(cfg.mode==='pvc')while(players[s.turn].type==='cpu')s=history.pop();
       board=s.board;turn=s.turn;last=s.last;lastPass=s.lastPass;
@@ -5206,7 +5253,7 @@ registerGame({
         A.fever();confetti();vib([30,50,30,50,30]);
         // #backlog1 きろく: ローカル対局のみ(feedbackはscreen==='play'経路でのみ呼ばれる)。seat0が1位=win、それ以外=lose
         const rank=L.finished.indexOf(0);
-        statsRecordWL('daifugo',rank===0?'win':'lose');
+        statsRecordMatch('daifugo',rank===0?'win':'lose');
       }
     }
 
@@ -6809,7 +6856,7 @@ registerGame({
         tenpaiRyu:G.results.filter(x=>x.end.type==='ryuukyoku'&&x.end.tenpai[0]).length});
       const rank=mj4Ranking(G).indexOf(0)+1;
       rep.rank4=rank;rep.finalScore=G.scores[0];page=0;
-      statsRecordWL('mahjong',rank===1?'win':'lose'); // #backlog1 きろく: 1局ごとでなく対局(半荘/東風)全体の最終順位で記録
+      statsRecordMatch('mahjong',rank===1?'win':'lose'); // #backlog1 きろく: 1局ごとでなく対局(半荘/東風)全体の最終順位で記録
       let hist=[];try{hist=JSON.parse(store.get('pgp2_mj_hist','[]'))||[];}catch(e){}
       hist.push({r:rep.rank[1],opt:rep.optRate,
         lateRi:G.log.filter(l=>l.couldRiichi&&!l.riichied&&!l.auto).length?1:0,
@@ -7712,7 +7759,9 @@ registerGame({
         let mps=0;for(const rr of results)mps+=rr.pScore;
         matchIsRec=mps>getInt('pgp2_best_chicken',0);
         if(matchIsRec)store.set('pgp2_best_chicken',String(mps));
-        statsRecordPlay('chicken',mps); // #backlog1 きろく: showResult()を経由しない独自結果画面のため個別に記録
+        // #backlog1 レビュー対応: showResult()を経由しないためpgp2_plays_chickenもここで個別に加算(他ゲームと同様1試合1回)
+        store.set('pgp2_plays_chicken',String(playsOf('chicken')+1));
+        statsRecordPlay('chicken',mps); // きろく: 直近10回推移+今週のプレイ日数
         if(w==='p'){A.coin();confetti();vib([30,50,30,50,30]);}
         else if(w==='c'){A.bad();vib([60,40,60]);}
         else A.ok();
