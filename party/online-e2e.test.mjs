@@ -62,14 +62,14 @@ function makeEnv() { // クライアント1人分の隔離スコープ (store/�
   };
   const keys = Object.keys(env);
   const fn = new Function(...keys, src + '\n' + othSrc +
-    '\nreturn {GomokuNet,OthelloNet,makeVsOnlineUI,getFlips,getValidMoves};');
+    '\nreturn {GomokuNet,OthelloNet,TicTacToeNet,makeVsOnlineUI,getFlips,getValidMoves};');
   return { api: fn(...keys.map(k => env[k])), env };
 }
 
 const BL = { x: 0, y: 900, w: 10, h: 10 }, BR = { x: 20, y: 900, w: 10, h: 10 }, BX = { x: 40, y: 900, w: 10, h: 10 };
-function mkClient(kind) { // kind: 'gomoku' | 'othello'
+function mkClient(kind) { // kind: 'gomoku' | 'othello' | 'ox'
   const { api, env } = makeEnv();
-  const net = kind === 'gomoku' ? api.GomokuNet : api.OthelloNet;
+  const net = kind === 'gomoku' ? api.GomokuNet : kind === 'ox' ? api.TicTacToeNet : api.OthelloNet;
   const c = { api, env, net, board: [], result: null, results: 0, newGames: 0, turnSeat: '' };
   const base = {
     net, btnL: BL, btnR: BR, btnExit: BX,
@@ -79,7 +79,8 @@ function mkClient(kind) { // kind: 'gomoku' | 'othello'
     applyState(ng) { c.board = ng.board.slice(); c.turnSeat = ng.turn; c.result = ng.result || null; },
     hintIdx: () => -1, onHint() {},
   };
-  c.OL = api.makeVsOnlineUI(kind === 'gomoku' ? {
+  // 五目/三目は同じ「置くだけ」cfg (undoNeedsOppTurn:true / 空マス合法)。オセロだけ反転判定。
+  c.OL = api.makeVsOnlineUI((kind === 'gomoku' || kind === 'ox') ? {
     ...base, exitSize: 15, hintCol: '#3a9bdc', undoNeedsOppTurn: true,
     snapOf: ng => ng.turn + '/' + ng.last + '/' + ng.gameNo,
     canPut: (ng, cc) => ng.board[cc] === null,
@@ -154,6 +155,36 @@ const code = () => 'e2e' + Math.random().toString(36).slice(2, 5); // 実行ご�
     const other = cur === A ? B : A;
     ck('othello:着手ミラー ply' + ply, await until(() => other.board[mv] !== null, 6000, () => { A.mirror(); B.mirror(); }));
   }
+  A.net.leave(); B.net.leave();
+}
+
+// ══ まるばつ(三目): 着席/着手ミラー/3連決着/決着演出1回 ══
+{
+  const A = mkClient('ox'), B = mkClient('ox');
+  const room = code();
+  A.OL.enter(); B.OL.enter();
+  A.net.connect(room); B.net.connect(room);
+  ck('ox:両者着席', await until(() => A.net.state.seat && B.net.state.seat && A.net.state.game && B.net.state.game && A.net.state.game.board.length === 9, 8000, () => { A.mirror(); B.mirror(); }));
+  const black = A.net.state.seat === 'black' ? A : B, white = A.net.state.seat === 'black' ? B : A;
+  black.tapCell(4); // 仮置き (1タップでは打たれない)
+  await new Promise(r => setTimeout(r, 250)); black.mirror(); white.mirror();
+  ck('ox:1タップでは未着手', black.board[4] === null && black.OL.st.pending === 4);
+  black.tapCell(4); // 同マス2度目=確定 (中央4に着手)
+  ck('ox:着手が相手にミラー', await until(() => white.board[4] === 'black', 6000, () => { A.mirror(); B.mirror(); }));
+  // 黒 [0,1,2] で上段3連。白は下段(6,7)で手番だけ消化。既に4に黒があるので勝ち筋は0,1,2で作る
+  white.tapCell(6); white.tapCell(6);
+  await until(() => black.board[6] === 'white', 6000, () => { A.mirror(); B.mirror(); });
+  black.tapCell(0); black.tapCell(0);
+  await until(() => white.board[0] === 'black', 6000, () => { A.mirror(); B.mirror(); });
+  white.tapCell(7); white.tapCell(7);
+  await until(() => black.board[7] === 'white', 6000, () => { A.mirror(); B.mirror(); });
+  black.tapCell(1); black.tapCell(1);
+  await until(() => white.board[1] === 'black', 6000, () => { A.mirror(); B.mirror(); });
+  white.tapCell(8); white.tapCell(8);
+  await until(() => black.board[8] === 'white', 6000, () => { A.mirror(); B.mirror(); });
+  black.tapCell(2); black.tapCell(2); // 黒 [0,1,2] で3連
+  ck('ox:決着(黒勝ち)', await until(() => A.result && B.result, 6000, () => { A.mirror(); B.mirror(); }) && A.result.winner === 'black' && A.result.line.join() === '0,1,2');
+  ck('ox:決着演出は各1回', A.results === 1 && B.results === 1);
   A.net.leave(); B.net.leave();
 }
 
