@@ -36,3 +36,12 @@ class_name = "Daifugo"
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["Daifugo"]
+
+# まるばつ(三目並べ): バインディング名 "Ox" → party "ox" (/parties/ox/<code>)
+[[durable_objects.bindings]]
+name = "Ox"
+class_name = "Ox"
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["Ox"]
