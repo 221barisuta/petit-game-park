@@ -1010,12 +1010,13 @@ function statsRecordMatch(id,outcome){
 /* #backlog1 レビュー対応: 五目/オセロは決着後も「まった」で直前手に戻せるため、
    決着直後にstatsRecordMatchした内容を丸ごとスナップショット→undo時に復元して二重計上を防ぐ */
 function statsMatchSnapshot(id){
-  return {plays:localStorage.getItem('pgp2_plays_'+id),
-    days:localStorage.getItem('pgp2_stats_days_'+id),
-    wl:localStorage.getItem('pgp2_stats_wl_'+id)};
+  const g=(k)=>{try{return localStorage.getItem(k);}catch(e){return null;}}; // #backlog1 nit: storage無効環境でも例外化しない
+  return {plays:g('pgp2_plays_'+id),
+    days:g('pgp2_stats_days_'+id),
+    wl:g('pgp2_stats_wl_'+id)};
 }
 function statsMatchRestore(id,snap){
-  const set=(k,v)=>{if(v===null)localStorage.removeItem(k);else localStorage.setItem(k,v);};
+  const set=(k,v)=>{try{if(v===null)localStorage.removeItem(k);else localStorage.setItem(k,v);}catch(e){}};
   set('pgp2_plays_'+id,snap.plays);
   set('pgp2_stats_days_'+id,snap.days);
   set('pgp2_stats_wl_'+id,snap.wl);
