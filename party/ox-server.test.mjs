@@ -147,5 +147,33 @@ ck('take:white-released', b3.lastOf('state').seats.white === null);
 await srv3.onMessage(JSON.stringify({ type: 'takeSeat' }), sp3);
 ck('take:seated-white', sp3.lastOf('assigned').seat === 'white' && b3.lastOf('state').seats.white.name === 'SP3');
 
+// ── takeSeat 認証ガード: 未認証(hello前)WSは着席できない / hello済み観戦者は着席できる ──
+// 共通基盤(versus-server.js) の認証迂回修正の回帰テスト (五目/オセロ/三目すべてに効く)。
+const room4 = new Room();
+const srv4 = new TicTacToeServer(room4);
+await srv4.onStart();
+let fakeNow4 = 200000; srv4.now = () => fakeNow4;
+const hello4 = (c, name) => srv4.onMessage(JSON.stringify({ type: 'hello', name }), c);
+const takeSeat4 = (c) => srv4.onMessage(JSON.stringify({ type: 'takeSeat' }), c);
+const b4 = new Conn('b4'); b4.room = room4; room4.conns.add(b4); srv4.onConnect(b4); await hello4(b4, 'B4');
+const w4 = new Conn('w4'); w4.room = room4; room4.conns.add(w4); srv4.onConnect(w4); await hello4(w4, 'W4');
+const sp4 = new Conn('sp4'); sp4.room = room4; room4.conns.add(sp4); srv4.onConnect(sp4); await hello4(sp4, 'SP4'); // 満席→観戦
+// 未認証接続: onConnect のみ通し hello を送らない (conn.state 未設定のまま)
+const u4 = new Conn('u4'); u4.room = room4; room4.conns.add(u4); srv4.onConnect(u4);
+ck('guard:unauth-no-state', u4.state === undefined);
+// white を切断→グレース超過で解放し、空席を1つ作る
+w4.close(); await srv4.onClose(w4);
+fakeNow4 += 31000; await srv4.onAlarm();
+ck('guard:white-open', b4.lastOf('state').seats.white === null);
+// 未認証WSが takeSeat → 拒否 (席は空いたまま / assigned もらえない / state 未設定のまま / tokenも得ない)
+await takeSeat4(u4);
+ck('guard:unauth-cannot-take',
+  b4.lastOf('state').seats.white === null && u4.lastOf('assigned') === undefined && u4.state === undefined);
+// hello 済み観戦者 sp4 は takeSeat で正しく着席できる
+await takeSeat4(sp4);
+ck('guard:spectator-can-take',
+  sp4.lastOf('assigned') && sp4.lastOf('assigned').seat === 'white' &&
+  b4.lastOf('state').seats.white && b4.lastOf('state').seats.white.name === 'SP4');
+
 console.log('[ox server logic] pass=' + pass + ' / fail=' + fail, log.length ? log : '');
 process.exit(fail ? 1 : 0);

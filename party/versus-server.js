@@ -264,8 +264,10 @@ export class VersusServer {
     }
 
     if (m.type === 'takeSeat') {
-      // 観戦者が空席に着いて対局へ参加 (空席がある時のみ)
-      if (st.seat === 'black' || st.seat === 'white') return; // すでに着席
+      // 観戦者が空席に着いて対局へ参加 (空席がある時のみ)。
+      // 認証ガード: hello 済みの観戦者のみ許可。未認証(hello前=conn.state 未設定で seat 無し)や
+      // すでに着席済み(black/white)は弾く。これが無いと未認証WSが着席して token を奪える。
+      if (st.seat !== 'spectator') return; // 未認証 or すでに着席
       const open = MARKS.find(c => !g.seats[c]);
       if (!open) return this.err(conn, 'あきせきが ありません');
       const name = sanitizeName(st.name);
