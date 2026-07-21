@@ -158,6 +158,42 @@ const code = () => 'e2e' + Math.random().toString(36).slice(2, 5); // 実行ご�
   A.net.leave(); B.net.leave();
 }
 
+// ══ オセロ: フル対局で 自動パス→終局→石数 を実機プロトコルで検証 ══
+// 「手番の席」を持つ側が常に最小indexの合法手を打つと 対局は決定的に60手で終局する(白45/黒19)。
+// 途中で黒が複数回 自動パスされ(手番維持のまま白が連打する)、パス時の手番同期・終局判定・石数一致を
+// 実DOプロトコル越しに検証する。 (task: パス処理はオンライン同期での手番ズレの温床 → パス→終局を必ず検証)
+{
+  const A = mkClient('othello'), B = mkClient('othello');
+  const room = code();
+  A.OL.enter(); B.OL.enter();
+  A.net.connect(room); B.net.connect(room);
+  ck('othello終局:両者着席', await until(() => A.net.state.seat && B.net.state.seat && A.net.state.game && B.net.state.game, 8000, () => { A.mirror(); B.mirror(); }));
+  const seatOf = c => c.net.state.seat; // 席は対局中固定 (rematch/swapなし)
+  let sawPass = false, guard = 0;
+  while (!(A.result || B.result) && guard++ < 200) {
+    A.mirror(); B.mirror();
+    const st = A.net.state.game; // サーバー権威state (両者へ同一broadcast)
+    if (!st) { await new Promise(r => setTimeout(r, 60)); continue; }
+    if (st.pass) sawPass = true;                    // 自動パス中: 手番は維持され pass に相手色が入る
+    const turnSeat = st.turn;
+    const cur = seatOf(A) === turnSeat ? A : B;     // 手番の席を持つクライアントが打つ
+    const mv = cur.api.getValidMoves(st.board, turnSeat)[0];
+    if (mv === undefined) { await new Promise(r => setTimeout(r, 60)); continue; } // 自動パス反映待ち
+    const before = st.board.filter(v => v).length;
+    cur.tapCell(mv); cur.tapCell(mv);               // 2タップ確定
+    await until(() => A.result || B.result || (A.net.state.game && A.net.state.game.board.filter(v => v).length > before), 6000, () => { A.mirror(); B.mirror(); });
+  }
+  A.mirror(); B.mirror();
+  ck('othello終局:自動パス発生(手番維持で相手が連打)', sawPass);
+  ck('othello終局:終局到達(両者)', !!(A.result && B.result));
+  const fb = A.net.state.game.board; let bk = 0, wt = 0; for (const v of fb) { if (v === 'black') bk++; else if (v === 'white') wt++; }
+  const majority = bk > wt ? 'black' : wt > bk ? 'white' : undefined; // 石数の多い方が勝者(同数=引分)
+  ck('othello終局:石数と勝者が整合', A.result && (A.result.draw ? majority === undefined : A.result.winner === majority));
+  ck('othello終局:両クライアントの盤/勝者が一致', JSON.stringify(A.net.state.game.board) === JSON.stringify(B.net.state.game.board) && JSON.stringify(A.result) === JSON.stringify(B.result));
+  ck('othello終局:決着演出は各1回', A.results === 1 && B.results === 1);
+  A.net.leave(); B.net.leave();
+}
+
 // ══ まるばつ(三目): 着席/着手ミラー/3連決着/決着演出1回 ══
 {
   const A = mkClient('ox'), B = mkClient('ox');
