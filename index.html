@@ -624,7 +624,7 @@ window.PGP_RANKING={
   }
 };
 /* トータルランキング対象ゲーム (ranking-worker の TOTAL_METRICS と一致させる) */
-const RANK_TOTAL_GAMES=['tea','lane','spot'];
+const RANK_TOTAL_GAMES=['tea','lane','spot','2048'];
 
 function rr(g,x,y,w,h,r){
   g.beginPath();
@@ -910,7 +910,7 @@ const VS_ORDER=['ox','othello','gomoku','chicken','daifugo'];
 const vsOrder=id=>{const i=VS_ORDER.indexOf(id);return i<0?99:i;};
 const versusGames=()=>GAMES.filter(g=>g.type==='versus').sort((a,b)=>vsOrder(a.id)-vsOrder(b.id));
 // デイリー抽選は「ひとり(非versus)」プールのみから選ぶ (versusはスコア競争にならないため除外)
-const dailyDef=()=>{const s=soloGames();return s[todaySeed()%s.length]};
+const dailyDef=()=>{const s=soloGames().filter(g=>!g.noDaily);return s[todaySeed()%s.length]};
 let menuTab=store.get('pgp2_menutab','solo')==='versus'?'versus':'solo'; // アクティブタブ (localStorage復元)
 
 /* ---- 段階判定テーブル (全ゲーム共通) ----
@@ -1087,6 +1087,10 @@ function makeCtx(def,rng,plays){
     isFever:()=>feverT>0,
     score:()=>score,combo:()=>combo,
     getElapsed:()=>elapsed,
+    // #solo-daily: 独自採点ゲーム(2048等)がスコアを直接加算/設定するための追加API。
+    // best更新演出(bestBeaten)は coreJudge と同条件で発火。既存ゲームは未使用のため影響なし。
+    setScore(n){score=Math.max(0,Math.round(n));if(!bestBeaten&&best>0&&score>best)bestBeaten=true;},
+    addScore(n){score=Math.max(0,Math.round(score+(n||0)));if(!bestBeaten&&best>0&&score>best)bestBeaten=true;},
     finishGame(o){finishFromGame(o||{})}
   };
 }
@@ -1323,7 +1327,7 @@ function showResult(extra){
   if(isRec)store.set(bestKey,String(score));
   statsRecordPlay(def.id,score); // #backlog1 きろく: 直近10回推移+今週のプレイ日数(デイリー/フリー問わず記録)
   const c=judgeCounts;
-  resultInfo={def,score,daily:isDaily,seed,counts:c,maxCombo,isRec};
+  resultInfo={def,score,daily:isDaily,seed,counts:c,maxCombo,isRec,share:extra.share||null};
   // DOM
   $('resGameName').textContent=def.emoji+' '+def.title;
   $('resDaily').classList.toggle('hidden',!isDaily);
@@ -1465,7 +1469,7 @@ function renderTotalRank(tt,tsub,wt,wsub){
 }
 /* #14 ユーザー情報画面: PROFILE の編集UI (開くのは scr-select の「👤なまえ・ランキング」) */
 /* #backlog1 じぶんのきろく画面: スコア系はGAMES登録順のうちscore対象のみ、対戦系は勝敗/連勝も表示 */
-const REC_SCORE_GAMES=['tea','lane','spot','mole','chinitsu','chicken'];
+const REC_SCORE_GAMES=['tea','lane','spot','mole','chinitsu','2048','chicken'];
 const REC_VS_GAMES=['ox','gomoku','othello','daifugo','mahjong'];
 function setupRecords(){
   const list=$('recList');
@@ -1657,6 +1661,7 @@ function makeShareCanvas(){
 }
 function shareMsg(){
   const r=resultInfo;
+  if(r.share)return r.share; // #solo-daily: ゲーム独自の共有テキスト(ワードルの絵文字グリッド等)を優先
   return `【プチゲー★パーク】${r.def.title}で ${r.score}てん！${r.daily?`（${todayLabel()}のデイリーチャレンジ）`:''} #プチゲーパーク`;
 }
 function shareUrl(){

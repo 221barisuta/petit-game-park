@@ -32,6 +32,7 @@ const TOTAL_METRICS = {
   tea:  { metric: 'best', agg: 'max' },
   lane: { metric: 'best', agg: 'max' },
   spot: { metric: 'best', agg: 'max' },
+  '2048': { metric: 'best', agg: 'max' }, // solo-daily: 2048はハイスコア(best/max)。未デプロイでもDEFAULT_METRICで同挙動
 };
 const DEFAULT_METRIC = { metric: 'best', agg: 'max' };
 const TOTAL_MAX = 9999999; // トータル値クランプ上限
