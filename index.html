@@ -1721,12 +1721,16 @@ cv.addEventListener('pointermove',e=>{
 function ptrUp(e){
   if(!ptr||e.pointerId!==ptr.id)return;
   const p=evtXY(e);
-  const info={heldMs:performance.now()-ptr.t0,flicked:ptr.flicked};
+  const info={heldMs:performance.now()-ptr.t0,flicked:ptr.flicked,button:(e&&typeof e.button==='number')?e.button:0};
   ptr=null;
   if(phase==='play'&&game&&game.onUp)game.onUp(p.x,p.y,info);
 }
 cv.addEventListener('pointerup',ptrUp);
 cv.addEventListener('pointercancel',ptrUp);
+// 右クリック/長押しのブラウザ既定メニューを抑制 (マインスイーパーの旗立て等)。def.preventContextMenu を持つゲームのプレイ中のみ。
+cv.addEventListener('contextmenu',e=>{
+  if(phase==='play'&&curDef&&curDef.preventContextMenu)e.preventDefault();
+});
 
 document.addEventListener('keydown',e=>{
   AudioKit.ensure();
@@ -9823,6 +9827,544 @@ registerGame({
         else if(code==='Enter')submit();
       },
       hudInfo(){return guesses.length+'/'+MAXG;},
+    };
+  }
+});
+
+/* ソロ・タイムアタック共通の小物 (ナンプレ/マインスイーパー共用) */
+function pgFmtClock(sec){const s=Math.max(0,Math.floor(sec));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');}
+// クリアタイム→ランキング得点(速いほど高得点。rankingBase は高得点ほど上位)。
+// 逆数式で「速いほど大きい」小さめの得点にし、結果画面の見た目も自然にする(MAX_SCORE=99990内)。
+function pgTimeScore(sec){return Math.max(1,Math.min(99990,Math.round(100000/(Math.max(0,sec)+20))));}
+
+/* =========================================================================
+   🧩 ナンプレ (数独・日替わり) — 9×9。日付シードで決定的に生成し「唯一解」を保証。
+   生成: バックトラックで完成解 → 点対称マスク削り → 唯一解チェック(sdMakePuzzle)。
+   日替わりは「ふつう」固定・1日1回=本番/連続クリアでストリーク・絵文字共有(ネタバレなし)。
+   練習は任意難易度。メモ(候補数字)・まちがい表示(任意ON)・タイマー。クリアタイムでランキング
+   (pgTimeScore を rankingBase へ送信、加えてローカル自己ベストを保持)。
+   コア(sdSolveCount/sdGenerateSolution/sdMakePuzzle)は DOM非依存の純ロジックで、?selftest と
+   party/sudoku-core.test.mjs(生成100盤の唯一解を機械検証)の対象。
+   ========================================================================= */
+/* __SUDOKU_CORE_START__ (数独コア: DOM非依存の純ロジック。party/sudoku-core.test.mjs が抽出) */
+function sdBoxIndex(r,c){return (((r/3)|0)*3)+((c/3)|0);}
+// 解の個数を limit まで数える(MRV+ビットマスクのバックトラッキング)。戻り値1=唯一解。
+function sdSolveCount(grid,limit){
+  limit=limit||2;
+  const g=grid.slice();
+  const rows=new Array(9).fill(0),cols=new Array(9).fill(0),boxes=new Array(9).fill(0);
+  for(let r=0;r<9;r++)for(let c=0;c<9;c++){const v=g[r*9+c];if(v){const bit=1<<v;rows[r]|=bit;cols[c]|=bit;boxes[sdBoxIndex(r,c)]|=bit;}}
+  let count=0;
+  (function rec(){
+    if(count>=limit)return;
+    let best=-1,bestAvail=0,bestCnt=10;
+    for(let i=0;i<81;i++){
+      if(g[i])continue;
+      const r=(i/9)|0,c=i%9;
+      const used=rows[r]|cols[c]|boxes[sdBoxIndex(r,c)];
+      const avail=(~used)&0x3FE; // bit1..9
+      let cnt=0,m=avail;while(m){cnt++;m&=m-1;}
+      if(cnt===0)return; // 行き止まり
+      if(cnt<bestCnt){bestCnt=cnt;best=i;bestAvail=avail;if(cnt===1)break;}
+    }
+    if(best<0){count++;return;} // 全マス確定=1解
+    const r=(best/9)|0,c=best%9,bx=sdBoxIndex(r,c);
+    for(let v=1;v<=9&&count<limit;v++){
+      const bit=1<<v;if(!(bestAvail&bit))continue;
+      g[best]=v;rows[r]|=bit;cols[c]|=bit;boxes[bx]|=bit;
+      rec();
+      g[best]=0;rows[r]&=~bit;cols[c]&=~bit;boxes[bx]&=~bit;
+    }
+  })();
+  return count;
+}
+// 完成解を1つ生成(rng:0..1)。値をシャッフルするランダム化MRVバックトラッキング。
+function sdGenerateSolution(rng){
+  const g=new Array(81).fill(0);
+  const rows=new Array(9).fill(0),cols=new Array(9).fill(0),boxes=new Array(9).fill(0);
+  (function rec(){
+    let best=-1,bestAvail=0,bestCnt=10;
+    for(let i=0;i<81;i++){
+      if(g[i])continue;
+      const r=(i/9)|0,c=i%9;
+      const used=rows[r]|cols[c]|boxes[sdBoxIndex(r,c)];
+      const avail=(~used)&0x3FE;
+      let cnt=0,m=avail;while(m){cnt++;m&=m-1;}
+      if(cnt===0)return false;
+      if(cnt<bestCnt){bestCnt=cnt;best=i;bestAvail=avail;if(cnt===1)break;}
+    }
+    if(best<0)return true;
+    const r=(best/9)|0,c=best%9,bx=sdBoxIndex(r,c);
+    const vals=[];for(let v=1;v<=9;v++)if(bestAvail&(1<<v))vals.push(v);
+    for(let k=vals.length-1;k>0;k--){const j=(rng()*(k+1))|0;const t=vals[k];vals[k]=vals[j];vals[j]=t;}
+    for(const v of vals){
+      const bit=1<<v;g[best]=v;rows[r]|=bit;cols[c]|=bit;boxes[bx]|=bit;
+      if(rec())return true;
+      g[best]=0;rows[r]&=~bit;cols[c]&=~bit;boxes[bx]&=~bit;
+    }
+    return false;
+  })();
+  return g;
+}
+// 完成解から点対称ペアでマスを削る。target=残す手がかりの目標数。唯一解が崩れる削りは戻す。
+function sdMakePuzzle(rng,target){
+  const solution=sdGenerateSolution(rng);
+  const puzzle=solution.slice();
+  const order=[];for(let i=0;i<41;i++)order.push(i); // 上半分+中央のみ走査(80-iで下半分も対に消える)
+  for(let k=order.length-1;k>0;k--){const j=(rng()*(k+1))|0;const t=order[k];order[k]=order[j];order[j]=t;}
+  let clues=81;
+  for(const i of order){
+    if(clues<=target)break;
+    const j=80-i;
+    if(puzzle[i]===0)continue;
+    const bi=puzzle[i],bj=puzzle[j];
+    puzzle[i]=0;if(j!==i)puzzle[j]=0;
+    if(sdSolveCount(puzzle,2)!==1){puzzle[i]=bi;if(j!==i)puzzle[j]=bj;} // 唯一解でなければ復元
+    else clues-=(j!==i?2:1);
+  }
+  return {puzzle,solution,clues};
+}
+/* __SUDOKU_CORE_END__ */
+function runSudokuTests(){
+  const {ck,done}=makeTest('sudoku');
+  const isComplete=g=>{
+    for(let r=0;r<9;r++){const s=new Set();for(let c=0;c<9;c++){const v=g[r*9+c];if(v<1||v>9)return false;s.add(v);}if(s.size!==9)return false;}
+    for(let c=0;c<9;c++){const s=new Set();for(let r=0;r<9;r++)s.add(g[r*9+c]);if(s.size!==9)return false;}
+    for(let b=0;b<9;b++){const s=new Set(),br=((b/3)|0)*3,bc=(b%3)*3;for(let r=0;r<3;r++)for(let c=0;c<3;c++)s.add(g[(br+r)*9+bc+c]);if(s.size!==9)return false;}
+    return true;
+  };
+  const sol=sdGenerateSolution(mulberry32(1));
+  ck('solution-complete',isComplete(sol));
+  ck('solution-unique',sdSolveCount(sol,2)===1);
+  ck('empty-has-many',sdSolveCount(new Array(81).fill(0),2)===2);
+  let uniq=true,subset=true,detState=true;
+  const a1=sdMakePuzzle(mulberry32(777),33),a2=sdMakePuzzle(mulberry32(777),33);
+  for(let i=0;i<81;i++)if(a1.puzzle[i]!==a2.puzzle[i])detState=false; // 同シード=同一盤(決定的)
+  for(let s=1;s<=8;s++){ // 軽量に数盤検証(重い100盤検証は party/sudoku-core.test.mjs)
+    const {puzzle,solution}=sdMakePuzzle(mulberry32(s*31+5),34);
+    if(sdSolveCount(puzzle,2)!==1)uniq=false;
+    for(let i=0;i<81;i++)if(puzzle[i]!==0&&puzzle[i]!==solution[i])subset=false;
+  }
+  ck('generated-unique',uniq);
+  ck('clues-are-subset',subset);
+  ck('deterministic-by-seed',detState);
+  return done();
+}
+if(typeof window!=='undefined'){window.runSudokuTests=runSudokuTests;SELFTESTS.push(runSudokuTests);}
+
+registerGame({
+  id:'sudoku', emoji:'🧩', title:'ナンプレ',
+  desc:'すう字を 1〜9 うめる 日替わりパズル！',
+  color:'#a9c7f0', duration:null, noDaily:true,
+  goal0:'🧩 まずは 1もん といてみよう！',
+  hint(c,mx){return 'その行・列・ブロックに 入る数字から しぼろう';},
+  howto:[
+    ['🧩','たて・よこ・3×3ブロックに 1〜9を 1こずつ'],
+    ['👆','マスを えらんで すう字ボタンで 入力'],
+    ['✎','「メモ」ONで 候補数字を 小さく メモできる'],
+    ['👁','「ミス」ONで まちがいマスを 赤く 表示(任意)'],
+    ['📅','日替わりは「ふつう」・1日1回が ほんばん。れんしゅうは 任意なんいど'],
+  ],
+  create(ctx){
+    const A=ctx.audio;
+    const CELL=40,BX0=30,BY0=132;                      // 盤: x30..390 / y132..492
+    const cx=c=>BX0+c*CELL, cy=r=>BY0+r*CELL;
+    const DIFF_TARGET={easy:45,normal:33,hard:17};     // 残す手がかりの目標(hard=17→取れるだけ取る)
+    const DIFF_LABEL={daily:'ふつう',easy:'かんたん',normal:'ふつう',hard:'むずかしい'};
+    const dayKey=todayDateKey();
+    const dayNum=parseInt(dayKey.replace(/-/g,''),10);
+    let dailyDone=!!store.get('pgp2_sd_done_'+dayKey,'');
+    const parts=new Particles();
+    const sdMenuBtns={daily:{x:30,y:150,w:360,h:60},
+      easy:{x:30,y:280,w:112,h:56},normal:{x:154,y:280,w:112,h:56},hard:{x:278,y:280,w:112,h:56}};
+    const sdPad=[];for(let d=1;d<=9;d++)sdPad.push({x:14+(d-1)*44,y:500,w:40,h:46,d});
+    const sdCtrl={memo:{x:12,y:558,w:92,h:44},erase:{x:112,y:558,w:92,h:44},
+      mistake:{x:212,y:558,w:92,h:44},menu:{x:312,y:558,w:96,h:44}};
+
+    let state='menu',curMode='';
+    let board=new Array(81).fill(0),fixed=new Array(81).fill(0),notes=new Array(81).fill(0),solution=new Array(81).fill(0);
+    let sel=-1,memoMode=false,showMistakes=false,timer=0,running=false,mistakeCount=0,endInfo=null;
+
+    function sdGetStreak(){return getInt('pgp2_sd_streak',0);}
+    function sdUpdateStreak(){
+      const y=new Date(Date.now()+9*3600*1000-86400000).toISOString().slice(0,10); // 前日(JST)
+      let s=getInt('pgp2_sd_streak',0);
+      const last=store.get('pgp2_sd_lastday','');
+      s=(last===y)?s+1:1;
+      store.set('pgp2_sd_streak',String(s));store.set('pgp2_sd_lastday',dayKey);
+      store.set('pgp2_sd_maxstreak',String(Math.max(getInt('pgp2_sd_maxstreak',0),s)));
+      return s;
+    }
+    function startPuzzle(mode){
+      curMode=mode;
+      let rng,diffKey;
+      if(mode==='daily'){rng=mulberry32(dayNum);diffKey='normal';}
+      else{rng=mulberry32((Math.floor(Math.random()*2147483647))|0);diffKey=mode;}
+      const p=sdMakePuzzle(rng,DIFF_TARGET[diffKey]);
+      solution=p.solution;board=p.puzzle.slice();fixed=p.puzzle.map(v=>v!==0?1:0);
+      notes=new Array(81).fill(0);
+      sel=-1;memoMode=false;showMistakes=false;timer=0;mistakeCount=0;endInfo=null;running=true;state='play';
+      A.pop();
+    }
+    function countOf(d){let n=0;for(let i=0;i<81;i++)if(board[i]===d)n++;return n;}
+    function eraseSel(){if(sel>=0&&!fixed[sel]){board[sel]=0;notes[sel]=0;A.tone({f:300,dur:.03,vol:.06});}}
+    function placeNum(d){
+      if(sel<0||fixed[sel])return;
+      if(memoMode){if(board[sel]!==0)return;notes[sel]^=(1<<d);A.tone({f:480,dur:.02,vol:.05});return;}
+      if(d!==solution[sel])mistakeCount++;
+      board[sel]=d;notes[sel]=0;
+      const r=(sel/9)|0,c=sel%9;                       // ペアマスのメモから同じ数字を掃除
+      for(let k=0;k<9;k++){if(board[r*9+k]===0)notes[r*9+k]&=~(1<<d);if(board[k*9+c]===0)notes[k*9+c]&=~(1<<d);}
+      const br=((r/3)|0)*3,bc=((c/3)|0)*3;
+      for(let rr2=0;rr2<3;rr2++)for(let cc2=0;cc2<3;cc2++){const bi=(br+rr2)*9+(bc+cc2);if(board[bi]===0)notes[bi]&=~(1<<d);}
+      A.pop();
+      for(let i=0;i<81;i++)if(board[i]!==solution[i])return;
+      onSolved();
+    }
+    function onSolved(){
+      if(state!=='play')return;
+      state='done';running=false;
+      const sec=timer,clock=pgFmtClock(sec);
+      A.record();parts.burst(W/2,300,22,{shape:'star',col:'#7cf29c',grav:150});
+      const bkey='pgp2_sd_bt_'+curMode,prev=getInt(bkey,0),isPB=(prev===0||sec<prev);
+      if(isPB)store.set(bkey,String(Math.round(sec)));
+      let streakLine='';
+      if(curMode==='daily'){store.set('pgp2_sd_done_'+dayKey,JSON.stringify({t:Math.round(sec)}));dailyDone=true;
+        streakLine=' 🔥'+sdUpdateStreak();}
+      ctx.setScore(pgTimeScore(sec)); // 速いほど高得点でランキング送信
+      const stats=[['⏱ タイム',clock],['🧩 なんいど',DIFF_LABEL[curMode]],['✋ ミス',String(mistakeCount)]];
+      if(isPB)stats.push(['🏅 じこベスト','こうしん！ '+clock]);else if(prev>0)stats.push(['🏅 じこベスト',pgFmtClock(prev)]);
+      if(curMode==='daily')stats.push(['🔥 ストリーク',sdGetStreak()+'日 れんぞく']);
+      const label=curMode==='daily'?dayKey:'れんしゅう';
+      const share=`【プチゲー★パーク】ナンプレ ${label} ${DIFF_LABEL[curMode]}\n⏱${clock} ミス${mistakeCount}${streakLine}\n#プチゲーパーク`;
+      endInfo={stats,share};
+      ctx.finishGame({banner:'クリア！ ⏱'+clock});
+    }
+    function cellRect(g,r,c){g.fillRect(cx(c),cy(r),CELL,CELL);}
+    function drawMenu(g){
+      g.fillStyle='#f4f6fb';g.fillRect(0,0,W,H);
+      outlinedText(g,'🧩 ナンプレ',W/2,70,28,'#2e3a66','#fff',3);
+      outlinedText(g,'すう字を 1〜9 ならべる 日替わりパズル',W/2,100,13,'#5a6690','#fff',2);
+      const db=sdMenuBtns.daily;
+      drawBtn(g,db,dailyDone?'✓ 今日の日替わり クリア済み':'📅 今日の日替わり（ふつう）',dailyDone?'#9aa0b8':'#f0a03c',dailyDone,19);
+      outlinedText(g,dailyDone?('また あした！ 🔥'+sdGetStreak()+'れんぞく'):(dayKey+'　🔥'+sdGetStreak()+'れんぞく'),W/2,db.y+db.h+16,12,'#7a6a3a','#fff',2);
+      outlinedText(g,'れんしゅう（記録なし・任意なんいど）',W/2,sdMenuBtns.easy.y-16,13,'#5a6690','#fff',2);
+      drawBtn(g,sdMenuBtns.easy,'かんたん','#5bb85b',false,17);
+      drawBtn(g,sdMenuBtns.normal,'ふつう','#4a90d9',false,17);
+      drawBtn(g,sdMenuBtns.hard,'むずかしい','#d9534f',false,16);
+      const by=sdMenuBtns.hard.y+sdMenuBtns.hard.h+30;
+      outlinedText(g,'⏱ じこベスト',W/2,by,14,'#2e3a66','#fff',2);
+      [['日替わり','daily'],['かんたん','easy'],['ふつう','normal'],['むずかしい','hard']].forEach((b,i)=>{
+        const t=getInt('pgp2_sd_bt_'+b[1],0);
+        outlinedText(g,b[0]+'： '+(t>0?pgFmtClock(t):'--:--'),W/2,by+26+i*22,13,'#4a5480','#fff',1);
+      });
+      parts.draw(g);
+    }
+    function drawPlay(g){
+      g.fillStyle='#f4f6fb';g.fillRect(0,0,W,H);
+      outlinedText(g,'🧩 ナンプレ（'+DIFF_LABEL[curMode]+'）',W/2,58,20,'#2e3a66','#fff',3);
+      g.fillStyle='#fff';rr(g,BX0-3,BY0-3,CELL*9+6,CELL*9+6,8);g.fill();
+      if(sel>=0){
+        const sr=(sel/9)|0,sc=sel%9,sv=board[sel];
+        g.fillStyle='#eaf1ff';
+        for(let k=0;k<9;k++){cellRect(g,sr,k);cellRect(g,k,sc);}
+        const br=((sr/3)|0)*3,bc=((sc/3)|0)*3;
+        for(let r=0;r<3;r++)for(let c=0;c<3;c++)cellRect(g,br+r,bc+c);
+        if(sv>0){g.fillStyle='#c3dbff';for(let i=0;i<81;i++)if(board[i]===sv)cellRect(g,(i/9)|0,i%9);}
+        g.fillStyle='#9ec3ff';cellRect(g,sr,sc);
+      }
+      for(let k=0;k<=9;k++){                            // 罫線(3ごとに太線)
+        const thick=(k%3===0);g.strokeStyle=thick?'#2a2f4d':'#ccd2e4';g.lineWidth=thick?2.4:1;
+        g.beginPath();g.moveTo(BX0+k*CELL,BY0);g.lineTo(BX0+k*CELL,BY0+9*CELL);g.stroke();
+        g.beginPath();g.moveTo(BX0,BY0+k*CELL);g.lineTo(BX0+9*CELL,BY0+k*CELL);g.stroke();
+      }
+      for(let i=0;i<81;i++){
+        const r=(i/9)|0,c=i%9,v=board[i];
+        if(v>0){
+          let col='#1a2140';
+          if(!fixed[i]){col=(showMistakes&&v!==solution[i])?'#e23b3b':'#2a6cff';}
+          outlinedText(g,String(v),cx(c)+CELL/2,cy(r)+CELL/2+1,26,col,'rgba(255,255,255,.6)',2);
+        }else if(notes[i]){
+          for(let d=1;d<=9;d++)if(notes[i]&(1<<d)){const nr=((d-1)/3)|0,nc=(d-1)%3;
+            outlinedText(g,String(d),cx(c)+9+nc*12,cy(r)+10+nr*12,10,'#8892b5','rgba(255,255,255,.5)',1);}
+        }
+      }
+      for(const b of sdPad){const placed=countOf(b.d),full=placed>=9;
+        drawBtn(g,b,String(b.d),full?'#9aa0b8':'#4a5480',full,22);
+        if(!full)outlinedText(g,String(9-placed),b.x+b.w-8,b.y+9,10,'#dfe6ff','rgba(0,0,0,.3)',1);}
+      drawBtn(g,sdCtrl.memo,memoMode?'✎メモON':'✎メモ',memoMode?'#f0a03c':'#6b7398',false,15);
+      drawBtn(g,sdCtrl.erase,'⌫けす','#6b7398',(sel<0||fixed[sel]||board[sel]===0),15);
+      drawBtn(g,sdCtrl.mistake,showMistakes?'👁ミスON':'👁ミス',showMistakes?'#d9534f':'#6b7398',false,15);
+      drawBtn(g,sdCtrl.menu,'☰もどる','#6b7398',false,15);
+      outlinedText(g,'マスをえらんで 数字ボタン / キーボード1〜9 でも入力',W/2,626,12,'#7a83a8','#fff',1);
+      parts.draw(g);
+    }
+    return {
+      update(dt){if(state==='play'&&running)timer+=dt;parts.update(dt);},
+      draw(g){state==='menu'?drawMenu(g):drawPlay(g);},
+      finish(){return endInfo||{};},
+      hudInfo(){return state==='play'?('⏱'+pgFmtClock(timer)):'🧩';},
+      onUp(x,y,info){
+        if(info&&info.flicked)return;
+        if(state==='menu'){
+          if(hitBtn(sdMenuBtns.daily,x,y)){if(!dailyDone)startPuzzle('daily');return;}
+          if(hitBtn(sdMenuBtns.easy,x,y)){startPuzzle('easy');return;}
+          if(hitBtn(sdMenuBtns.normal,x,y)){startPuzzle('normal');return;}
+          if(hitBtn(sdMenuBtns.hard,x,y)){startPuzzle('hard');return;}
+          return;
+        }
+        if(state!=='play')return;
+        if(hitBtn(sdCtrl.memo,x,y)){memoMode=!memoMode;A.tone({f:520,dur:.03,vol:.06});return;}
+        if(hitBtn(sdCtrl.erase,x,y)){eraseSel();return;}
+        if(hitBtn(sdCtrl.mistake,x,y)){showMistakes=!showMistakes;A.tone({f:560,dur:.03,vol:.06});return;}
+        if(hitBtn(sdCtrl.menu,x,y)){state='menu';running=false;A.pop();return;}
+        for(const b of sdPad)if(hitBtn(b,x,y)){placeNum(b.d);return;}
+        if(x>=BX0&&x<BX0+9*CELL&&y>=BY0&&y<BY0+9*CELL){
+          const c=((x-BX0)/CELL)|0,r=((y-BY0)/CELL)|0;sel=r*9+c;A.tone({f:440,dur:.02,vol:.04});
+        }
+      },
+      onKey(code,down){
+        if(!down||state!=='play')return;
+        if(/^Digit[1-9]$/.test(code)){placeNum(+code.slice(5));return;}
+        if(/^Numpad[1-9]$/.test(code)){placeNum(+code.slice(6));return;}
+        if(code==='Backspace'||code==='Delete'||code==='Digit0'||code==='Numpad0'){eraseSel();return;}
+        if(code==='KeyM'){memoMode=!memoMode;return;}
+        if(sel<0){sel=40;return;}
+        if(code==='ArrowLeft'&&sel%9>0)sel--;
+        else if(code==='ArrowRight'&&sel%9<8)sel++;
+        else if(code==='ArrowUp'&&sel>=9)sel-=9;
+        else if(code==='ArrowDown'&&sel<72)sel+=9;
+      },
+    };
+  }
+});
+
+/* =========================================================================
+   🚩 マインスイーパー — 3サイズ(9×9/10・12×12/24・16×16/48)＋日替わりチャレンジ。
+   初手安全保証: 通常は初タップ後に地雷を配置(タップ周囲8マスに地雷なし)。日替わりは
+   「盤面固定・1日1回」なので中央3×3を安全にした固定盤を作り、開始時に中央を自動開放して
+   公平な初手を保証。連鎖開放・旗(長押し/右クリック/🚩ボタン)・タイマー。クリアタイムでランキング。
+   コア(msNeighbors/msPlaceMines/msCounts)は DOM非依存の純ロジックで ?selftest 対象。
+   ========================================================================= */
+/* __MINES_CORE_START__ (マインスイーパー・コア: 地雷配置と数字計算。DOM非依存/純ロジック) */
+function msNeighbors(i,W,H){
+  const r=(i/W)|0,c=i%W,out=[];
+  for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
+    if(!dr&&!dc)continue;const nr=r+dr,nc=c+dc;
+    if(nr>=0&&nr<H&&nc>=0&&nc<W)out.push(nr*W+nc);
+  }
+  return out;
+}
+function msPlaceMines(W,H,mines,safe,rng){ // safe=地雷禁止マスの配列。戻り値=地雷indexのSet
+  const safeSet=new Set(safe),pool=[];
+  for(let i=0;i<W*H;i++)if(!safeSet.has(i))pool.push(i);
+  const m=Math.min(mines,pool.length);
+  for(let k=0;k<m;k++){const j=k+((rng()*(pool.length-k))|0);const t=pool[k];pool[k]=pool[j];pool[j]=t;}
+  return new Set(pool.slice(0,m));
+}
+function msCounts(mineSet,W,H){ // -1=地雷 / それ以外=周囲8マスの地雷数
+  const cnt=new Array(W*H).fill(0);
+  for(let i=0;i<W*H;i++){
+    if(mineSet.has(i)){cnt[i]=-1;continue;}
+    let n=0;for(const nb of msNeighbors(i,W,H))if(mineSet.has(nb))n++;cnt[i]=n;
+  }
+  return cnt;
+}
+/* __MINES_CORE_END__ */
+function runMinesTests(){
+  const {ck,done}=makeTest('mines');
+  const W=9,H=9,M=10,rng=mulberry32(123);
+  const safe=[40].concat(msNeighbors(40,W,H));
+  const mines=msPlaceMines(W,H,M,safe,rng);
+  ck('mine-count',mines.size===M);
+  ck('first-tap-safe',safe.every(s=>!mines.has(s)));
+  const cnt=msCounts(mines,W,H);
+  let okc=true;for(let i=0;i<W*H;i++){if(mines.has(i)){if(cnt[i]!==-1)okc=false;continue;}
+    let n=0;for(const nb of msNeighbors(i,W,H))if(mines.has(nb))n++;if(cnt[i]!==n)okc=false;}
+  ck('counts-correct',okc);
+  ck('neighbors-corner',msNeighbors(0,W,H).length===3);
+  ck('neighbors-edge',msNeighbors(4,W,H).length===5);
+  ck('neighbors-center',msNeighbors(40,W,H).length===8);
+  ck('deterministic',(()=>{const a=[...msPlaceMines(W,H,M,safe,mulberry32(9))].sort((p,q)=>p-q),
+    b=[...msPlaceMines(W,H,M,safe,mulberry32(9))].sort((p,q)=>p-q);return a.join()===b.join();})());
+  return done();
+}
+if(typeof window!=='undefined'){window.runMinesTests=runMinesTests;SELFTESTS.push(runMinesTests);}
+
+registerGame({
+  id:'mines', emoji:'🚩', title:'マインスイーパー',
+  desc:'じらいを さけて 全マスあけ！タイムアタック',
+  color:'#b8c6d9', duration:null, noDaily:true, preventContextMenu:true,
+  goal0:'🚩 まずは 1マス あけてみよう！',
+  hint(c,mx){return 'かどや へりから ひらくと つながって あきやすい';},
+  howto:[
+    ['👆','マスを タップ で ひらく（さいしょは あんぜん）'],
+    ['🔢','数字は まわり8マスの じらいの かず'],
+    ['🚩','ながおし / 右クリック / 🚩ボタン で はた を たてる'],
+    ['💣','じらいを あけたら ゲームオーバー'],
+    ['📅','日替わりチャレンジは 盤面おなじ・1日1回'],
+  ],
+  create(ctx){
+    const A=ctx.audio;
+    const SIZES=[{key:'s',n:9,mines:10,label:'9×9',sub:'じらい10'},
+                 {key:'m',n:12,mines:24,label:'12×12',sub:'じらい24'},
+                 {key:'l',n:16,mines:48,label:'16×16',sub:'じらい48'}];
+    const NUMCOL=['','#1e63d6','#1f8a3b','#d6301e','#122a7a','#7a1220','#127a7a','#1a1a1a','#666'];
+    const dayKey=todayDateKey();
+    const dayNum=parseInt(dayKey.replace(/-/g,''),10);
+    const dailySize=SIZES[1];                          // 日替わりは 12×12/24
+    let dailyDone=!!store.get('pgp2_ms_done_'+dayKey,'');
+    const parts=new Particles();
+    const msMenuBtns=[{x:30,y:150,w:360,h:60},{x:30,y:222,w:360,h:60},{x:30,y:294,w:360,h:60},{x:30,y:380,w:360,h:60}];
+    const msCtrl={flag:{x:12,y:610,w:124,h:46},reset:{x:148,y:610,w:124,h:46},menu:{x:284,y:610,w:124,h:46}};
+
+    let state='menu',N=9,MINES=10,cell=44,bx0=0,by0=150,isDaily=false,sizeKey='s';
+    let mineSet=new Set(),count=[],revealed=[],flagged=[],minesPlaced=false;
+    let revealCount=0,flagCount=0,timer=0,running=false,flagMode=false,lost=false,won=false,hitMine=-1,endInfo=null;
+
+    function layout(){cell=Math.floor(396/N);bx0=Math.floor((W-cell*N)/2);by0=150;}
+    function ensureMines(firstIdx){
+      if(minesPlaced)return;
+      const safe=[firstIdx].concat(msNeighbors(firstIdx,N,N));
+      mineSet=msPlaceMines(N,N,MINES,safe,mulberry32((Math.floor(Math.random()*2147483647))|0));
+      count=msCounts(mineSet,N,N);minesPlaced=true;
+    }
+    function reveal(i){
+      if(revealed[i]||flagged[i])return;
+      const stack=[i];
+      while(stack.length){
+        const k=stack.pop();
+        if(revealed[k]||flagged[k])continue;
+        revealed[k]=true;revealCount++;
+        if(mineSet.has(k)){hitMine=k;loseGame();return;}   // 直撃(floodは0マス経由のみ=地雷に触れない)
+        if(count[k]===0)for(const nb of msNeighbors(k,N,N))if(!revealed[nb]&&!flagged[nb])stack.push(nb);
+      }
+      checkWin();
+    }
+    function toggleFlag(i){
+      if(revealed[i]||state!=='play'||lost||won)return;
+      flagged[i]=!flagged[i];flagCount+=flagged[i]?1:-1;
+      if(!running)running=true;
+      A.tone({f:flagged[i]?620:360,dur:.03,vol:.06});
+    }
+    function chord(i){
+      if(!revealed[i]||count[i]<=0)return;
+      const nbs=msNeighbors(i,N,N);let f=0;
+      for(const nb of nbs)if(flagged[nb])f++;
+      if(f!==count[i])return;
+      for(const nb of nbs)if(!flagged[nb]&&!revealed[nb]){reveal(nb);if(lost)return;}
+    }
+    function tapCell(i){
+      if(state!=='play'||lost||won||flagged[i])return;
+      if(!running)running=true;
+      if(revealed[i]){chord(i);return;}
+      ensureMines(i);reveal(i);
+    }
+    function loseGame(){
+      lost=true;state='done';running=false;A.tone({f:200,dur:.5,vol:.18});
+      const szl=isDaily?(dailySize.label+' 日替わり'):((SIZES.find(s=>s.key===sizeKey)||{}).label||'');
+      const stats=[['💣 けっか','ざんねん…'],['⏱ タイム',pgFmtClock(timer)],['🚩 サイズ',szl]];
+      endInfo={stats,share:`【プチゲー★パーク】マインスイーパー ${isDaily?dayKey+' 日替わり':szl} は じらいでダウン💣 また ちょうせん！ #プチゲーパーク`};
+      ctx.finishGame({banner:'💥 ドカン！ゲームオーバー'});
+    }
+    function checkWin(){
+      if(won||lost)return;
+      if(revealCount!==N*N-MINES)return;
+      won=true;state='done';running=false;
+      const sec=timer,clock=pgFmtClock(sec);
+      A.record();parts.burst(W/2,300,22,{shape:'star',col:'#7cf29c',grav:150});
+      for(let k=0;k<N*N;k++)if(mineSet.has(k)&&!flagged[k]){flagged[k]=true;flagCount++;}
+      const szl=isDaily?(dailySize.label+' 日替わり'):((SIZES.find(s=>s.key===sizeKey)||{}).label||'');
+      const bkey='pgp2_ms_bt_'+sizeKey,prev=getInt(bkey,0),isPB=(prev===0||sec<prev);
+      if(isPB)store.set(bkey,String(Math.round(sec)));
+      if(isDaily){store.set('pgp2_ms_done_'+dayKey,JSON.stringify({t:Math.round(sec)}));dailyDone=true;}
+      ctx.setScore(pgTimeScore(sec));
+      const stats=[['⏱ タイム',clock],['🚩 サイズ',szl]];
+      if(isPB)stats.push(['🏅 じこベスト','こうしん！ '+clock]);else if(prev>0)stats.push(['🏅 じこベスト',pgFmtClock(prev)]);
+      endInfo={stats,share:`【プチゲー★パーク】マインスイーパー ${szl} クリア！⏱${clock} #プチゲーパーク`};
+      ctx.finishGame({banner:'クリア！ ⏱'+clock});
+    }
+    function startGame(size,daily){
+      N=size.n;MINES=size.mines;isDaily=!!daily;sizeKey=daily?'daily':size.key;
+      layout();
+      mineSet=new Set();count=new Array(N*N).fill(0);revealed=new Array(N*N).fill(false);flagged=new Array(N*N).fill(false);
+      revealCount=0;flagCount=0;timer=0;running=false;flagMode=false;lost=false;won=false;hitMine=-1;endInfo=null;minesPlaced=false;
+      if(daily){                                        // 固定盤(中央3×3安全)を作り中央を自動開放
+        const center=((N/2)|0)*N+((N/2)|0),safe=[center].concat(msNeighbors(center,N,N));
+        mineSet=msPlaceMines(N,N,MINES,safe,mulberry32(dayNum));count=msCounts(mineSet,N,N);minesPlaced=true;
+        reveal(center);running=false;                   // タイマーは最初のプレイヤー操作から
+      }
+      state='play';A.pop();
+    }
+    function resetGame(){isDaily?startGame(dailySize,true):startGame(SIZES.find(s=>s.key===sizeKey),false);}
+    function drawBoard(g){
+      for(let i=0;i<N*N;i++){
+        const r=(i/N)|0,c=i%N,x=bx0+c*cell,y=by0+r*cell,p=1;
+        if(revealed[i]){
+          g.fillStyle=mineSet.has(i)?'#e57373':'#e9edf3';rr(g,x+p,y+p,cell-2*p,cell-2*p,4);g.fill();
+          if(mineSet.has(i))emojiText(g,'💣',x+cell/2,y+cell/2,cell*0.52);
+          else if(count[i]>0)outlinedText(g,String(count[i]),x+cell/2,y+cell/2+1,cell*0.5,NUMCOL[count[i]]||'#222','rgba(255,255,255,.7)',2);
+        }else{
+          g.fillStyle=flagMode?'#c9d4e6':'#b9c6da';rr(g,x+p,y+p,cell-2*p,cell-2*p,5);g.fill();
+          g.fillStyle='rgba(255,255,255,.35)';rr(g,x+p+2,y+p+2,cell-2*p-4,(cell-2*p)*0.38,4);g.fill();
+          if(flagged[i])emojiText(g,'🚩',x+cell/2,y+cell/2,cell*0.5);
+          else if(lost&&mineSet.has(i))emojiText(g,'💣',x+cell/2,y+cell/2,cell*0.52);
+        }
+        if(lost&&flagged[i]&&!mineSet.has(i))emojiText(g,'❌',x+cell/2,y+cell/2,cell*0.5); // 誤爆した旗
+        if(i===hitMine){g.save();g.globalAlpha=.45;g.fillStyle='#ff3b3b';rr(g,x+p,y+p,cell-2*p,cell-2*p,4);g.fill();g.restore();}
+      }
+    }
+    function drawMenu(g){
+      g.fillStyle='#eef2f8';g.fillRect(0,0,W,H);
+      outlinedText(g,'🚩 マインスイーパー',W/2,70,25,'#2b3a52','#fff',3);
+      outlinedText(g,'じらいを さけて 全マスあけ！タイムアタック',W/2,100,13,'#556685','#fff',2);
+      SIZES.forEach((s,i)=>{const b=msMenuBtns[i];
+        drawBtn(g,b,s.label+'（'+s.sub+'）','#4a7bd0',false,19);
+        const t=getInt('pgp2_ms_bt_'+s.key,0);
+        outlinedText(g,'ベスト '+(t>0?pgFmtClock(t):'--:--'),b.x+b.w-58,b.y+b.h/2+1,12,'#eaf1ff','rgba(0,0,0,.3)',1);});
+      const db=msMenuBtns[3];
+      drawBtn(g,db,dailyDone?'✓ 日替わりチャレンジ クリア済み':'📅 日替わりチャレンジ（'+dailySize.label+'）',dailyDone?'#9aa0b8':'#f0a03c',dailyDone,17);
+      const dt=getInt('pgp2_ms_bt_daily',0);
+      outlinedText(g,dailyDone?('また あした！ 日替わりベスト '+(dt>0?pgFmtClock(dt):'--:--')):(dayKey+'　盤面は みんな おなじ・1日1回'),W/2,db.y+db.h+16,12,'#7a6a3a','#fff',2);
+      parts.draw(g);
+    }
+    function drawPlay(g){
+      g.fillStyle='#eef2f8';g.fillRect(0,0,W,H);
+      outlinedText(g,(isDaily?'📅日替わり ':'')+'💣 '+Math.max(0,MINES-flagCount),W/2,72,22,'#2b3a52','#fff',3);
+      outlinedText(g,'⏱ '+pgFmtClock(timer)+(flagMode?'　🚩はたモード':''),W/2,104,14,flagMode?'#d9534f':'#556685','#fff',2);
+      g.fillStyle='#8595ad';rr(g,bx0-4,by0-4,cell*N+8,cell*N+8,8);g.fill();
+      drawBoard(g);
+      drawBtn(g,msCtrl.flag,flagMode?'🚩 はた ON':'🚩 はた',flagMode?'#f0a03c':'#6b7398',false,15);
+      drawBtn(g,msCtrl.reset,'🔄 リセット','#6b7398',false,15);
+      drawBtn(g,msCtrl.menu,'☰ もどる','#6b7398',false,15);
+      parts.draw(g);
+    }
+    return {
+      update(dt){if(state==='play'&&running)timer+=dt;parts.update(dt);},
+      draw(g){state==='menu'?drawMenu(g):drawPlay(g);},
+      finish(){return endInfo||{};},
+      hudInfo(){return state==='play'?('⏱'+pgFmtClock(timer)):'🚩';},
+      onUp(x,y,info){
+        if(info&&info.flicked)return;
+        if(state==='menu'){
+          for(let i=0;i<3;i++)if(hitBtn(msMenuBtns[i],x,y)){startGame(SIZES[i],false);return;}
+          if(hitBtn(msMenuBtns[3],x,y)){if(!dailyDone)startGame(dailySize,true);return;}
+          return;
+        }
+        if(state!=='play')return;
+        if(hitBtn(msCtrl.flag,x,y)){flagMode=!flagMode;A.tone({f:520,dur:.03,vol:.06});return;}
+        if(hitBtn(msCtrl.reset,x,y)){resetGame();return;}
+        if(hitBtn(msCtrl.menu,x,y)){state='menu';A.pop();return;}
+        if(x>=bx0&&x<bx0+cell*N&&y>=by0&&y<by0+cell*N){
+          const c=((x-bx0)/cell)|0,r=((y-by0)/cell)|0,idx=r*N+c;
+          if((info&&info.button===2)||(info&&info.heldMs>=350))toggleFlag(idx);
+          else tapCell(idx);
+        }
+      },
+      onKey(code,down){
+        if(!down||state!=='play')return;
+        if(code==='KeyF'){flagMode=!flagMode;A.tone({f:520,dur:.03,vol:.06});}
+      },
     };
   }
 });
