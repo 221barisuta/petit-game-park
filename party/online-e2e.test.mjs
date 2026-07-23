@@ -33,6 +33,9 @@ const src = html.slice(s1, html.indexOf('\n}', e1) + 2);
 // オセロ盤ロジック (合法手計算用。othello-parity.test.mjs と同じアンカー)
 const s2 = html.indexOf('const OTH_N=8;');
 const othSrc = html.slice(s2, html.indexOf('// --- #9', s2));
+// コネクトフォー コア (重力・4連。c4-parity.test.mjs と同じアンカー)
+const s3 = html.indexOf('/* C4-CORE-BEGIN');
+const c4Src = html.slice(s3, html.indexOf('/* C4-CORE-END */', s3));
 
 let pass = 0, fail = 0;
 const ck = (name, cond) => { cond ? pass++ : fail++; console.log((cond ? 'ok   ' : 'FAIL ') + name); };
@@ -61,15 +64,15 @@ function makeEnv() { // クライアント1人分の隔離スコープ (store/�
       optIn: () => false, setOptIn() {} },
   };
   const keys = Object.keys(env);
-  const fn = new Function(...keys, src + '\n' + othSrc +
-    '\nreturn {GomokuNet,OthelloNet,TicTacToeNet,makeVsOnlineUI,getFlips,getValidMoves};');
+  const fn = new Function(...keys, src + '\n' + othSrc + '\n' + c4Src +
+    '\nreturn {GomokuNet,OthelloNet,TicTacToeNet,Connect4Net,makeVsOnlineUI,getFlips,getValidMoves,c4Drop,c4CheckWin};');
   return { api: fn(...keys.map(k => env[k])), env };
 }
 
 const BL = { x: 0, y: 900, w: 10, h: 10 }, BR = { x: 20, y: 900, w: 10, h: 10 }, BX = { x: 40, y: 900, w: 10, h: 10 };
-function mkClient(kind) { // kind: 'gomoku' | 'othello' | 'ox'
+function mkClient(kind) { // kind: 'gomoku' | 'othello' | 'ox' | 'connect4'
   const { api, env } = makeEnv();
-  const net = kind === 'gomoku' ? api.GomokuNet : kind === 'ox' ? api.TicTacToeNet : api.OthelloNet;
+  const net = kind === 'gomoku' ? api.GomokuNet : kind === 'ox' ? api.TicTacToeNet : kind === 'connect4' ? api.Connect4Net : api.OthelloNet;
   const c = { api, env, net, board: [], result: null, results: 0, newGames: 0, turnSeat: '' };
   const base = {
     net, btnL: BL, btnR: BR, btnExit: BX,
@@ -79,16 +82,23 @@ function mkClient(kind) { // kind: 'gomoku' | 'othello' | 'ox'
     applyState(ng) { c.board = ng.board.slice(); c.turnSeat = ng.turn; c.result = ng.result || null; },
     hintIdx: () => -1, onHint() {},
   };
-  // 五目/三目は同じ「置くだけ」cfg (undoNeedsOppTurn:true / 空マス合法)。オセロだけ反転判定。
-  c.OL = api.makeVsOnlineUI((kind === 'gomoku' || kind === 'ox') ? {
-    ...base, exitSize: 15, hintCol: '#3a9bdc', undoNeedsOppTurn: true,
-    snapOf: ng => ng.turn + '/' + ng.last + '/' + ng.gameNo,
-    canPut: (ng, cc) => ng.board[cc] === null,
-  } : {
-    ...base, hintCol: '#f2a541',
-    snapOf: ng => ng.turn + '/' + ng.last + '/' + ng.gameNo + '/' + (ng.pass || ''),
-    canPut: (ng, cc, seat) => ng.board[cc] === null && api.getFlips(ng.board, cc, seat).length > 0,
-  });
+  // 五目/三目は同じ「置くだけ」cfg (undoNeedsOppTurn:true / 空マス合法)。
+  // コネクトフォーは着地index+重力検証。オセロだけ反転判定。
+  c.OL = api.makeVsOnlineUI(
+    (kind === 'gomoku' || kind === 'ox') ? {
+      ...base, exitSize: 15, hintCol: '#3a9bdc', undoNeedsOppTurn: true,
+      snapOf: ng => ng.turn + '/' + ng.last + '/' + ng.gameNo,
+      canPut: (ng, cc) => ng.board[cc] === null,
+    } : kind === 'connect4' ? {
+      ...base, hintCol: '#f2a541', undoNeedsOppTurn: true,
+      snapOf: ng => ng.turn + '/' + ng.last + '/' + ng.gameNo,
+      // 着地index(=列最下段の空き)のみ合法。重力: 最下段 or 直下が埋まっている。
+      canPut: (ng, cc) => cc >= 0 && ng.board[cc] === null && (Math.floor(cc / 7) === 5 || ng.board[cc + 7] !== null),
+    } : {
+      ...base, hintCol: '#f2a541',
+      snapOf: ng => ng.turn + '/' + ng.last + '/' + ng.gameNo + '/' + (ng.pass || ''),
+      canPut: (ng, cc, seat) => ng.board[cc] === null && api.getFlips(ng.board, cc, seat).length > 0,
+    });
   c.mirror = () => c.OL.mirror();
   c.tapCell = cc => c.OL.onTap(cc, 0);
   c.tapL = () => c.OL.onTap(5, 905); c.tapR = () => c.OL.onTap(25, 905); c.tapExit = () => c.OL.onTap(45, 905);
@@ -247,6 +257,44 @@ const code = () => 'e2e' + Math.random().toString(36).slice(2, 5); // 実行ご�
   black.tapCell(2); black.tapCell(2); // 黒 [0,1,2] で3連
   ck('ox:決着(黒勝ち)', await until(() => A.result && B.result, 6000, () => { A.mirror(); B.mirror(); }) && A.result.winner === 'black' && A.result.line.join() === '0,1,2');
   ck('ox:決着演出は各1回', A.results === 1 && B.results === 1);
+  A.net.leave(); B.net.leave();
+}
+
+// ══ コネクトフォー: 着席/重力落下ミラー/非合法(浮きマス)拒否/縦4連決着/決着演出1回 ══
+{
+  const A = mkClient('connect4'), B = mkClient('connect4');
+  const room = code();
+  A.OL.enter(); B.OL.enter();
+  A.net.connect(room); B.net.connect(room);
+  ck('c4:両者着席', await until(() => A.net.state.seat && B.net.state.seat && A.net.state.game && B.net.state.game && A.net.state.game.board.length === 42, 8000, () => { A.mirror(); B.mirror(); }));
+  const black = A.net.state.seat === 'black' ? A : B, white = A.net.state.seat === 'black' ? B : A;
+  const drop = (c, col) => api_c4Drop(c, col);
+  function api_c4Drop(c, col) { return c.api.c4Drop(c.net.state.game.board, col); }
+  // 黒が列3にドロップ → 底(index38)へ着地して相手にミラー
+  const l0 = drop(black, 3);
+  ck('c4:着地は列の底', l0 === 38);
+  black.tapCell(l0); // 仮置き
+  await new Promise(r => setTimeout(r, 250)); black.mirror(); white.mirror();
+  ck('c4:1タップでは未着手', black.board[l0] === null && black.OL.st.pending === l0);
+  black.tapCell(l0); // 確定
+  ck('c4:重力落下が相手にミラー', await until(() => white.board[38] === 'black', 6000, () => { A.mirror(); B.mirror(); }));
+  // 浮きマス(index24=列3のr3。直下31が空なので重力違反)を白が2度タップ → canPutで弾かれ着手されない
+  white.tapCell(24); white.tapCell(24);
+  await new Promise(r => setTimeout(r, 200)); A.mirror(); B.mirror();
+  ck('c4:浮きマス拒否', white.board[24] === null && white.OL.st.pending < 0);
+  // ここまでで黒が col3(38) に1手・白の番。縦4連(黒 col0=35,28,21,14)まで進める。
+  // 白は col1(36,29,22)→col2(37) を消化し どこにも4連を作らない。最後の黒 col0 で決着。
+  const seq = [[white, 1], [black, 0], [white, 1], [black, 0], [white, 1], [black, 0], [white, 2], [black, 0]];
+  for (let s = 0; s < seq.length; s++) {
+    const [cur, col] = seq[s];
+    await until(() => cur.turnSeat === cur.net.state.seat, 6000, () => { A.mirror(); B.mirror(); });
+    const land = drop(cur, col);
+    cur.tapCell(land); cur.tapCell(land);
+    await until(() => A.result || B.result || (A.net.state.game && A.net.state.game.board[land] !== null), 6000, () => { A.mirror(); B.mirror(); });
+  }
+  ck('c4:縦4連で決着(黒勝ち)', await until(() => A.result && B.result, 6000, () => { A.mirror(); B.mirror(); }) && A.result.winner === 'black' && A.result.line.length === 4);
+  ck('c4:両クライアントの盤/勝者一致', JSON.stringify(A.net.state.game.board) === JSON.stringify(B.net.state.game.board) && JSON.stringify(A.result) === JSON.stringify(B.result));
+  ck('c4:決着演出は各1回', A.results === 1 && B.results === 1);
   A.net.leave(); B.net.leave();
 }
 

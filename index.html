@@ -906,7 +906,7 @@ function registerGame(def){GAMES.push(def)}
 // メニュー分類: versus=たいせん / それ以外=ひとり (新規ゲームも type で自動振り分け)
 const soloGames=()=>GAMES.filter(g=>g.type!=='versus');
 // たいせんの表示順 (#7 まるばつ→オセロ→五目→チキン。方針: マス目が多いほど下)。未定義idは末尾。
-const VS_ORDER=['ox','othello','gomoku','chicken','daifugo'];
+const VS_ORDER=['ox','othello','gomoku','connect4','dots','hasami','chicken','daifugo'];
 const vsOrder=id=>{const i=VS_ORDER.indexOf(id);return i<0?99:i;};
 const versusGames=()=>GAMES.filter(g=>g.type==='versus').sort((a,b)=>vsOrder(a.id)-vsOrder(b.id));
 // デイリー抽選は「ひとり(非versus)」プールのみから選ぶ (versusはスコア競争にならないため除外)
@@ -3389,6 +3389,8 @@ const OthelloNet=makeOnlineNet({party:'othello',seatPrefix:'pgp2_othello_seat_',
 const DaifugoNet=makeOnlineNet({party:'daifugo',seatPrefix:'pgp2_daifugo_seat_',gameLabel:'大富豪',gameId:'daifugo'});
 // まるばつ(三目): 席色は共通契約どおり black/white。バー記号だけ ○/× に読み替え(盤の配色と一致)
 const TicTacToeNet=makeOnlineNet({party:'ox',seatPrefix:'pgp2_ox_seat_',gameLabel:'まるばつ',gameId:'ox',sym:{black:'○',white:'×'}});
+// コネクトフォー: 席色は共通契約どおり black/white。バー記号は 🔴(先手)/🟡(後手) に読み替え(盤の配色と一致)
+const Connect4Net=makeOnlineNet({party:'connect4',seatPrefix:'pgp2_c4_seat_',gameLabel:'コネクトフォー',gameId:'connect4',sym:{black:'🔴',white:'🟡'}});
 let activeNet=GomokuNet; // オンライン画面に入ったゲームの net を指す (renderOnlineBar/setupOnlineUI 共用)
 let pendingOnlineRoom=''; // ?room=CODE 自動参加用 (boot→gomoku create で消費)
 function roomLink(code,gameId){
@@ -3579,7 +3581,7 @@ function renderDaifugoBar(){ $('onlineBar').classList.add('hidden'); }
 function hideOnlineUI(){$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');}
 /* boot から1回だけ呼ぶ: オンライン入室UIのDOMハンドラを束ねる (activeNet=五目/オセロ 共用) */
 function setupOnlineUI(){
-  GomokuNet.state.onChange=renderOnlineBar;OthelloNet.state.onChange=renderOnlineBar;DaifugoNet.state.onChange=renderOnlineBar;TicTacToeNet.state.onChange=renderOnlineBar; // 各netの変化を同じバーへ
+  GomokuNet.state.onChange=renderOnlineBar;OthelloNet.state.onChange=renderOnlineBar;DaifugoNet.state.onChange=renderOnlineBar;TicTacToeNet.state.onChange=renderOnlineBar;Connect4Net.state.onChange=renderOnlineBar; // 各netの変化を同じバーへ
   const commitName=()=>{activeNet.setName($('olName').value);$('olName').value=activeNet.getName();};
   const start=code=>{commitName();activeNet.connect(code);setRoomUrl(code);
     $('onlineSetup').classList.add('hidden');$('onlineBar').classList.remove('hidden');renderOnlineBar();};
@@ -4909,6 +4911,406 @@ if(typeof window!=='undefined'){
   window.getOthelloCpuMove=getOthelloCpuMove;
   window.evalOthelloMove=evalOthelloMove;
   SELFTESTS.push(runOthelloTests,runOthelloHintTests,runOthelloCpuTests);
+}
+
+/* ============================================================
+   ゲーム: コネクトフォー (重力付き四目 / versus・ローカル2人・CPU・オンライン対戦)
+   ------------------------------------------------------------
+   盤ロジックは C4-CORE の純関数群。party/c4-core.js と verbatim 一致 (正本=この index.html)。
+   一致は party/c4-parity.test.mjs が機械検証。オンラインはサーバー権威(Connect4Net→c4-server.js)。
+   ============================================================ */
+/* C4-CORE-BEGIN (party/c4-core.js と verbatim 一致・exportを外しただけ) */
+const C4_COLS=7;
+const C4_ROWS=6;
+/* col列に石を落とした時の着地index (最下段の空きマス) を返す。列が満杯なら -1。副作用なし。 */
+function c4Drop(board,col){
+  if(col<0||col>=C4_COLS)return -1;
+  for(let r=C4_ROWS-1;r>=0;r--){const i=r*C4_COLS+col;if(board[i]===null)return i;}
+  return -1;
+}
+/* 現在おける列(満杯でない列)のindex配列を昇順で返す。副作用なし。 */
+function c4ValidCols(board){
+  const out=[];
+  for(let c=0;c<C4_COLS;c++)if(board[c]===null)out.push(c);
+  return out;
+}
+/* 縦横斜め4連を走査し {winner,line} を返す。無ければ {winner:null,line:null}。副作用なし。 */
+function c4CheckWin(board){
+  const DIRS=[[0,1],[1,0],[1,1],[1,-1]];
+  for(let r=0;r<C4_ROWS;r++)for(let c=0;c<C4_COLS;c++){
+    const v=board[r*C4_COLS+c];
+    if(!v)continue;
+    for(const [dr,dc] of DIRS){
+      const line=[r*C4_COLS+c];
+      let ok=true;
+      for(let k=1;k<4;k++){
+        const nr=r+dr*k,nc=c+dc*k;
+        if(nr<0||nr>=C4_ROWS||nc<0||nc>=C4_COLS||board[nr*C4_COLS+nc]!==v){ok=false;break;}
+        line.push(nr*C4_COLS+nc);
+      }
+      if(ok)return {winner:v,line};
+    }
+  }
+  return {winner:null,line:null};
+}
+/* 盤が満杯か。副作用なし。 */
+function c4Full(board){return board.every(c=>c!==null);}
+/* C4-CORE-END */
+
+/* ── コネクトフォー CPU: 即勝ち/即ブロック優先 + アルファベータ・ミニマックス(深さ制限) ── */
+let _c4Windows=null;
+function c4WindowsAll(){ // 4連ウィンドウ(全長さ4の直線)を一度だけ生成しキャッシュ
+  if(_c4Windows)return _c4Windows;
+  const w=[],D=[[0,1],[1,0],[1,1],[1,-1]];
+  for(let r=0;r<C4_ROWS;r++)for(let c=0;c<C4_COLS;c++)for(const [dr,dc] of D){
+    const idx=[];let ok=true;
+    for(let k=0;k<4;k++){const nr=r+dr*k,nc=c+dc*k;if(nr<0||nr>=C4_ROWS||nc<0||nc>=C4_COLS){ok=false;break;}idx.push(nr*C4_COLS+nc);}
+    if(ok)w.push(idx);
+  }
+  _c4Windows=w;return w;
+}
+const C4_ORDER=[3,2,4,1,5,0,6]; // 中央優先の列順 (アルファベータ枝刈り効率UP)
+function c4Order(cols){return C4_ORDER.filter(c=>cols.includes(c));}
+function c4Eval(board,me){ // me視点の静的評価 (ウィンドウごとの占有 + 中央重み)
+  const opp=me==='black'?'white':'black';
+  let score=0;
+  for(let r=0;r<C4_ROWS;r++)if(board[r*C4_COLS+3]===me)score+=3; // 中央列は価値高い
+  for(const win of c4WindowsAll()){
+    let m=0,o=0,e=0;
+    for(const idx of win){const v=board[idx];if(v===me)m++;else if(v===opp)o++;else e++;}
+    if(m===3&&e===1)score+=8;else if(m===2&&e===2)score+=3;
+    if(o===3&&e===1)score-=11;else if(o===2&&e===2)score-=3; // 相手の3連脅威は強めに嫌う
+  }
+  return score;
+}
+let _c4Nodes=0;
+function c4Minimax(board,depth,alpha,beta,toMove,me){ // アルファベータ (me視点スコア)
+  const w=c4CheckWin(board).winner;
+  if(w)return w===me?100000+depth:-100000-depth; // 早い勝ち/遅い負けほど良い
+  const cols=c4ValidCols(board);
+  if(!cols.length||depth===0||_c4Nodes>200000)return c4Eval(board,me);
+  const opp=toMove==='black'?'white':'black',order=c4Order(cols);
+  if(toMove===me){
+    let best=-Infinity;
+    for(const c of order){const i=c4Drop(board,c);_c4Nodes++;board[i]=toMove;
+      best=Math.max(best,c4Minimax(board,depth-1,alpha,beta,opp,me));board[i]=null;
+      alpha=Math.max(alpha,best);if(alpha>=beta)break;}
+    return best;
+  }else{
+    let best=Infinity;
+    for(const c of order){const i=c4Drop(board,c);_c4Nodes++;board[i]=toMove;
+      best=Math.min(best,c4Minimax(board,depth-1,alpha,beta,opp,me));board[i]=null;
+      beta=Math.min(beta,best);if(alpha>=beta)break;}
+    return best;
+  }
+}
+/* 現手番colorの最善列を返す (合法列が無ければ -1)。level 1..4 で深さが増す。 */
+function c4CpuMove(board,color,level){
+  const cols=c4ValidCols(board);
+  if(!cols.length)return -1;
+  const opp=color==='black'?'white':'black';
+  for(const c of cols){const i=c4Drop(board,c);board[i]=color;const win=c4CheckWin(board).winner;board[i]=null;if(win===color)return c;} // 即勝ち
+  for(const c of cols){const i=c4Drop(board,c);board[i]=opp;const win=c4CheckWin(board).winner;board[i]=null;if(win===opp)return c;} // 即ブロック
+  const depth=level>=4?7:level>=3?6:level>=2?4:2;
+  if(level<=1){ // よわい: 中央寄りだが 3割で手を散らす
+    const ord=c4Order(cols);
+    if(Math.random()<0.3)return cols[Math.floor(Math.random()*cols.length)];
+    return ord[0];
+  }
+  _c4Nodes=0;
+  let bestCol=c4Order(cols)[0],bestScore=-Infinity;
+  for(const c of c4Order(cols)){
+    const i=c4Drop(board,c);board[i]=color;
+    const sc=c4Minimax(board,depth-1,-Infinity,Infinity,opp,color);
+    board[i]=null;
+    if(sc>bestScore){bestScore=sc;bestCol=c;}
+  }
+  return bestCol;
+}
+/* 💡ヒント: 人間手番の推奨手(=level2相当CPUの列の着地index)。無ければ -1。 */
+function c4Hint(board,color){
+  const col=c4CpuMove(board,color,2);
+  return col<0?-1:c4Drop(board,col);
+}
+
+registerGame({
+  id:'connect4', emoji:'🔴', title:'コネクトフォー',
+  iconHtml:`<svg viewBox="0 0 100 100" width="80%" height="80%" style="display:block"><rect x="12" y="20" width="76" height="70" rx="10" fill="#2f6fd6" stroke="#1c4fa0" stroke-width="4"/><circle cx="31" cy="42" r="9" fill="#e5484d"/><circle cx="50" cy="42" r="9" fill="#12203a"/><circle cx="69" cy="42" r="9" fill="#f5c518"/><circle cx="31" cy="66" r="9" fill="#12203a"/><circle cx="50" cy="66" r="9" fill="#e5484d"/><circle cx="69" cy="66" r="9" fill="#12203a"/></svg>`,
+  desc:'たてよこナナメ 4つ ならべよう',
+  color:'#5b9bf0', type:'versus',
+  howto:[
+    ['👆','れつを タップ！ いしが したに おちる'],
+    ['🟡','あかと きいろで こうたいに おく'],
+    ['🏆','たて・よこ・ナナメに 4つ そろえたら かち！'],
+  ],
+  create(ctx){
+    const A=ctx.audio;
+    const DISC={black:'#e5484d',white:'#f5c518'};   // 赤=先手 / 黄=後手
+    const DSYM={black:'🔴',white:'🟡'};
+    const N=C4_COLS,M=C4_ROWS;
+    const CELL=52, BW=CELL*N, BH=CELL*M, BX=Math.round((W-BW)/2), BY=210; // 盤 (青)
+    const FBY=BY+BH+18; // ボタン上端
+    const btnL={x:59,y:FBY,w:146,h:48}, btnR={x:215,y:FBY,w:146,h:48};
+
+    let players=[{color:'black',type:'human'},{color:'white',type:'human'}];
+    let board=new Array(N*M).fill(null);
+    let turn=0,result=null,last=-1,t=0;
+    let moves=[];                 // 着手index履歴 (まった用)
+    let placedAt=-1,placeT=0;     // 着手ポップアニメ
+    let hint=-1,hintT=0;
+    let confirmSel=-1;            // 2タップ確定の選択中「着地index」(-1=未選択)
+    let lastStatSnap=null;
+    let screen='setup';
+    let cfg={ mode:['pvp','pvc','cvc'].includes(store.get('pgp2_c4_mode','pvp'))?store.get('pgp2_c4_mode','pvp'):'pvp',
+              humanFirst:store.get('pgp2_c4_first','1')!=='0',
+              level:Math.min(4,Math.max(1,+store.get('pgp2_c4_lv','2')||2)) };
+    let oniUnlocked=store.get('pgp2_c4_oni_unlocked','0')==='1';
+    let oniJustUnlocked=false;
+    let twoTapVs=store.get('pgp2_twotap_vs','1')==='1'; // 五目/オセロと共通設定
+    let cpuTimer=0;
+    const PLACE_DUR=0.18;
+
+    function center(idx){const c=idx%N,r=(idx-c)/N;return {x:BX+c*CELL+CELL/2,y:BY+r*CELL+CELL/2};}
+    function colAt(x,y){ // タップ列 (0..6)。盤のx範囲外は -1 (y は盤の少し上まで許容)
+      if(x<BX||x>=BX+BW||y<BY-CELL||y>=BY+BH)return -1;
+      const c=Math.floor((x-BX)/CELL);return (c<0||c>=N)?-1:c;
+    }
+    function cellAt(x,y){const c=colAt(x,y);return c<0?-1:c4Drop(board,c);} // 着地index (満杯列は -1)
+    function reset(){
+      board=new Array(N*M).fill(null);turn=0;result=null;last=-1;moves=[];
+      placedAt=-1;placeT=0;hint=-1;hintT=0;oniJustUnlocked=false;confirmSel=-1;
+      buildPlayers();A.pop();kickCpu();
+    }
+    function endGame(w,line){
+      result=w?{winner:w,line}:{draw:true};cpuTimer=0;
+      if(!oniUnlocked&&cfg.mode==='pvc'&&w){
+        const winnerType=players[w==='black'?0:1].type;
+        const cpu=players.find(p=>p.type==='cpu');
+        if(winnerType==='human'&&cpu&&cpu.level===3){oniUnlocked=true;oniJustUnlocked=true;store.set('pgp2_c4_oni_unlocked','1');A.coin();}
+      }
+      if(!w){banner('ひきわけ！');A.ok();vib([20,40,20]);}
+      else{banner(DSYM[w]+' の かち！');A.fever();vib([30,50,30,50,30]);confetti();}
+      if(cfg.mode!=='cvc'){
+        const human=players.find(p=>p.type==='human');
+        const youColor=human?human.color:players[0].color;
+        lastStatSnap=statsMatchSnapshot('connect4');
+        statsRecordMatch('connect4',!w?'draw':(w===youColor?'win':'lose'));
+      }
+    }
+    function place(col){ // 列に着手 (重力落下)。合法なら着地→勝敗/満局→手番送り
+      if(result)return;
+      const color=players[turn].color;
+      const idx=c4Drop(board,col);
+      if(idx<0){A.bad();vib(8);return;}
+      board[idx]=color;moves.push(idx);last=idx;placedAt=idx;placeT=PLACE_DUR;
+      hint=-1;hintT=0;confirmSel=-1;A.pop();vib(8);
+      const r=c4CheckWin(board);
+      if(r.winner)endGame(r.winner,r.line);
+      else if(c4Full(board))endGame(null,null);
+      else{turn=1-turn;kickCpu();}
+    }
+    function undoable(){
+      if(cfg.mode==='cvc'||!moves.length)return false;
+      if(cfg.mode==='pvp')return true;
+      // pvc: 履歴に人間の着手がある時のみ (人間の1手目は moves index=humanParity)
+      return moves.length>(cfg.humanFirst?0:1);
+    }
+    function undo(){
+      if(!undoable()){A.bad();return;}
+      if(result&&lastStatSnap){statsMatchRestore('connect4',lastStatSnap);lastStatSnap=null;}
+      // pvcは直前の人間着手まで(CPU応手も一緒に)戻す。pvpは1手。手番は必ず人間へ戻る(undoableが保証)。
+      const popOne=()=>{const i=moves.pop();board[i]=null;};
+      popOne();
+      if(cfg.mode==='pvc')while(moves.length&&players[moves.length%2].type==='cpu')popOne();
+      turn=moves.length%2;
+      last=moves.length?moves[moves.length-1]:-1;
+      result=null;placedAt=-1;placeT=0;hint=-1;hintT=0;confirmSel=-1;A.pop();vib(8);
+    }
+    function showHint(){
+      if(result||players[turn].type!=='human'){A.bad();return;}
+      const idx=c4Hint(board,players[turn].color);
+      if(idx>=0){hint=idx;hintT=3.2;A.coin();}else A.bad();
+    }
+    function drawDisc(g,color,c,r,pop){
+      g.save();g.translate(c.x,c.y);const s=pop==null?1:pop;g.scale(s,s);
+      g.beginPath();g.arc(0,0,r,0,TAU);g.fillStyle=DISC[color];g.fill();
+      g.lineWidth=2;g.strokeStyle='rgba(0,0,0,.22)';g.stroke();
+      g.beginPath();g.arc(-r*0.3,-r*0.3,r*0.34,0,TAU);g.fillStyle='rgba(255,255,255,.35)';g.fill();
+      g.restore();
+    }
+    function countDiscs(){let bk=0,wt=0;for(const v of board){if(v==='black')bk++;else if(v==='white')wt++;}return {bk,wt};}
+    // ── CPU/setup (オセロと同構成) ──
+    function buildPlayers(){
+      const L=cfg.level;
+      if(cfg.mode==='cvc')players=[{color:'black',type:'cpu',level:L},{color:'white',type:'cpu',level:L}];
+      else if(cfg.mode==='pvc')players=cfg.humanFirst
+        ?[{color:'black',type:'human'},{color:'white',type:'cpu',level:L}]
+        :[{color:'black',type:'cpu',level:L},{color:'white',type:'human'}];
+      else players=[{color:'black',type:'human'},{color:'white',type:'human'}];
+    }
+    function kickCpu(){cpuTimer=(screen==='play'&&!result&&players[turn].type==='cpu')?0.35+Math.random()*0.3:0;}
+    function startPlay(){
+      buildPlayers();
+      board=new Array(N*M).fill(null);turn=0;result=null;last=-1;moves=[];
+      placedAt=-1;placeT=0;hint=-1;hintT=0;oniJustUnlocked=false;confirmSel=-1;
+      screen='play';A.pop();kickCpu();
+    }
+    function setupBtns(){
+      const L=[];let y=150;
+      for(const [v,lb] of [['pvp','👥 二人で たいせん'],['pvc','🤖 CPUと たいせん'],['cvc','🤖🤖 CPUどうし']])
+        {L.push({x:50,y,w:320,h:44,kind:'mode',val:v,label:lb,active:cfg.mode===v});y+=50;}
+      L.push({x:50,y,w:320,h:44,kind:'online',label:Connect4Net.available()?'🌐 オンライン たいせん':'🌐 オンライン (じゅんびちゅう)',online:true});y+=50;
+      y+=6;
+      if(cfg.mode==='pvc'){
+        L.push({x:50,y,w:155,h:40,kind:'first',val:1,label:'あなた せんて',active:cfg.humanFirst});
+        L.push({x:215,y,w:155,h:40,kind:'first',val:0,label:'あなた ごて',active:!cfg.humanFirst});
+        y+=50;
+      }
+      if(cfg.mode!=='pvp'){
+        const LV=[[1,'よわい'],[2,'ふつう'],[3,'つよい']];
+        for(let i=0;i<3;i++){const [v,lb]=LV[i];L.push({x:50+i*80,y,w:74,h:40,kind:'level',val:v,label:lb,active:cfg.level===v});}
+        const locked=!oniUnlocked;
+        L.push({x:50+3*80,y,w:74,h:40,kind:'level',val:4,label:locked?'🔒おに':'👹おに',active:cfg.level===4&&!locked,locked});
+        L._lvY=y;y+=50;
+      }
+      L.push({x:50,y,w:320,h:40,kind:'twotap',label:'🖐 2タップ確定: '+(twoTapVs?'ON':'OFF'),active:twoTapVs});y+=48;
+      L.push({x:80,y:y+8,w:260,h:52,kind:'start',label:'▶ はじめる',start:true});
+      return L;
+    }
+    function drawSetup(g){
+      g.fillStyle='#213a63';g.fillRect(0,0,W,H);
+      outlinedText(g,'コネクトフォー',W/2,70,25,'#fff','#12233f',7);
+      outlinedText(g,oniJustUnlocked?'👹 おに 解放！':'あいてを えらぶ',W/2,110,16,oniJustUnlocked?'#ffe93d':'#cfe0ff','#12233f',4);
+      for(const b of setupBtns()){
+        const col=b.start?'#ff4d94':b.online?(Connect4Net.available()?'#4d8cff':'#6b6480'):b.active?'#39c06a':b.locked?'#3a3550':'#5a5278';
+        drawBtn(g,b,b.label,col,!!b.locked);
+      }
+      const btns=setupBtns();
+      if(!oniUnlocked&&cfg.mode!=='pvp'&&btns._lvY!=null)
+        outlinedText(g,'「つよい」に かつと 解放',W/2,btns._lvY+58,12,'#cbb8e8','#122233',3);
+    }
+    function onSetupTap(x,y){
+      for(const b of setupBtns()){
+        if(!hitBtn(b,x,y))continue;
+        if(b.locked){A.bad();return;}
+        if(b.kind==='mode'){cfg.mode=b.val;store.set('pgp2_c4_mode',b.val);A.pop();}
+        else if(b.kind==='first'){cfg.humanFirst=!!b.val;store.set('pgp2_c4_first',b.val?'1':'0');A.pop();}
+        else if(b.kind==='level'){cfg.level=b.val;store.set('pgp2_c4_lv',String(b.val));A.pop();}
+        else if(b.kind==='twotap'){twoTapVs=!twoTapVs;store.set('pgp2_twotap_vs',twoTapVs?'1':'0');A.pop();}
+        else if(b.kind==='online'){Connect4Net.available()?OL.enter():A.bad();}
+        else if(b.kind==='start'){startPlay();}
+        return;
+      }
+    }
+    // ── オンライン (makeVsOnlineUI 共通状態機械) ──
+    function fireOnlineResultFx(res){
+      if(res.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
+      else{banner(DSYM[res.winner]+' の かち！');A.fever();vib([30,50,30,50,30]);confetti();}
+    }
+    const OL=makeVsOnlineUI({net:Connect4Net,btnL,btnR,btnExit:{x:59,y:FBY+56,w:302,h:40},hintCol:'#f2a541',
+      cellAt,onResult:fireOnlineResultFx,twoTapEnabled:()=>twoTapVs,undoNeedsOppTurn:true,
+      enterReset(){screen='online';result=null;last=-1;placedAt=-1;placeT=0;hint=-1;hintT=0;},
+      leaveReset(){screen='setup';},
+      newGameReset(){placedAt=-1;placeT=0;hint=-1;hintT=0;},
+      snapOf:ng=>ng.turn+'/'+ng.last+'/'+ng.gameNo,
+      applyState(ng){
+        for(let i=0;i<N*M;i++)board[i]=ng.board[i]||null;
+        turn=ng.turn==='black'?0:1;last=ng.last;
+        result=ng.result?(ng.result.draw?{draw:true}:{winner:ng.result.winner,line:ng.result.line}):null;
+      },
+      hintIdx:(ng,seat)=>c4Hint(ng.board,seat),
+      onHint(i){hint=i;hintT=3.2;},
+      canPut:(ng,c,seat)=>c>=0&&ng.board[c]===null&&(Math.floor(c/N)===M-1||ng.board[c+N]!==null)});
+    if(pendingOnlineRoom)OL.enter();
+
+    return {
+      onDown(x,y){
+        if(screen==='setup'){onSetupTap(x,y);return;}
+        if(screen==='online'){OL.onTap(x,y);return;}
+        if(result){
+          if(hitBtn(btnR,x,y)){undo();return;}
+          reset();return;
+        }
+        if(hitBtn(btnL,x,y)){undo();return;}
+        if(hitBtn(btnR,x,y)){showHint();return;}
+        if(players[turn].type!=='human')return;
+        const c=colAt(x,y);
+        if(cfg.mode==='pvp'&&!twoTapVs){if(c>=0)place(c);return;}
+        // 2タップ確定 (着地indexで選択管理)
+        const landing=c<0?-1:c4Drop(board,c);
+        const d=twoTapDecision(confirmSel,landing,landing>=0);
+        confirmSel=d.pending;
+        if(d.action==='confirm')place(c);
+        else if(d.action==='select'||d.action==='cancel')A.pop();
+        else if(d.action==='invalid')A.bad();
+      },
+      update(dt){
+        t+=dt;
+        if(placeT>0)placeT=Math.max(0,placeT-dt);
+        if(hintT>0)hintT=Math.max(0,hintT-dt);
+        if(screen==='online'){OL.mirror();return;}
+        if(screen==='play'&&!result&&players[turn].type==='cpu'&&cpuTimer>0){
+          cpuTimer-=dt;
+          if(cpuTimer<=0){cpuTimer=0;const col=c4CpuMove(board,players[turn].color,players[turn].level||2);if(col>=0)place(col);}
+        }
+      },
+      draw(g){
+        if(screen==='setup'){drawSetup(g);return;}
+        const online=screen==='online';
+        g.fillStyle='#213a63';g.fillRect(0,0,W,H);
+        const {bk,wt}=countDiscs();
+        if(!online){
+          outlinedText(g,'コネクトフォー',W/2,40,20,'#fff','#12233f',6);
+          // スコア + 手番/結果
+          drawDisc(g,'black',{x:W/2-70,y:78},11);outlinedText(g,''+bk,W/2-52,78,20,'#fff','#12233f',5,1,'left');
+          drawDisc(g,'white',{x:W/2+22,y:78},11);outlinedText(g,''+wt,W/2+40,78,20,'#fff','#12233f',5,1,'left');
+          if(!result)outlinedText(g,DSYM[players[turn].color]+' の ばん',W/2,150,20,'#fff','#12233f',5.5);
+          else if(result.draw)outlinedText(g,'ひきわけ！',W/2,150,22,'#ffd23f','#5a3a10',6);
+          else outlinedText(g,DSYM[result.winner]+' の かち！',W/2,150,22,'#fff','#12233f',6);
+        }else{
+          drawDisc(g,'black',{x:W/2-58,y:178},10);outlinedText(g,''+bk,W/2-42,178,20,'#fff','#12233f',6,1,'left');
+          drawDisc(g,'white',{x:W/2+18,y:178},10);outlinedText(g,''+wt,W/2+34,178,20,'#fff','#12233f',6,1,'left');
+        }
+        // 盤 (青) + 穴
+        g.save();g.fillStyle='#2f6fd6';rr(g,BX-10,BY-10,BW+20,BH+20,16);g.fill();g.restore();
+        const dr=CELL*0.40;
+        for(let i=0;i<N*M;i++){
+          const c=center(i);
+          if(!board[i]){g.save();g.beginPath();g.arc(c.x,c.y,dr,0,TAU);g.fillStyle='#12233f';g.fill();g.restore();}
+          else{const pop=(i===placedAt&&placeT>0)?(0.5+0.5*(1-placeT/PLACE_DUR)):1;drawDisc(g,board[i],c,dr,pop);}
+        }
+        // 直前手マーカー
+        if(last>=0&&board[last]){const c=center(last);g.save();g.strokeStyle='#21e6c1';g.lineWidth=3;g.beginPath();g.arc(c.x,c.y,dr+3,0,TAU);g.stroke();g.restore();}
+        // 勝ち筋ハイライト
+        if(result&&result.line){g.save();g.globalAlpha=0.55+0.35*Math.sin(t*6);g.strokeStyle='#fff23d';g.lineWidth=6;g.lineCap='round';
+          const a=center(result.line[0]),b=center(result.line[3]);g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();g.restore();}
+        // ヒント/2タップ選択 列ハイライト
+        const showSel=(!online&&confirmSel>=0)?confirmSel:-1;
+        if(!result&&showSel>=0&&board[showSel]===null){const c=center(showSel);
+          g.save();g.globalAlpha=0.4;drawDisc(g,players[turn].color,c,dr);g.restore();
+          g.save();g.globalAlpha=0.6+0.4*Math.sin(t*7);g.strokeStyle='#ffd23f';g.lineWidth=4;g.beginPath();g.arc(c.x,c.y,dr+3,0,TAU);g.stroke();g.restore();}
+        if(!result&&hint>=0&&hintT>0&&board[hint]===null){const c=center(hint);
+          g.save();g.globalAlpha=0.55+0.45*Math.sin(t*8);g.strokeStyle='#ffd23f';g.lineWidth=4;g.beginPath();g.arc(c.x,c.y,dr+5,0,TAU);g.stroke();g.restore();}
+        // オンライン仮置きプレビュー
+        if(online&&OL.st.pending>=0&&!board[OL.st.pending]){
+          const ms=Connect4Net.state.seat,mk=(ms==='black'||ms==='white')?ms:'black',c=center(OL.st.pending);
+          g.save();g.globalAlpha=0.4;drawDisc(g,mk,c,dr);g.restore();
+          g.save();g.globalAlpha=0.5+0.5*Math.sin(t*9);g.strokeStyle='#21e6c1';g.lineWidth=3;g.beginPath();g.arc(c.x,c.y,dr+3,0,TAU);g.stroke();g.restore();
+        }
+        // ボタン
+        if(online){OL.drawButtons(g);return;}
+        const undoDis=!undoable();
+        if(result){drawBtn(g,btnL,'▶ もう いちど','#ff4d94',false);drawBtn(g,btnR,'↩ まった','#7a6cc0',undoDis);}
+        else{drawBtn(g,btnL,'↩ まった','#7a6cc0',undoDis);drawBtn(g,btnR,'💡 ヒント','#f2a541',players[turn].type!=='human');}
+      },
+      hudInfo(){return screen==='setup'?'あいてを えらぶ':'';},
+      onlineBack(){screen='setup';setRoomUrl('');},
+      destroy(){Connect4Net.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');setRoomUrl('');},
+    };
+  }
+});
+if(typeof window!=='undefined'){
+  window.c4CpuMove=c4CpuMove;window.c4CheckWin=c4CheckWin;window.c4Drop=c4Drop;
 }
 
 /* ============================================================

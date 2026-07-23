@@ -45,3 +45,13 @@ class_name = "Ox"
 [[migrations]]
 tag = "v4"
 new_sqlite_classes = ["Ox"]
+
+# コネクトフォー(重力付き四目): バインディング名 "Connect4" は partyserver で kebab 化され party "connect4" に対応
+# → クライアントの接続パス /parties/connect4/<code> に対応する (client 側 party='connect4' と一致)。
+[[durable_objects.bindings]]
+name = "Connect4"
+class_name = "Connect4"
+
+[[migrations]]
+tag = "v5"
+new_sqlite_classes = ["Connect4"]
