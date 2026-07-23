@@ -3391,6 +3391,8 @@ const DaifugoNet=makeOnlineNet({party:'daifugo',seatPrefix:'pgp2_daifugo_seat_',
 const TicTacToeNet=makeOnlineNet({party:'ox',seatPrefix:'pgp2_ox_seat_',gameLabel:'まるばつ',gameId:'ox',sym:{black:'○',white:'×'}});
 // コネクトフォー: 席色は共通契約どおり black/white。バー記号は 🔴(先手)/🟡(後手) に読み替え(盤の配色と一致)
 const Connect4Net=makeOnlineNet({party:'connect4',seatPrefix:'pgp2_c4_seat_',gameLabel:'コネクトフォー',gameId:'connect4',sym:{black:'🔴',white:'🟡'}});
+// ドット&ボックス: 席色 black/white。バー記号は 🔴(先手)/🔵(後手) に読み替え(盤の配色と一致)
+const DotsNet=makeOnlineNet({party:'dots',seatPrefix:'pgp2_dots_seat_',gameLabel:'ドット&ボックス',gameId:'dots',sym:{black:'🔴',white:'🔵'}});
 let activeNet=GomokuNet; // オンライン画面に入ったゲームの net を指す (renderOnlineBar/setupOnlineUI 共用)
 let pendingOnlineRoom=''; // ?room=CODE 自動参加用 (boot→gomoku create で消費)
 function roomLink(code,gameId){
@@ -3581,7 +3583,7 @@ function renderDaifugoBar(){ $('onlineBar').classList.add('hidden'); }
 function hideOnlineUI(){$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');}
 /* boot から1回だけ呼ぶ: オンライン入室UIのDOMハンドラを束ねる (activeNet=五目/オセロ 共用) */
 function setupOnlineUI(){
-  GomokuNet.state.onChange=renderOnlineBar;OthelloNet.state.onChange=renderOnlineBar;DaifugoNet.state.onChange=renderOnlineBar;TicTacToeNet.state.onChange=renderOnlineBar;Connect4Net.state.onChange=renderOnlineBar; // 各netの変化を同じバーへ
+  GomokuNet.state.onChange=renderOnlineBar;OthelloNet.state.onChange=renderOnlineBar;DaifugoNet.state.onChange=renderOnlineBar;TicTacToeNet.state.onChange=renderOnlineBar;Connect4Net.state.onChange=renderOnlineBar;DotsNet.state.onChange=renderOnlineBar; // 各netの変化を同じバーへ
   const commitName=()=>{activeNet.setName($('olName').value);$('olName').value=activeNet.getName();};
   const start=code=>{commitName();activeNet.connect(code);setRoomUrl(code);
     $('onlineSetup').classList.add('hidden');$('onlineBar').classList.remove('hidden');renderOnlineBar();};
@@ -5311,6 +5313,370 @@ registerGame({
 });
 if(typeof window!=='undefined'){
   window.c4CpuMove=c4CpuMove;window.c4CheckWin=c4CheckWin;window.c4Drop=c4Drop;
+}
+
+/* ============================================================
+   ゲーム: ドット&ボックス (versus・ローカル2人・CPU・オンライン対戦)
+   ------------------------------------------------------------
+   盤ロジックは DOTS-CORE の純関数群。party/dots-core.js と verbatim 一致 (正本=この index.html)。
+   一致は party/dots-parity.test.mjs が機械検証。オンラインはサーバー権威(DotsNet→dots-server.js)。
+   手番継続(箱を取ったら もう1手)は g.turn に載りサーバー権威で同期される。
+   ============================================================ */
+/* DOTS-CORE-BEGIN (party/dots-core.js と verbatim 一致・exportを外しただけ) */
+const DOTS_N=4;
+const DOTS_H=(DOTS_N+1)*DOTS_N;
+const DOTS_V=DOTS_N*(DOTS_N+1);
+const DOTS_EDGES=DOTS_H+DOTS_V;
+const DOTS_BOXES=DOTS_N*DOTS_N;
+/* 箱box(0..15)を囲む4辺の global edge index [top,bottom,left,right]。副作用なし。 */
+function dotsBoxEdges(box){
+  const br=Math.floor(box/DOTS_N),bc=box%DOTS_N;
+  return [
+    br*DOTS_N+bc,
+    (br+1)*DOTS_N+bc,
+    DOTS_H+br*(DOTS_N+1)+bc,
+    DOTS_H+br*(DOTS_N+1)+bc+1,
+  ];
+}
+/* 辺edgeに接する箱のindex配列 (1つ or 2つ)。副作用なし。 */
+function dotsEdgeBoxes(edge){
+  const out=[];
+  if(edge<DOTS_H){
+    const hRow=Math.floor(edge/DOTS_N),hCol=edge%DOTS_N;
+    if(hRow-1>=0)out.push((hRow-1)*DOTS_N+hCol);
+    if(hRow<DOTS_N)out.push(hRow*DOTS_N+hCol);
+  }else{
+    const v=edge-DOTS_H,vRow=Math.floor(v/(DOTS_N+1)),vCol=v%(DOTS_N+1);
+    if(vCol-1>=0)out.push(vRow*DOTS_N+(vCol-1));
+    if(vCol<DOTS_N)out.push(vRow*DOTS_N+vCol);
+  }
+  return out;
+}
+/* 箱boxの 現在引かれている辺の数 (0..4)。副作用なし。 */
+function dotsBoxCount(board,box){
+  let n=0;for(const e of dotsBoxEdges(box))if(board[e])n++;return n;
+}
+/* board(edge引き済み)で、辺edgeによって新たに完成した箱のindex配列。副作用なし。 */
+function dotsCompletedBy(board,edge){
+  const out=[];
+  for(const bx of dotsEdgeBoxes(edge))if(dotsBoxCount(board,bx)===4)out.push(bx);
+  return out;
+}
+/* 全辺が引かれたか。副作用なし。 */
+function dotsFull(board){return board.every(e=>e!==null);}
+/* boxes(所有席色配列)から勝者を返す: 'black'|'white'|'draw'。 */
+function dotsWinner(boxes){
+  let bk=0,wt=0;
+  for(const o of boxes){if(o==='black')bk++;else if(o==='white')wt++;}
+  return bk>wt?'black':wt>bk?'white':'draw';
+}
+/* DOTS-CORE-END */
+
+/* ── ドット&ボックス CPU: 完成できる箱は取る / 3辺目を渡さない安全手 / 終盤は最小チェーンを差し出す ── */
+function dotsCaptureEdge(board,avail){ // 完成できる箱がある辺 (無ければ -1)
+  for(const e of avail)for(const bx of dotsEdgeBoxes(e))if(dotsBoxCount(board,bx)===3)return e;
+  return -1;
+}
+function dotsSafeEdges(board,avail){ // 引いても どの隣接箱も 3辺目にしない辺 (=相手に箱を渡さない)
+  return avail.filter(e=>dotsEdgeBoxes(e).every(bx=>dotsBoxCount(board,bx)!==2));
+}
+function dotsBoxesComplete(b){let n=0;for(let bx=0;bx<DOTS_BOXES;bx++)if(dotsBoxEdges(bx).every(ed=>b[ed]))n++;return n;}
+function dotsGiveaway(board,e){ // 辺eを引いた後 相手が貪欲に取り切る箱数 (チェーン長の見積り)
+  const b=board.slice();b[e]='x';const before=dotsBoxesComplete(board);let guard=0;
+  while(guard++<80){
+    let missing=-1;
+    for(let bx=0;bx<DOTS_BOXES;bx++){const es=dotsBoxEdges(bx);let drawn=0,miss=-1;for(const ed of es){if(b[ed])drawn++;else miss=ed;}if(drawn===3){missing=miss;break;}}
+    if(missing<0)break;b[missing]='x';
+  }
+  return dotsBoxesComplete(b)-before;
+}
+function dotsCpuMove(board,level){
+  const avail=[];for(let e=0;e<DOTS_EDGES;e++)if(board[e]===null)avail.push(e);
+  if(!avail.length)return -1;
+  const cap=dotsCaptureEdge(board,avail);if(cap>=0)return cap;       // 完成できる箱は取る
+  if(level<=1)return avail[Math.floor(Math.random()*avail.length)]; // よわい: 適当
+  const safe=dotsSafeEdges(board,avail);
+  if(safe.length)return safe[Math.floor(Math.random()*safe.length)]; // 3辺目を渡さない安全手
+  if(level<=2)return avail[Math.floor(Math.random()*avail.length)]; // ふつう: 渡すしかない時は適当
+  let best=avail[0],bestG=Infinity;                                  // つよい/おに: 最小チェーンを差し出す
+  for(const e of avail){const gv=dotsGiveaway(board,e);if(gv<bestG){bestG=gv;best=e;}}
+  return best;
+}
+/* 💡ヒント: 人間手番の推奨辺 (=level3相当CPUの手)。無ければ -1。 */
+function dotsHint(board){return dotsCpuMove(board,3);}
+
+registerGame({
+  id:'dots', emoji:'🔳', title:'ドット&ボックス',
+  iconHtml:`<svg viewBox="0 0 100 100" width="80%" height="80%" style="display:block"><g stroke="#cfd8e6" stroke-width="4" stroke-linecap="round"><line x1="24" y1="24" x2="76" y2="24"/><line x1="24" y1="76" x2="50" y2="76"/></g><g stroke="#e5484d" stroke-width="5" stroke-linecap="round"><line x1="24" y1="24" x2="24" y2="50"/><line x1="24" y1="50" x2="50" y2="50"/></g><g stroke="#4d8cff" stroke-width="5" stroke-linecap="round"><line x1="50" y1="50" x2="76" y2="50"/><line x1="76" y1="24" x2="76" y2="50"/></g><rect x="26" y="26" width="22" height="22" fill="#e5484d" opacity=".35"/><circle cx="24" cy="24" r="4.5" fill="#fff"/><circle cx="50" cy="24" r="4.5" fill="#fff"/><circle cx="76" cy="24" r="4.5" fill="#fff"/><circle cx="24" cy="50" r="4.5" fill="#fff"/><circle cx="50" cy="50" r="4.5" fill="#fff"/><circle cx="76" cy="50" r="4.5" fill="#fff"/></svg>`,
+  desc:'せんを ひいて はこを つくろう',
+  color:'#6ea0e8', type:'versus',
+  howto:[
+    ['✏️','てんと てんを せんで つなぐ'],
+    ['🔳','はこの 4へんめを ひいたら じぶんの はこ！ もう1かい ひける'],
+    ['🏆','はこが おおい ほうの かち！'],
+  ],
+  create(ctx){
+    const A=ctx.audio;
+    const BC={black:'#e5484d',white:'#4d8cff'}; // 赤=先手 / 青=後手
+    const BSYM={black:'🔴',white:'🔵'};
+    const N=DOTS_N,GAP=72,OX=Math.round((W-N*GAP)/2),OY=252; // 5×5ドット
+    const FBY=OY+N*GAP+30;
+    const btnL={x:59,y:FBY,w:146,h:48}, btnR={x:215,y:FBY,w:146,h:48};
+
+    let players=[{color:'black',type:'human'},{color:'white',type:'human'}];
+    let board=new Array(DOTS_EDGES).fill(null);
+    let boxes=new Array(DOTS_BOXES).fill(null);
+    let turn=0,result=null,last=-1,t=0;
+    let history=[];              // まった用スナップショット {board,boxes,turn,last}
+    let hint=-1,hintT=0;
+    let confirmSel=-1;
+    let lastEdgeT=0;             // 直前手のフラッシュ
+    let lastStatSnap=null;
+    let screen='setup';
+    let cfg={ mode:['pvp','pvc','cvc'].includes(store.get('pgp2_dots_mode','pvp'))?store.get('pgp2_dots_mode','pvp'):'pvp',
+              humanFirst:store.get('pgp2_dots_first','1')!=='0',
+              level:Math.min(4,Math.max(1,+store.get('pgp2_dots_lv','2')||2)) };
+    let oniUnlocked=store.get('pgp2_dots_oni_unlocked','0')==='1';
+    let oniJustUnlocked=false;
+    let twoTapVs=store.get('pgp2_twotap_vs','1')==='1';
+    let cpuTimer=0;
+
+    function dot(r,c){return {x:OX+c*GAP,y:OY+r*GAP};}
+    function edgeGeom(edge){ // 辺の端点/中点/向き
+      if(edge<DOTS_H){const hRow=Math.floor(edge/N),hCol=edge%N;const a=dot(hRow,hCol),b=dot(hRow,hCol+1);return {x1:a.x,y1:a.y,x2:b.x,y2:b.y,mx:(a.x+b.x)/2,my:a.y,horiz:true};}
+      const v=edge-DOTS_H,vRow=Math.floor(v/(N+1)),vCol=v%(N+1);const a=dot(vRow,vCol),b=dot(vRow+1,vCol);return {x1:a.x,y1:a.y,x2:b.x,y2:b.y,mx:a.x,my:(a.y+b.y)/2,horiz:false};
+    }
+    function boxCenter(bx){const br=Math.floor(bx/N),bc=bx%N;return {x:OX+bc*GAP+GAP/2,y:OY+br*GAP+GAP/2};}
+    function edgeAt(x,y){ // 最寄りの辺 (中点距離 < GAP*0.55)。無ければ -1
+      let best=-1,bd=GAP*0.55;
+      for(let e=0;e<DOTS_EDGES;e++){const g=edgeGeom(e);const d=Math.hypot(x-g.mx,y-g.my);if(d<bd){bd=d;best=e;}}
+      return best;
+    }
+    function scores(){let bk=0,wt=0;for(const o of boxes){if(o==='black')bk++;else if(o==='white')wt++;}return {bk,wt};}
+    function reset(){
+      board=new Array(DOTS_EDGES).fill(null);boxes=new Array(DOTS_BOXES).fill(null);
+      turn=0;result=null;last=-1;history=[];hint=-1;hintT=0;oniJustUnlocked=false;confirmSel=-1;
+      buildPlayers();A.pop();kickCpu();
+    }
+    function endGame(){
+      const {bk,wt}=scores();
+      const w=bk>wt?'black':wt>bk?'white':null;
+      result=w?{winner:w}:{draw:true};cpuTimer=0;
+      if(!oniUnlocked&&cfg.mode==='pvc'&&w){
+        const winnerType=players[w==='black'?0:1].type;
+        const cpu=players.find(p=>p.type==='cpu');
+        if(winnerType==='human'&&cpu&&cpu.level===3){oniUnlocked=true;oniJustUnlocked=true;store.set('pgp2_dots_oni_unlocked','1');A.coin();}
+      }
+      if(!w){banner('ひきわけ！');A.ok();vib([20,40,20]);}
+      else{banner(BSYM[w]+' の かち！');A.fever();vib([30,50,30,50,30]);confetti();}
+      if(cfg.mode!=='cvc'){
+        const human=players.find(p=>p.type==='human');
+        const youColor=human?human.color:players[0].color;
+        lastStatSnap=statsMatchSnapshot('dots');
+        statsRecordMatch('dots',!w?'draw':(w===youColor?'win':'lose'));
+      }
+    }
+    function place(edge){
+      if(result||edge<0||edge>=DOTS_EDGES||board[edge]!==null)return;
+      const color=players[turn].color;
+      history.push({board:board.slice(),boxes:boxes.slice(),turn,last});
+      board[edge]=color;last=edge;lastEdgeT=0.4;
+      const done=dotsCompletedBy(board,edge);
+      for(const bx of done)boxes[bx]=color;
+      hint=-1;hintT=0;confirmSel=-1;A.pop();vib(8);
+      if(dotsFull(board)){endGame();return;}
+      if(done.length>0){ // 手番継続 (箱を取ったら もう1手)
+        if(players[turn].type==='human'){A.coin();banner('もう1かい！',{small:true});}
+        kickCpu();
+      }else{turn=1-turn;kickCpu();}
+    }
+    function undoable(){
+      if(cfg.mode==='cvc'||!history.length)return false;
+      if(cfg.mode==='pvp')return true;
+      return history.some(sn=>players[sn.turn].type==='human');
+    }
+    function undo(){
+      if(!undoable()){A.bad();return;}
+      if(result&&lastStatSnap){statsMatchRestore('dots',lastStatSnap);lastStatSnap=null;}
+      let sn=history.pop();
+      if(cfg.mode==='pvc')while(history.length&&players[sn.turn].type==='cpu')sn=history.pop();
+      board=sn.board;boxes=sn.boxes;turn=sn.turn;last=sn.last;
+      result=null;hint=-1;hintT=0;confirmSel=-1;A.pop();vib(8);
+    }
+    function showHint(){
+      if(result||players[turn].type!=='human'){A.bad();return;}
+      const e=dotsHint(board);
+      if(e>=0){hint=e;hintT=3.2;A.coin();}else A.bad();
+    }
+    // ── CPU/setup ──
+    function buildPlayers(){
+      const L=cfg.level;
+      if(cfg.mode==='cvc')players=[{color:'black',type:'cpu',level:L},{color:'white',type:'cpu',level:L}];
+      else if(cfg.mode==='pvc')players=cfg.humanFirst
+        ?[{color:'black',type:'human'},{color:'white',type:'cpu',level:L}]
+        :[{color:'black',type:'cpu',level:L},{color:'white',type:'human'}];
+      else players=[{color:'black',type:'human'},{color:'white',type:'human'}];
+    }
+    function kickCpu(){cpuTimer=(screen==='play'&&!result&&players[turn].type==='cpu')?0.32+Math.random()*0.28:0;}
+    function startPlay(){
+      buildPlayers();
+      board=new Array(DOTS_EDGES).fill(null);boxes=new Array(DOTS_BOXES).fill(null);
+      turn=0;result=null;last=-1;history=[];hint=-1;hintT=0;oniJustUnlocked=false;confirmSel=-1;
+      screen='play';A.pop();kickCpu();
+    }
+    function setupBtns(){
+      const L=[];let y=150;
+      for(const [v,lb] of [['pvp','👥 二人で たいせん'],['pvc','🤖 CPUと たいせん'],['cvc','🤖🤖 CPUどうし']])
+        {L.push({x:50,y,w:320,h:44,kind:'mode',val:v,label:lb,active:cfg.mode===v});y+=50;}
+      L.push({x:50,y,w:320,h:44,kind:'online',label:DotsNet.available()?'🌐 オンライン たいせん':'🌐 オンライン (じゅんびちゅう)',online:true});y+=50;
+      y+=6;
+      if(cfg.mode==='pvc'){
+        L.push({x:50,y,w:155,h:40,kind:'first',val:1,label:'あなた せんて',active:cfg.humanFirst});
+        L.push({x:215,y,w:155,h:40,kind:'first',val:0,label:'あなた ごて',active:!cfg.humanFirst});
+        y+=50;
+      }
+      if(cfg.mode!=='pvp'){
+        const LV=[[1,'よわい'],[2,'ふつう'],[3,'つよい']];
+        for(let i=0;i<3;i++){const [v,lb]=LV[i];L.push({x:50+i*80,y,w:74,h:40,kind:'level',val:v,label:lb,active:cfg.level===v});}
+        const locked=!oniUnlocked;
+        L.push({x:50+3*80,y,w:74,h:40,kind:'level',val:4,label:locked?'🔒おに':'👹おに',active:cfg.level===4&&!locked,locked});
+        L._lvY=y;y+=50;
+      }
+      L.push({x:50,y,w:320,h:40,kind:'twotap',label:'🖐 2タップ確定: '+(twoTapVs?'ON':'OFF'),active:twoTapVs});y+=48;
+      L.push({x:80,y:y+8,w:260,h:52,kind:'start',label:'▶ はじめる',start:true});
+      return L;
+    }
+    function drawSetup(g){
+      g.fillStyle='#26314a';g.fillRect(0,0,W,H);
+      outlinedText(g,'ドット&ボックス',W/2,70,24,'#fff','#141b2c',7);
+      outlinedText(g,oniJustUnlocked?'👹 おに 解放！':'あいてを えらぶ',W/2,110,16,oniJustUnlocked?'#ffe93d':'#cfe0ff','#141b2c',4);
+      for(const b of setupBtns()){
+        const col=b.start?'#ff4d94':b.online?(DotsNet.available()?'#4d8cff':'#6b6480'):b.active?'#39c06a':b.locked?'#3a3550':'#5a5278';
+        drawBtn(g,b,b.label,col,!!b.locked);
+      }
+      const btns=setupBtns();
+      if(!oniUnlocked&&cfg.mode!=='pvp'&&btns._lvY!=null)
+        outlinedText(g,'「つよい」に かつと 解放',W/2,btns._lvY+58,12,'#cbb8e8','#141b2c',3);
+    }
+    function onSetupTap(x,y){
+      for(const b of setupBtns()){
+        if(!hitBtn(b,x,y))continue;
+        if(b.locked){A.bad();return;}
+        if(b.kind==='mode'){cfg.mode=b.val;store.set('pgp2_dots_mode',b.val);A.pop();}
+        else if(b.kind==='first'){cfg.humanFirst=!!b.val;store.set('pgp2_dots_first',b.val?'1':'0');A.pop();}
+        else if(b.kind==='level'){cfg.level=b.val;store.set('pgp2_dots_lv',String(b.val));A.pop();}
+        else if(b.kind==='twotap'){twoTapVs=!twoTapVs;store.set('pgp2_twotap_vs',twoTapVs?'1':'0');A.pop();}
+        else if(b.kind==='online'){DotsNet.available()?OL.enter():A.bad();}
+        else if(b.kind==='start'){startPlay();}
+        return;
+      }
+    }
+    // ── オンライン (makeVsOnlineUI 共通状態機械) ──
+    function fireOnlineResultFx(res){
+      if(res.draw){banner('ひきわけ！');A.ok();vib([20,40,20]);}
+      else{banner(BSYM[res.winner]+' の かち！');A.fever();vib([30,50,30,50,30]);confetti();}
+    }
+    const OL=makeVsOnlineUI({net:DotsNet,btnL,btnR,btnExit:{x:59,y:FBY+56,w:302,h:40},hintCol:'#f2a541',
+      cellAt:edgeAt,onResult:fireOnlineResultFx,twoTapEnabled:()=>twoTapVs,undoNeedsOppTurn:true,
+      enterReset(){screen='online';result=null;last=-1;hint=-1;hintT=0;for(let i=0;i<DOTS_BOXES;i++)boxes[i]=null;},
+      leaveReset(){screen='setup';},
+      newGameReset(){hint=-1;hintT=0;last=-1;},
+      snapOf:ng=>ng.turn+'/'+ng.last+'/'+ng.gameNo+'/'+((ng.boxes||[]).filter(Boolean).length),
+      applyState(ng){
+        for(let i=0;i<DOTS_EDGES;i++)board[i]=ng.board[i]||null;
+        for(let i=0;i<DOTS_BOXES;i++)boxes[i]=(ng.boxes&&ng.boxes[i])||null;
+        turn=ng.turn==='black'?0:1;last=ng.last;
+        result=ng.result?(ng.result.draw?{draw:true}:{winner:ng.result.winner}):null;
+      },
+      hintIdx:(ng,seat)=>dotsCpuMove(ng.board,3),
+      onHint(i){hint=i;hintT=3.2;},
+      canPut:(ng,c,seat)=>c>=0&&ng.board[c]===null});
+    if(pendingOnlineRoom)OL.enter();
+
+    function drawBoardArea(g,online){
+      g.fillStyle='#26314a';g.fillRect(0,0,W,H);
+      const {bk,wt}=scores();
+      const me=online?DotsNet.state.seat:null;
+      if(!online)outlinedText(g,'ドット&ボックス',W/2,38,19,'#fff','#141b2c',6);
+      // スコアバッジ
+      outlinedText(g,'🔴 '+bk,W/2-70,online?70:78,20,'#ffd7d3','#5a1512',5,1,'center');
+      outlinedText(g,'🔵 '+wt,W/2+70,online?70:78,20,'#d3e2ff','#12245a',5,1,'center');
+      // 手番/結果
+      let msg='';
+      if(result)msg=result.draw?'ひきわけ！':(BSYM[result.winner]+' の かち！');
+      else{const tc=players&&!online?players[turn].color:(online?(turn===0?'black':'white'):'black');
+        const youTurn=online&&(me==='black'||me==='white')&&((turn===0?'black':'white')===me);
+        msg=youTurn?'あなたの ばん':(BSYM[turn===0?'black':'white']+' の ばん');}
+      outlinedText(g,msg,W/2,online?100:150,online?17:20,result?'#ffd23f':'#fff','#141b2c',result?6:5.5);
+      // 完成した箱 (所有色で塗り)
+      for(let bx=0;bx<DOTS_BOXES;bx++){if(!boxes[bx])continue;const c=boxCenter(bx);
+        g.save();g.globalAlpha=0.30;g.fillStyle=BC[boxes[bx]];rr(g,c.x-GAP/2+4,c.y-GAP/2+4,GAP-8,GAP-8,8);g.fill();g.restore();
+        emojiText(g,BSYM[boxes[bx]],c.x,c.y,22,0.95);}
+      // 辺: 未=薄グレー / 引き済み=所有色
+      for(let e=0;e<DOTS_EDGES;e++){const gm=edgeGeom(e);
+        g.save();g.lineCap='round';
+        if(board[e]){g.strokeStyle=BC[board[e]];g.lineWidth=(e===last&&lastEdgeT>0)?9:6;}
+        else{g.strokeStyle='rgba(255,255,255,.14)';g.lineWidth=4;}
+        g.beginPath();g.moveTo(gm.x1,gm.y1);g.lineTo(gm.x2,gm.y2);g.stroke();g.restore();}
+      // 仮置き/ヒント辺
+      const sel=(!online&&confirmSel>=0)?confirmSel:(online&&OL.st.pending>=0?OL.st.pending:-1);
+      if(!result&&sel>=0&&board[sel]===null){const gm=edgeGeom(sel);const mk=online?(DotsNet.state.seat==='white'?'white':'black'):players[turn].color;
+        g.save();g.globalAlpha=0.5+0.4*Math.sin(t*8);g.strokeStyle=online?'#21e6c1':BC[mk];g.lineWidth=8;g.lineCap='round';
+        g.beginPath();g.moveTo(gm.x1,gm.y1);g.lineTo(gm.x2,gm.y2);g.stroke();g.restore();}
+      if(!result&&hint>=0&&hintT>0&&board[hint]===null){const gm=edgeGeom(hint);
+        g.save();g.globalAlpha=0.5+0.5*Math.sin(t*8);g.strokeStyle='#ffd23f';g.lineWidth=8;g.lineCap='round';
+        g.beginPath();g.moveTo(gm.x1,gm.y1);g.lineTo(gm.x2,gm.y2);g.stroke();g.restore();}
+      // ドット
+      g.fillStyle='#eef3fb';
+      for(let r=0;r<=N;r++)for(let c=0;c<=N;c++){const d=dot(r,c);g.beginPath();g.arc(d.x,d.y,5,0,TAU);g.fill();}
+    }
+
+    return {
+      onDown(x,y){
+        if(screen==='setup'){onSetupTap(x,y);return;}
+        if(screen==='online'){OL.onTap(x,y);return;}
+        if(result){
+          if(hitBtn(btnR,x,y)){undo();return;}
+          reset();return;
+        }
+        if(hitBtn(btnL,x,y)){undo();return;}
+        if(hitBtn(btnR,x,y)){showHint();return;}
+        if(players[turn].type!=='human')return;
+        const e=edgeAt(x,y);
+        if(cfg.mode==='pvp'&&!twoTapVs){if(e>=0&&board[e]===null)place(e);else if(e>=0)A.bad();return;}
+        const d=twoTapDecision(confirmSel,e,e>=0&&board[e]===null);
+        confirmSel=d.pending;
+        if(d.action==='confirm')place(e);
+        else if(d.action==='select'||d.action==='cancel')A.pop();
+        else if(d.action==='invalid')A.bad();
+      },
+      update(dt){
+        t+=dt;
+        if(hintT>0)hintT=Math.max(0,hintT-dt);
+        if(lastEdgeT>0)lastEdgeT=Math.max(0,lastEdgeT-dt);
+        if(screen==='online'){OL.mirror();return;}
+        if(screen==='play'&&!result&&players[turn].type==='cpu'&&cpuTimer>0){
+          cpuTimer-=dt;
+          if(cpuTimer<=0){cpuTimer=0;const e=dotsCpuMove(board,players[turn].level||2);if(e>=0)place(e);}
+        }
+      },
+      draw(g){
+        if(screen==='setup'){drawSetup(g);return;}
+        const online=screen==='online';
+        drawBoardArea(g,online);
+        if(online){OL.drawButtons(g);return;}
+        const undoDis=!undoable();
+        if(result){drawBtn(g,btnL,'▶ もう いちど','#ff4d94',false);drawBtn(g,btnR,'↩ まった','#7a6cc0',undoDis);}
+        else{drawBtn(g,btnL,'↩ まった','#7a6cc0',undoDis);drawBtn(g,btnR,'💡 ヒント','#f2a541',players[turn].type!=='human');}
+      },
+      hudInfo(){return screen==='setup'?'あいてを えらぶ':'';},
+      onlineBack(){screen='setup';setRoomUrl('');},
+      destroy(){DotsNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');setRoomUrl('');},
+    };
+  }
+});
+if(typeof window!=='undefined'){
+  window.dotsCpuMove=dotsCpuMove;window.dotsCompletedBy=dotsCompletedBy;window.dotsWinner=dotsWinner;
 }
 
 /* ============================================================

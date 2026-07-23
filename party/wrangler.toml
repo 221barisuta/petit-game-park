@@ -55,3 +55,13 @@ class_name = "Connect4"
 [[migrations]]
 tag = "v5"
 new_sqlite_classes = ["Connect4"]
+
+# ドット&ボックス: バインディング名 "Dots" は partyserver で kebab 化され party "dots" に対応
+# → クライアントの接続パス /parties/dots/<code> に対応する。
+[[durable_objects.bindings]]
+name = "Dots"
+class_name = "Dots"
+
+[[migrations]]
+tag = "v6"
+new_sqlite_classes = ["Dots"]

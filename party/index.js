@@ -14,6 +14,7 @@ import OthelloServer from './othello-server.js';
 import DaifugoServer from './daifugo-server.js';
 import TicTacToeServer from './ox-server.js';
 import Connect4Server from './c4-server.js';
+import DotsServer from './dots-server.js';
 
 export class Gomoku extends Server {
   static options = { hibernate: true }; // WebSocket Hibernation (接続stateは setState で永続)
@@ -131,9 +132,32 @@ export class Connect4 extends Server {
   async onAlarm() { await this.ensure(); return this.logic.onAlarm(); }
 }
 
+// ドット&ボックス: 五目と同じ partyserver ラッパで DotsServer を委譲実行 (別DO=別部屋空間)
+export class Dots extends Server {
+  static options = { hibernate: true };
+
+  constructor(ctx, env) {
+    super(ctx, env);
+    const room = {
+      storage: ctx.storage,
+      getConnections: () => this.getConnections(),
+      broadcast: (msg) => this.broadcast(msg),
+    };
+    this.logic = new DotsServer(room);
+  }
+  async ensure() { if (!this.logic.game) await this.logic.onStart(); }
+
+  async onStart() { await this.logic.onStart(); }
+  async onConnect(conn) { await this.ensure(); return this.logic.onConnect(conn); }
+  async onMessage(conn, message) { await this.ensure(); return this.logic.onMessage(message, conn); }
+  async onClose(conn) { await this.ensure(); return this.logic.onClose(conn); }
+  onError() { return this.logic.onError(); }
+  async onAlarm() { await this.ensure(); return this.logic.onAlarm(); }
+}
+
 export default {
   async fetch(request, env) {
-    // /parties/main/→Gomoku, /parties/othello/→Othello, /parties/daifugo/→Daifugo, /parties/ox/→Ox, /parties/c4/→Connect4。それ以外は 404
+    // /parties/main/→Gomoku, /othello/, /daifugo/, /ox/, /connect4/→Connect4, /dots/→Dots。それ以外は 404
     return (await routePartykitRequest(request, env)) || new Response('not found', { status: 404 });
   },
 };

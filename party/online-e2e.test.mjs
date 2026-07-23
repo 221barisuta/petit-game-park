@@ -36,6 +36,9 @@ const othSrc = html.slice(s2, html.indexOf('// --- #9', s2));
 // コネクトフォー コア (重力・4連。c4-parity.test.mjs と同じアンカー)
 const s3 = html.indexOf('/* C4-CORE-BEGIN');
 const c4Src = html.slice(s3, html.indexOf('/* C4-CORE-END */', s3));
+// ドット&ボックス コア (辺/箱/完成判定。dots-parity.test.mjs と同じアンカー)
+const s4 = html.indexOf('/* DOTS-CORE-BEGIN');
+const dotsSrc = html.slice(s4, html.indexOf('/* DOTS-CORE-END */', s4));
 
 let pass = 0, fail = 0;
 const ck = (name, cond) => { cond ? pass++ : fail++; console.log((cond ? 'ok   ' : 'FAIL ') + name); };
@@ -64,22 +67,22 @@ function makeEnv() { // クライアント1人分の隔離スコープ (store/�
       optIn: () => false, setOptIn() {} },
   };
   const keys = Object.keys(env);
-  const fn = new Function(...keys, src + '\n' + othSrc + '\n' + c4Src +
-    '\nreturn {GomokuNet,OthelloNet,TicTacToeNet,Connect4Net,makeVsOnlineUI,getFlips,getValidMoves,c4Drop,c4CheckWin};');
+  const fn = new Function(...keys, src + '\n' + othSrc + '\n' + c4Src + '\n' + dotsSrc +
+    '\nreturn {GomokuNet,OthelloNet,TicTacToeNet,Connect4Net,DotsNet,makeVsOnlineUI,getFlips,getValidMoves,c4Drop,c4CheckWin,dotsCompletedBy};');
   return { api: fn(...keys.map(k => env[k])), env };
 }
 
 const BL = { x: 0, y: 900, w: 10, h: 10 }, BR = { x: 20, y: 900, w: 10, h: 10 }, BX = { x: 40, y: 900, w: 10, h: 10 };
-function mkClient(kind) { // kind: 'gomoku' | 'othello' | 'ox' | 'connect4'
+function mkClient(kind) { // kind: 'gomoku' | 'othello' | 'ox' | 'connect4' | 'dots'
   const { api, env } = makeEnv();
-  const net = kind === 'gomoku' ? api.GomokuNet : kind === 'ox' ? api.TicTacToeNet : kind === 'connect4' ? api.Connect4Net : api.OthelloNet;
+  const net = kind === 'gomoku' ? api.GomokuNet : kind === 'ox' ? api.TicTacToeNet : kind === 'connect4' ? api.Connect4Net : kind === 'dots' ? api.DotsNet : api.OthelloNet;
   const c = { api, env, net, board: [], result: null, results: 0, newGames: 0, turnSeat: '' };
   const base = {
     net, btnL: BL, btnR: BR, btnExit: BX,
     cellAt: (x, y) => y === 0 ? x : -1,       // テスト用: タップは (セル番号, 0) で表現
     onResult() { c.results++; },
     enterReset() {}, leaveReset() {}, newGameReset() { c.newGames++; },
-    applyState(ng) { c.board = ng.board.slice(); c.turnSeat = ng.turn; c.result = ng.result || null; },
+    applyState(ng) { c.board = ng.board.slice(); c.turnSeat = ng.turn; c.result = ng.result || null; c.boxes = ng.boxes ? ng.boxes.slice() : null; },
     hintIdx: () => -1, onHint() {},
   };
   // 五目/三目は同じ「置くだけ」cfg (undoNeedsOppTurn:true / 空マス合法)。
@@ -94,6 +97,10 @@ function mkClient(kind) { // kind: 'gomoku' | 'othello' | 'ox' | 'connect4'
       snapOf: ng => ng.turn + '/' + ng.last + '/' + ng.gameNo,
       // 着地index(=列最下段の空き)のみ合法。重力: 最下段 or 直下が埋まっている。
       canPut: (ng, cc) => cc >= 0 && ng.board[cc] === null && (Math.floor(cc / 7) === 5 || ng.board[cc + 7] !== null),
+    } : kind === 'dots' ? {
+      ...base, hintCol: '#f2a541', undoNeedsOppTurn: true,
+      snapOf: ng => ng.turn + '/' + ng.last + '/' + ng.gameNo + '/' + ((ng.boxes || []).filter(Boolean).length),
+      canPut: (ng, cc) => cc >= 0 && ng.board[cc] === null,
     } : {
       ...base, hintCol: '#f2a541',
       snapOf: ng => ng.turn + '/' + ng.last + '/' + ng.gameNo + '/' + (ng.pass || ''),
@@ -295,6 +302,42 @@ const code = () => 'e2e' + Math.random().toString(36).slice(2, 5); // 実行ご�
   ck('c4:縦4連で決着(黒勝ち)', await until(() => A.result && B.result, 6000, () => { A.mirror(); B.mirror(); }) && A.result.winner === 'black' && A.result.line.length === 4);
   ck('c4:両クライアントの盤/勝者一致', JSON.stringify(A.net.state.game.board) === JSON.stringify(B.net.state.game.board) && JSON.stringify(A.result) === JSON.stringify(B.result));
   ck('c4:決着演出は各1回', A.results === 1 && B.results === 1);
+  A.net.leave(); B.net.leave();
+}
+
+// ══ ドット&ボックス: 着席/辺ミラー/【箱完成での手番継続を両clientで直接検証】/得点同期/継続後の交代 ══
+// task最重要リスク: 連鎖獲得の手番継続がオンライン同期に正しく載るか を実DOプロトコル越しに検証する。
+{
+  const A = mkClient('dots'), B = mkClient('dots');
+  const room = code();
+  A.OL.enter(); B.OL.enter();
+  A.net.connect(room); B.net.connect(room);
+  ck('dots:両者着席', await until(() => A.net.state.seat && B.net.state.seat && A.net.state.game && B.net.state.game && A.net.state.game.board.length === 40, 8000, () => { A.mirror(); B.mirror(); }));
+  const black = A.net.state.seat === 'black' ? A : B, white = A.net.state.seat === 'black' ? B : A;
+  const cur = () => (A.net.state.game.turn === A.net.state.seat ? A : B);
+  // 指定席が 指定辺を 2タップ確定 (手番のはずの席で呼ぶ)
+  async function play(seatColor, edge) {
+    const c = seatColor === 'black' ? black : white;
+    await until(() => A.net.state.game.turn === seatColor, 6000, () => { A.mirror(); B.mirror(); });
+    c.tapCell(edge); c.tapCell(edge);
+    await until(() => A.net.state.game.board[edge] !== null, 6000, () => { A.mirror(); B.mirror(); });
+  }
+  // 黒が箱0(辺 0,4,20,21)を完成。白は遠くの辺(19,18,17)を消化。
+  await play('black', 0); await play('white', 19);
+  await play('black', 4); await play('white', 18);
+  await play('black', 20); await play('white', 17);
+  ck('dots:辺が相手にミラー', black.board[0] === 'black' && white.board[20] === 'black');
+  ck('dots:完成前は箱0未所有', A.net.state.game.boxes[0] === null);
+  // 黒が辺21で箱0完成 → 手番継続(黒のまま)
+  await play('black', 21);
+  A.mirror(); B.mirror();
+  ck('dots:箱0を黒が獲得(両client)', A.boxes && A.boxes[0] === 'black' && B.boxes && B.boxes[0] === 'black');
+  ck('dots:箱完成で手番継続=黒(両client)', A.turnSeat === 'black' && B.turnSeat === 'black' && A.net.state.game.turn === 'black');
+  // 継続手: 黒がもう1手(箱未完成の辺16) → 交代して白番
+  await play('black', 16);
+  A.mirror(); B.mirror();
+  ck('dots:継続手のあと白へ交代(両client)', A.turnSeat === 'white' && B.turnSeat === 'white');
+  ck('dots:両クライアントの盤/箱一致', JSON.stringify(A.net.state.game.board) === JSON.stringify(B.net.state.game.board) && JSON.stringify(A.net.state.game.boxes) === JSON.stringify(B.net.state.game.boxes));
   A.net.leave(); B.net.leave();
 }
 
