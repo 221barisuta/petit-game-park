@@ -65,3 +65,13 @@ class_name = "Dots"
 [[migrations]]
 tag = "v6"
 new_sqlite_classes = ["Dots"]
+
+# はさみ将棋: バインディング名 "Hasami" は partyserver で kebab 化され party "hasami" に対応
+# → クライアントの接続パス /parties/hasami/<code> に対応する。
+[[durable_objects.bindings]]
+name = "Hasami"
+class_name = "Hasami"
+
+[[migrations]]
+tag = "v7"
+new_sqlite_classes = ["Hasami"]

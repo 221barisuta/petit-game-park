@@ -3393,6 +3393,8 @@ const TicTacToeNet=makeOnlineNet({party:'ox',seatPrefix:'pgp2_ox_seat_',gameLabe
 const Connect4Net=makeOnlineNet({party:'connect4',seatPrefix:'pgp2_c4_seat_',gameLabel:'コネクトフォー',gameId:'connect4',sym:{black:'🔴',white:'🟡'}});
 // ドット&ボックス: 席色 black/white。バー記号は 🔴(先手)/🔵(後手) に読み替え(盤の配色と一致)
 const DotsNet=makeOnlineNet({party:'dots',seatPrefix:'pgp2_dots_seat_',gameLabel:'ドット&ボックス',gameId:'dots',sym:{black:'🔴',white:'🔵'}});
+// はさみ将棋: 席色 black/white。バー記号は ⚫(先手)/⚪(後手)。着手は from/to の hmove を net.raw で送る
+const HasamiNet=makeOnlineNet({party:'hasami',seatPrefix:'pgp2_hasami_seat_',gameLabel:'はさみ将棋',gameId:'hasami',sym:{black:'⚫',white:'⚪'}});
 let activeNet=GomokuNet; // オンライン画面に入ったゲームの net を指す (renderOnlineBar/setupOnlineUI 共用)
 let pendingOnlineRoom=''; // ?room=CODE 自動参加用 (boot→gomoku create で消費)
 function roomLink(code,gameId){
@@ -3583,7 +3585,7 @@ function renderDaifugoBar(){ $('onlineBar').classList.add('hidden'); }
 function hideOnlineUI(){$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');}
 /* boot から1回だけ呼ぶ: オンライン入室UIのDOMハンドラを束ねる (activeNet=五目/オセロ 共用) */
 function setupOnlineUI(){
-  GomokuNet.state.onChange=renderOnlineBar;OthelloNet.state.onChange=renderOnlineBar;DaifugoNet.state.onChange=renderOnlineBar;TicTacToeNet.state.onChange=renderOnlineBar;Connect4Net.state.onChange=renderOnlineBar;DotsNet.state.onChange=renderOnlineBar; // 各netの変化を同じバーへ
+  GomokuNet.state.onChange=renderOnlineBar;OthelloNet.state.onChange=renderOnlineBar;DaifugoNet.state.onChange=renderOnlineBar;TicTacToeNet.state.onChange=renderOnlineBar;Connect4Net.state.onChange=renderOnlineBar;DotsNet.state.onChange=renderOnlineBar;HasamiNet.state.onChange=renderOnlineBar; // 各netの変化を同じバーへ
   const commitName=()=>{activeNet.setName($('olName').value);$('olName').value=activeNet.getName();};
   const start=code=>{commitName();activeNet.connect(code);setRoomUrl(code);
     $('onlineSetup').classList.add('hidden');$('onlineBar').classList.remove('hidden');renderOnlineBar();};
@@ -5677,6 +5679,411 @@ registerGame({
 });
 if(typeof window!=='undefined'){
   window.dotsCpuMove=dotsCpuMove;window.dotsCompletedBy=dotsCompletedBy;window.dotsWinner=dotsWinner;
+}
+
+/* ============================================================
+   ゲーム: はさみ将棋 (versus・ローカル2人・CPU・オンライン対戦)
+   ------------------------------------------------------------
+   盤ロジックは HASAMI-CORE の純関数群。party/hasami-core.js と verbatim 一致 (正本=この index.html)。
+   一致は party/hasami-parity.test.mjs が機械検証。オンラインはサーバー権威(HasamiNet→hasami-server.js)。
+   着手は from/to の2点なので サーバーは 'hmove' 独自メッセージで受ける (共通の単一index moveは未使用)。
+   採用ルール: 9×9・歩のみ各9枚・飛車動き・挟み取り+角取り・5枚取り先取。
+   ============================================================ */
+/* HASAMI-CORE-BEGIN (party/hasami-core.js と verbatim 一致・exportを外しただけ) */
+const HAS_N=9;
+const HAS_CAP_TO_WIN=5;
+function hasOpp(color){return color==='black'?'white':'black';}
+function hasInitial(){
+  const b=new Array(HAS_N*HAS_N).fill(null);
+  for(let c=0;c<HAS_N;c++){b[c]='white';b[(HAS_N-1)*HAS_N+c]='black';}
+  return b;
+}
+/* from の歩(color)が飛車動きで行けるマスのindex配列(昇順)。fromがcolorの歩でなければ []。副作用なし。 */
+function hasLegalTo(board,from,color){
+  if(from<0||from>=HAS_N*HAS_N||board[from]!==color)return [];
+  const N=HAS_N,x=from%N,y=(from-x)/N,out=[];
+  for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+    let cx=x+dx,cy=y+dy;
+    while(cx>=0&&cx<N&&cy>=0&&cy<N&&board[cy*N+cx]===null){out.push(cy*N+cx);cx+=dx;cy+=dy;}
+  }
+  return out;
+}
+/* board(=mover を to に置いた後の盤)で、to の着手により取れる相手歩のindex配列。副作用なし。挟み+角取り。 */
+function hasCapturedBy(board,to,color){
+  const N=HAS_N,x=to%N,y=(to-x)/N,opp=hasOpp(color),caps=new Set();
+  for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+    const line=[];let cx=x+dx,cy=y+dy;
+    while(cx>=0&&cx<N&&cy>=0&&cy<N&&board[cy*N+cx]===opp){line.push(cy*N+cx);cx+=dx;cy+=dy;}
+    if(line.length&&cx>=0&&cx<N&&cy>=0&&cy<N&&board[cy*N+cx]===color)for(const i of line)caps.add(i);
+  }
+  const corners=[
+    [0,1,N],
+    [N-1,N-2,2*N-1],
+    [(N-1)*N,(N-1)*N+1,(N-2)*N],
+    [N*N-1,N*N-2,N*N-1-N],
+  ];
+  for(const [corner,n1,n2] of corners)
+    if(board[corner]===opp&&board[n1]===color&&board[n2]===color)caps.add(corner);
+  return [...caps];
+}
+/* from→to(color)を適用した {board:新盤面, captured:[取ったindex]} を返す。入力boardは不変。 */
+function hasApply(board,from,to,color){
+  const nb=board.slice();
+  nb[from]=null;nb[to]=color;
+  const captured=hasCapturedBy(nb,to,color);
+  for(const i of captured)nb[i]=null;
+  return {board:nb,captured};
+}
+/* 盤上の 各色の歩数。副作用なし。 */
+function hasCount(board){
+  let bk=0,wt=0;
+  for(const v of board){if(v==='black')bk++;else if(v==='white')wt++;}
+  return {black:bk,white:wt};
+}
+/* HASAMI-CORE-END */
+
+/* ── はさみ将棋 CPU: 1手読み + 取られ回避の評価 ── */
+function hasAllMoves(board,color){
+  const mv=[];
+  for(let i=0;i<HAS_N*HAS_N;i++)if(board[i]===color)for(const to of hasLegalTo(board,i,color))mv.push({from:i,to});
+  return mv;
+}
+/* 現手番colorの最善手 {from,to} を返す。無ければ null。level 1..4。
+   評価: 取れる枚数×10 − (相手が次に取れる最大枚数)×8。level1は取り優先の簡易。 */
+function hasCpuMove(board,color,level){
+  const opp=hasOpp(color),moves=hasAllMoves(board,color);
+  if(!moves.length)return null;
+  if(level<=1){ // よわい: 取れる手優先・なければ適当
+    let bestG=-1,pool=[];
+    for(const mv of moves){const g=hasApply(board,mv.from,mv.to,color).captured.length;if(g>bestG){bestG=g;pool=[mv];}else if(g===bestG)pool.push(mv);}
+    return pool[Math.floor(Math.random()*pool.length)];
+  }
+  let best=null,bestScore=-Infinity;
+  for(const mv of moves){
+    const res=hasApply(board,mv.from,mv.to,color);
+    let score=res.captured.length*10;
+    let risk=0;
+    for(const om of hasAllMoves(res.board,opp)){const r2=hasApply(res.board,om.from,om.to,opp);if(r2.captured.length>risk)risk=r2.captured.length;}
+    score-=risk*8;
+    if(level<3)score+=Math.random()*1.5; // つよい/おに は決定的寄り
+    if(score>bestScore){bestScore=score;best=mv;}
+  }
+  return best;
+}
+
+registerGame({
+  id:'hasami', emoji:'⚔️', title:'はさみ将棋',
+  iconHtml:`<svg viewBox="0 0 100 100" width="80%" height="80%" style="display:block"><rect x="12" y="12" width="76" height="76" rx="8" fill="#e2b877" stroke="#a97e3c" stroke-width="4"/><g stroke="#a97e3c" stroke-width="2"><line x1="37" y1="14" x2="37" y2="86"/><line x1="63" y1="14" x2="63" y2="86"/><line x1="14" y1="37" x2="86" y2="37"/><line x1="14" y1="63" x2="86" y2="63"/></g><circle cx="25" cy="25" r="9" fill="#33323c"/><circle cx="50" cy="25" r="9" fill="#f3ecd8" stroke="#a97e3c" stroke-width="2"/><circle cx="75" cy="25" r="9" fill="#33323c"/><circle cx="50" cy="75" r="9" fill="#f3ecd8" stroke="#a97e3c" stroke-width="2"/></svg>`,
+  desc:'はさんで とる 9×9の しょうぎ',
+  color:'#d8a860', type:'versus',
+  howto:[
+    ['👆','じぶんの こまを タップ → うごく さきを タップ'],
+    ['↔️','こまは たて・よこに まっすぐ (とびこえ ふか)'],
+    ['✂️','あいてを はさむ / かどに おいこむと とれる。5まい とったら かち！'],
+  ],
+  create(ctx){
+    const A=ctx.audio;
+    const PC={black:'#33323c',white:'#f3ecd8'}; // 黒駒/白駒
+    const HSYM={black:'⚫',white:'⚪'};
+    const N=HAS_N,CELL=42,BOARD=CELL*N,BX=Math.round((W-BOARD)/2),BY=178;
+    const FBY=BY+BOARD+16;
+    const btnL={x:59,y:FBY,w:146,h:44}, btnR={x:215,y:FBY,w:146,h:44};
+    const btnExit={x:59,y:FBY+52,w:302,h:38};
+
+    let players=[{color:'black',type:'human'},{color:'white',type:'human'}];
+    let board=hasInitial();
+    let turn=0,result=null,last=-1,lastFrom=-1,t=0;
+    let caps={black:0,white:0};
+    let history=[];            // まった用 {board,turn,from,last,caps}
+    let sel=-1;                // 選択中の自駒index (-1=未選択)
+    let hint=null,hintT=0;     // ヒント {from,to}
+    let capFx=[],lastStatSnap=null;
+    let screen='setup';
+    let cfg={ mode:['pvp','pvc','cvc'].includes(store.get('pgp2_hasami_mode','pvp'))?store.get('pgp2_hasami_mode','pvp'):'pvp',
+              humanFirst:store.get('pgp2_hasami_first','1')!=='0',
+              level:Math.min(4,Math.max(1,+store.get('pgp2_hasami_lv','2')||2)) };
+    let oniUnlocked=store.get('pgp2_hasami_oni_unlocked','0')==='1';
+    let oniJustUnlocked=false;
+    let cpuTimer=0;
+    const curColor=()=>turn===0?'black':'white';
+
+    function center(idx){const c=idx%N,r=(idx-c)/N;return {x:BX+c*CELL+CELL/2,y:BY+r*CELL+CELL/2};}
+    function cellAt(x,y){
+      if(x<BX||x>=BX+BOARD||y<BY||y>=BY+BOARD)return -1;
+      const cx=Math.floor((x-BX)/CELL),cy=Math.floor((y-BY)/CELL);
+      return (cx<0||cx>=N||cy<0||cy>=N)?-1:cy*N+cx;
+    }
+    function addCapFx(list){for(const i of list){const c=center(i);capFx.push({x:c.x,y:c.y,t:0});}}
+    function reset(){
+      board=hasInitial();turn=0;result=null;last=-1;lastFrom=-1;caps={black:0,white:0};
+      history=[];sel=-1;hint=null;hintT=0;oniJustUnlocked=false;capFx=[];
+      buildPlayers();A.pop();kickCpu();
+    }
+    function endGame(w){
+      result={winner:w};cpuTimer=0;
+      if(!oniUnlocked&&cfg.mode==='pvc'){
+        const winnerType=players[w==='black'?0:1].type;
+        const cpu=players.find(p=>p.type==='cpu');
+        if(winnerType==='human'&&cpu&&cpu.level===3){oniUnlocked=true;oniJustUnlocked=true;store.set('pgp2_hasami_oni_unlocked','1');A.coin();}
+      }
+      banner(HSYM[w]+' の かち！');A.fever();vib([30,50,30,50,30]);confetti();
+      if(cfg.mode!=='cvc'){
+        const human=players.find(p=>p.type==='human');
+        const youColor=human?human.color:players[0].color;
+        lastStatSnap=statsMatchSnapshot('hasami');
+        statsRecordMatch('hasami',w===youColor?'win':'lose');
+      }
+    }
+    function localMove(from,to){
+      const color=curColor();
+      history.push({board:board.slice(),turn,from:lastFrom,last,caps:{black:caps.black,white:caps.white}});
+      const res=hasApply(board,from,to,color);
+      board=res.board;lastFrom=from;last=to;caps[color]+=res.captured.length;
+      sel=-1;hint=null;hintT=0;
+      if(res.captured.length){addCapFx(res.captured);A.coin();vib([20,30,20]);}else{A.pop();vib(8);}
+      if(caps[color]>=HAS_CAP_TO_WIN)endGame(color);
+      else{turn=1-turn;kickCpu();}
+    }
+    function undoable(){
+      if(cfg.mode==='cvc'||!history.length)return false;
+      if(cfg.mode==='pvp')return true;
+      return history.some(sn=>players[sn.turn].type==='human');
+    }
+    function undo(){
+      if(!undoable()){A.bad();return;}
+      if(result&&lastStatSnap){statsMatchRestore('hasami',lastStatSnap);lastStatSnap=null;}
+      let sn=history.pop();
+      if(cfg.mode==='pvc')while(history.length&&players[sn.turn].type==='cpu')sn=history.pop();
+      board=sn.board;turn=sn.turn;lastFrom=sn.from;last=sn.last;caps={black:sn.caps.black,white:sn.caps.white};
+      result=null;sel=-1;hint=null;hintT=0;A.pop();vib(8);
+    }
+    function showHint(){
+      if(result||players[turn].type!=='human'){A.bad();return;}
+      const mv=hasCpuMove(board,curColor(),3);
+      if(mv){hint={from:mv.from,to:mv.to};hintT=3.4;A.coin();}else A.bad();
+    }
+    // ── CPU/setup ──
+    function buildPlayers(){
+      const L=cfg.level;
+      if(cfg.mode==='cvc')players=[{color:'black',type:'cpu',level:L},{color:'white',type:'cpu',level:L}];
+      else if(cfg.mode==='pvc')players=cfg.humanFirst
+        ?[{color:'black',type:'human'},{color:'white',type:'cpu',level:L}]
+        :[{color:'black',type:'cpu',level:L},{color:'white',type:'human'}];
+      else players=[{color:'black',type:'human'},{color:'white',type:'human'}];
+    }
+    function kickCpu(){cpuTimer=(screen==='play'&&!result&&players[turn].type==='cpu')?0.4+Math.random()*0.3:0;}
+    function startPlay(){
+      buildPlayers();
+      board=hasInitial();turn=0;result=null;last=-1;lastFrom=-1;caps={black:0,white:0};
+      history=[];sel=-1;hint=null;hintT=0;oniJustUnlocked=false;capFx=[];
+      screen='play';A.pop();kickCpu();
+    }
+    function setupBtns(){
+      const L=[];let y=150;
+      for(const [v,lb] of [['pvp','👥 二人で たいせん'],['pvc','🤖 CPUと たいせん'],['cvc','🤖🤖 CPUどうし']])
+        {L.push({x:50,y,w:320,h:44,kind:'mode',val:v,label:lb,active:cfg.mode===v});y+=50;}
+      L.push({x:50,y,w:320,h:44,kind:'online',label:HasamiNet.available()?'🌐 オンライン たいせん':'🌐 オンライン (じゅんびちゅう)',online:true});y+=50;
+      y+=6;
+      if(cfg.mode==='pvc'){
+        L.push({x:50,y,w:155,h:40,kind:'first',val:1,label:'あなた せんて',active:cfg.humanFirst});
+        L.push({x:215,y,w:155,h:40,kind:'first',val:0,label:'あなた ごて',active:!cfg.humanFirst});
+        y+=50;
+      }
+      if(cfg.mode!=='pvp'){
+        const LV=[[1,'よわい'],[2,'ふつう'],[3,'つよい']];
+        for(let i=0;i<3;i++){const [v,lb]=LV[i];L.push({x:50+i*80,y,w:74,h:40,kind:'level',val:v,label:lb,active:cfg.level===v});}
+        const locked=!oniUnlocked;
+        L.push({x:50+3*80,y,w:74,h:40,kind:'level',val:4,label:locked?'🔒おに':'👹おに',active:cfg.level===4&&!locked,locked});
+        L._lvY=y;y+=50;
+      }
+      L.push({x:80,y:y+10,w:260,h:52,kind:'start',label:'▶ はじめる',start:true});
+      return L;
+    }
+    function drawSetup(g){
+      g.fillStyle='#3a2f22';g.fillRect(0,0,W,H);
+      outlinedText(g,'はさみ将棋',W/2,70,26,'#fff','#241a10',7);
+      outlinedText(g,oniJustUnlocked?'👹 おに 解放！':'あいてを えらぶ',W/2,110,16,oniJustUnlocked?'#ffe93d':'#f0dcb8','#241a10',4);
+      for(const b of setupBtns()){
+        const col=b.start?'#ff4d94':b.online?(HasamiNet.available()?'#4d8cff':'#6b6480'):b.active?'#39c06a':b.locked?'#3a3550':'#5a5278';
+        drawBtn(g,b,b.label,col,!!b.locked);
+      }
+      const btns=setupBtns();
+      if(!oniUnlocked&&cfg.mode!=='pvp'&&btns._lvY!=null)
+        outlinedText(g,'「つよい」に かつと 解放',W/2,btns._lvY+58,12,'#e6cfa0','#241a10',3);
+    }
+    function onSetupTap(x,y){
+      for(const b of setupBtns()){
+        if(!hitBtn(b,x,y))continue;
+        if(b.locked){A.bad();return;}
+        if(b.kind==='mode'){cfg.mode=b.val;store.set('pgp2_hasami_mode',b.val);A.pop();}
+        else if(b.kind==='first'){cfg.humanFirst=!!b.val;store.set('pgp2_hasami_first',b.val?'1':'0');A.pop();}
+        else if(b.kind==='level'){cfg.level=b.val;store.set('pgp2_hasami_lv',String(b.val));A.pop();}
+        else if(b.kind==='online'){HasamiNet.available()?OL.enter():A.bad();}
+        else if(b.kind==='start'){startPlay();}
+        return;
+      }
+    }
+    // ── オンライン (mirror/enter/leave は makeVsOnlineUI 流用。着手は from/to なので onDown/描画は独自) ──
+    function fireOnlineResultFx(res){banner(HSYM[res.winner]+' の かち！');A.fever();vib([30,50,30,50,30]);confetti();}
+    const OL=makeVsOnlineUI({net:HasamiNet,btnL,btnR,btnExit,hintCol:'#f2a541',
+      cellAt:()=>-1,canPut:()=>false,twoTapEnabled:()=>false,undoNeedsOppTurn:true,onResult:fireOnlineResultFx,
+      enterReset(){screen='online';result=null;sel=-1;hint=null;hintT=0;lastFrom=-1;last=-1;caps={black:0,white:0};board=hasInitial();capFx=[];},
+      leaveReset(){screen='setup';},
+      newGameReset(){sel=-1;hint=null;hintT=0;lastFrom=-1;last=-1;capFx=[];},
+      snapOf:ng=>ng.turn+'/'+ng.last+'/'+ng.gameNo,
+      applyState(ng){
+        for(let i=0;i<N*N;i++)board[i]=ng.board[i]||null;
+        turn=ng.turn==='black'?0:1;last=ng.last;lastFrom=(ng.from==null?-1:ng.from);
+        caps=ng.caps?{black:ng.caps.black,white:ng.caps.white}:{black:0,white:0};
+        result=ng.result?{winner:ng.result.winner}:null;
+      },
+      hintIdx:()=>-1,onHint(){}});
+    if(pendingOnlineRoom)OL.enter();
+    function undoOkOnline(){
+      const s=HasamiNet.state,ng=s.game;
+      return !!(ng&&!ng.result&&(s.seat==='black'||s.seat==='white')&&ng.last>=0&&ng.board[ng.last]===s.seat&&ng.turn!==s.seat);
+    }
+    function showOnlineHint(){
+      const s=HasamiNet.state,ng=s.game;
+      if(!ng||ng.result||(s.seat!=='black'&&s.seat!=='white')||ng.turn!==s.seat){A.bad();return;}
+      const mv=hasCpuMove(ng.board,s.seat,3);
+      if(mv){hint={from:mv.from,to:mv.to};hintT=3.4;A.coin();}else A.bad();
+    }
+    function drawOnlineButtons(g){
+      const s=HasamiNet.state,ng=s.game;
+      const seated=(s.seat==='black'||s.seat==='white');
+      const myTurn=seated&&ng&&!ng.result&&ng.turn===s.seat;
+      if(ng&&ng.result){
+        const opp=s.seat==='black'?'white':'black';
+        const meReq=seated&&ng.rematch&&ng.rematch[s.seat];
+        const oppReq=seated&&ng.rematch&&ng.rematch[opp];
+        if(oppReq&&!meReq){drawBtn(g,btnL,'✅ うける','#39c06a',false);drawBtn(g,btnR,'✖ ことわる','#a8704a',false);}
+        else if(meReq){drawBtn(g,btnL,'⏳ へんじまち','#7a6cc0',false);drawBtn(g,btnR,'↩ まった','#7a6cc0',!undoOkOnline());}
+        else{drawBtn(g,btnL,'🔄 もう一局','#ff4d94',!seated);drawBtn(g,btnR,'↩ まった','#7a6cc0',!undoOkOnline());}
+      }else{
+        drawBtn(g,btnL,'↩ まった','#7a6cc0',!undoOkOnline());
+        drawBtn(g,btnR,'💡 ヒント','#f2a541',!myTurn);
+      }
+      drawBtn(g,btnExit,'🚪 たいきょ','#5a5278',false);
+    }
+    function onlineTap(x,y){
+      if(hitBtn(btnExit,x,y)){OL.leave();return;}
+      const s=HasamiNet.state,ng=s.game;if(!ng)return;
+      const seated=(s.seat==='black'||s.seat==='white');
+      if(ng.result){
+        const opp=s.seat==='black'?'white':'black';
+        const meReq=seated&&ng.rematch&&ng.rematch[s.seat];
+        const oppReq=seated&&ng.rematch&&ng.rematch[opp];
+        if(hitBtn(btnL,x,y)){if(!seated){A.bad();return;}if(oppReq&&!meReq)HasamiNet.rematch(true);else if(meReq)HasamiNet.rematch(false);else HasamiNet.rematch(true);A.pop();return;}
+        if(hitBtn(btnR,x,y)){if(oppReq&&!meReq){HasamiNet.rematchDecline();A.pop();}else if(undoOkOnline()){HasamiNet.undo();sel=-1;A.pop();}else A.bad();return;}
+        return;
+      }
+      if(hitBtn(btnR,x,y)){showOnlineHint();return;}
+      if(hitBtn(btnL,x,y)){if(undoOkOnline()){HasamiNet.undo();sel=-1;A.pop();}else A.bad();return;}
+      const cell=cellAt(x,y);
+      if(!seated||ng.turn!==s.seat){if(cell>=0)A.bad();return;}
+      const color=s.seat;
+      if(cell<0){sel=-1;return;}
+      if(sel<0){if(ng.board[cell]===color){sel=cell;A.pop();}else A.bad();return;}
+      if(cell===sel){sel=-1;A.pop();return;}
+      if(ng.board[cell]===color){sel=cell;A.pop();return;}
+      if(hasLegalTo(ng.board,sel,color).includes(cell)){HasamiNet.raw({type:'hmove',from:sel,to:cell});sel=-1;A.pop();}
+      else A.bad();
+    }
+    // ── 盤描画 (ローカル/オンライン共通) ──
+    function drawPiece(g,color,c,r){
+      g.save();g.beginPath();g.arc(c.x,c.y,r,0,TAU);g.fillStyle=PC[color];g.fill();
+      g.lineWidth=1.6;g.strokeStyle=color==='black'?'#0c0c12':'#b7a877';g.stroke();
+      if(color==='white'){g.beginPath();g.arc(c.x-r*0.28,c.y-r*0.28,r*0.3,0,TAU);g.fillStyle='rgba(255,255,255,.75)';g.fill();}
+      g.restore();
+    }
+    function drawBoardArea(g,online){
+      g.fillStyle='#3a2f22';g.fillRect(0,0,W,H);
+      const me=online?HasamiNet.state.seat:null;
+      if(!online)outlinedText(g,'はさみ将棋',W/2,34,19,'#fff','#241a10',6);
+      // 取った枚数 (5枚で勝ち)
+      outlinedText(g,'⚫ '+caps.black+'/5',W/2-64,online?66:70,18,'#f0e6d0','#241a10',5,1,'center');
+      outlinedText(g,'⚪ '+caps.white+'/5',W/2+64,online?66:70,18,'#f0e6d0','#241a10',5,1,'center');
+      // 手番/結果
+      let msg='';
+      if(result)msg=HSYM[result.winner]+' の かち！';
+      else{const tc=curColor();const youTurn=online&&(me==='black'||me==='white')&&tc===me;msg=youTurn?'あなたの ばん':(HSYM[tc]+' の ばん');}
+      outlinedText(g,msg,W/2,online?96:150,online?17:19,result?'#ffd23f':'#fff','#241a10',result?6:5.5);
+      // 盤 (木目)
+      g.save();g.fillStyle='#e2b877';rr(g,BX-8,BY-8,BOARD+16,BOARD+16,10);g.fill();g.restore();
+      g.save();g.strokeStyle='#a97e3c';g.lineWidth=1.5;
+      for(let i=0;i<=N;i++){g.beginPath();g.moveTo(BX+i*CELL,BY);g.lineTo(BX+i*CELL,BY+BOARD);g.stroke();g.beginPath();g.moveTo(BX,BY+i*CELL);g.lineTo(BX+BOARD,BY+i*CELL);g.stroke();}
+      g.restore();
+      // 移動元マーカー
+      if(lastFrom>=0){const c=center(lastFrom);g.save();g.globalAlpha=0.5;g.fillStyle='#ff9d4d';rr(g,c.x-CELL*0.42,c.y-CELL*0.42,CELL*0.84,CELL*0.84,6);g.fill();g.restore();}
+      // 直前着地マーカー
+      if(last>=0){const c=center(last);g.save();g.strokeStyle='#ff4d94';g.lineWidth=2.5;rr(g,c.x-CELL*0.44,c.y-CELL*0.44,CELL*0.88,CELL*0.88,6);g.stroke();g.restore();}
+      // 選択 + 合法手
+      if(sel>=0&&board[sel]){const c=center(sel);
+        g.save();g.globalAlpha=0.6+0.4*Math.sin(t*7);g.strokeStyle='#21e6c1';g.lineWidth=3.5;rr(g,c.x-CELL*0.44,c.y-CELL*0.44,CELL*0.88,CELL*0.88,6);g.stroke();g.restore();
+        const color=online?HasamiNet.state.seat:curColor();
+        for(const d of hasLegalTo(board,sel,color)){const dc=center(d);g.save();g.globalAlpha=0.35+0.15*Math.sin(t*6);g.fillStyle='#21e6c1';g.beginPath();g.arc(dc.x,dc.y,CELL*0.16,0,TAU);g.fill();g.restore();}}
+      // ヒント
+      if(hint&&hintT>0){const a=center(hint.from),bb=center(hint.to);
+        g.save();g.globalAlpha=0.5+0.5*Math.sin(t*8);g.strokeStyle='#ffd23f';g.lineWidth=3.5;
+        g.beginPath();g.arc(a.x,a.y,CELL*0.4,0,TAU);g.stroke();
+        g.beginPath();g.moveTo(a.x,a.y);g.lineTo(bb.x,bb.y);g.stroke();
+        g.beginPath();g.arc(bb.x,bb.y,CELL*0.24,0,TAU);g.stroke();g.restore();}
+      // 駒
+      const pr=CELL*0.36;
+      for(let i=0;i<board.length;i++)if(board[i])drawPiece(g,board[i],center(i),pr);
+      // 取りエフェクト
+      for(const f of capFx){const k=f.t/0.5;g.save();g.globalAlpha=1-k;g.strokeStyle='#ffd23f';g.lineWidth=3;g.beginPath();g.arc(f.x,f.y,pr+k*14,0,TAU);g.stroke();g.restore();}
+    }
+
+    return {
+      onDown(x,y){
+        if(screen==='setup'){onSetupTap(x,y);return;}
+        if(screen==='online'){onlineTap(x,y);return;}
+        if(result){if(hitBtn(btnR,x,y)){undo();return;}reset();return;}
+        if(hitBtn(btnL,x,y)){undo();return;}
+        if(hitBtn(btnR,x,y)){showHint();return;}
+        if(players[turn].type!=='human')return;
+        const cell=cellAt(x,y),color=curColor();
+        if(cell<0){sel=-1;return;}
+        if(sel<0){if(board[cell]===color){sel=cell;A.pop();}else A.bad();return;}
+        if(cell===sel){sel=-1;A.pop();return;}
+        if(board[cell]===color){sel=cell;A.pop();return;}
+        if(hasLegalTo(board,sel,color).includes(cell))localMove(sel,cell);
+        else A.bad();
+      },
+      update(dt){
+        t+=dt;
+        if(hintT>0)hintT=Math.max(0,hintT-dt);
+        capFx=capFx.filter(f=>(f.t+=dt)<0.5);
+        if(screen==='online'){
+          OL.mirror();
+          const s=HasamiNet.state;
+          if(sel>=0&&(!s.game||s.game.result||s.game.board[sel]!==s.seat||s.game.turn!==s.seat))sel=-1; // 相手手番/駒消失で選択解除
+          return;
+        }
+        if(screen==='play'&&!result&&players[turn].type==='cpu'&&cpuTimer>0){
+          cpuTimer-=dt;
+          if(cpuTimer<=0){cpuTimer=0;const mv=hasCpuMove(board,curColor(),players[turn].level||2);if(mv)localMove(mv.from,mv.to);}
+        }
+      },
+      draw(g){
+        if(screen==='setup'){drawSetup(g);return;}
+        const online=screen==='online';
+        drawBoardArea(g,online);
+        if(online){drawOnlineButtons(g);return;}
+        const undoDis=!undoable();
+        if(result){drawBtn(g,btnL,'▶ もう いちど','#ff4d94',false);drawBtn(g,btnR,'↩ まった','#7a6cc0',undoDis);}
+        else{drawBtn(g,btnL,'↩ まった','#7a6cc0',undoDis);drawBtn(g,btnR,'💡 ヒント','#f2a541',players[turn].type!=='human');}
+      },
+      hudInfo(){return screen==='setup'?'あいてを えらぶ':'';},
+      onlineBack(){screen='setup';setRoomUrl('');},
+      destroy(){HasamiNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');setRoomUrl('');},
+    };
+  }
+});
+if(typeof window!=='undefined'){
+  window.hasCpuMove=hasCpuMove;window.hasApply=hasApply;window.hasLegalTo=hasLegalTo;window.hasCapturedBy=hasCapturedBy;
 }
 
 /* ============================================================

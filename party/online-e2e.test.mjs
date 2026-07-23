@@ -39,6 +39,9 @@ const c4Src = html.slice(s3, html.indexOf('/* C4-CORE-END */', s3));
 // ドット&ボックス コア (辺/箱/完成判定。dots-parity.test.mjs と同じアンカー)
 const s4 = html.indexOf('/* DOTS-CORE-BEGIN');
 const dotsSrc = html.slice(s4, html.indexOf('/* DOTS-CORE-END */', s4));
+// はさみ将棋 コア (飛車動き/挟み取り。hasami-parity.test.mjs と同じアンカー)
+const s5 = html.indexOf('/* HASAMI-CORE-BEGIN');
+const hasamiSrc = html.slice(s5, html.indexOf('/* HASAMI-CORE-END */', s5));
 
 let pass = 0, fail = 0;
 const ck = (name, cond) => { cond ? pass++ : fail++; console.log((cond ? 'ok   ' : 'FAIL ') + name); };
@@ -67,8 +70,8 @@ function makeEnv() { // クライアント1人分の隔離スコープ (store/�
       optIn: () => false, setOptIn() {} },
   };
   const keys = Object.keys(env);
-  const fn = new Function(...keys, src + '\n' + othSrc + '\n' + c4Src + '\n' + dotsSrc +
-    '\nreturn {GomokuNet,OthelloNet,TicTacToeNet,Connect4Net,DotsNet,makeVsOnlineUI,getFlips,getValidMoves,c4Drop,c4CheckWin,dotsCompletedBy};');
+  const fn = new Function(...keys, src + '\n' + othSrc + '\n' + c4Src + '\n' + dotsSrc + '\n' + hasamiSrc +
+    '\nreturn {GomokuNet,OthelloNet,TicTacToeNet,Connect4Net,DotsNet,HasamiNet,makeVsOnlineUI,getFlips,getValidMoves,c4Drop,c4CheckWin,dotsCompletedBy,hasLegalTo,hasApply};');
   return { api: fn(...keys.map(k => env[k])), env };
 }
 
@@ -338,6 +341,36 @@ const code = () => 'e2e' + Math.random().toString(36).slice(2, 5); // 実行ご�
   A.mirror(); B.mirror();
   ck('dots:継続手のあと白へ交代(両client)', A.turnSeat === 'white' && B.turnSeat === 'white');
   ck('dots:両クライアントの盤/箱一致', JSON.stringify(A.net.state.game.board) === JSON.stringify(B.net.state.game.board) && JSON.stringify(A.net.state.game.boxes) === JSON.stringify(B.net.state.game.boxes));
+  A.net.leave(); B.net.leave();
+}
+
+// ══ はさみ将棋: 着席/初期配置/非合法(斜め)拒否/合法移動ミラー+交代/実手順での挟み取り同期 ══
+// 着手は from/to の hmove 独自メッセージ。net を直接駆動して実DOプロトコルを検証する(makeVsOnlineUI非経由)。
+{
+  const A = { ...makeEnv() }, B = { ...makeEnv() };
+  A.net = A.api.HasamiNet; B.net = B.api.HasamiNet;
+  const room = code();
+  A.net.connect(room); B.net.connect(room);
+  ck('hasami:両者着席', await until(() => A.net.state.seat && B.net.state.seat && A.net.state.game && B.net.state.game && A.net.state.game.board.length === 81, 8000));
+  const black = A.net.state.seat === 'black' ? A : B, white = A.net.state.seat === 'black' ? B : A;
+  const RC = (r, c) => r * 9 + c;
+  const G = () => A.net.state.game;
+  ck('hasami:初期配置', G().board[RC(0, 0)] === 'white' && G().board[RC(8, 0)] === 'black' && G().turn === 'black' && G().caps.black === 0);
+  // 非合法(斜め)移動 → サーバー権威で拒否・盤/手番不変
+  black.net.raw({ type: 'hmove', from: RC(8, 0), to: RC(7, 1) });
+  await new Promise(r => setTimeout(r, 250));
+  ck('hasami:斜め移動拒否', G().board[RC(7, 1)] === null && G().board[RC(8, 0)] === 'black' && G().turn === 'black');
+  // 合法移動(縦にまっすぐ) → 両clientにミラー + 手番交代
+  black.net.raw({ type: 'hmove', from: RC(8, 3), to: RC(4, 3) });
+  ck('hasami:着手ミラー+交代', await until(() => A.net.state.game.board[RC(4, 3)] === 'black' && B.net.state.game.board[RC(4, 3)] === 'black' && G().turn === 'white', 6000));
+  // 白が(4,4)へ(黒(4,3)の隣)→ 黒が(4,5)で挟む
+  await until(() => G().turn === 'white', 4000);
+  white.net.raw({ type: 'hmove', from: RC(0, 4), to: RC(4, 4) });
+  await until(() => G().board[RC(4, 4)] === 'white' && G().turn === 'black', 6000);
+  black.net.raw({ type: 'hmove', from: RC(8, 5), to: RC(4, 5) }); // (4,3)黒 - (4,4)白 - (4,5)黒 で挟み取り
+  ck('hasami:挟み取りが両clientに同期', await until(() => A.net.state.game.board[RC(4, 4)] === null && B.net.state.game.board[RC(4, 4)] === null && A.net.state.game.caps.black === 1 && B.net.state.game.caps.black === 1, 6000));
+  ck('hasami:取り後は白番+移動元配信', G().turn === 'white' && G().from === RC(8, 5) && G().last === RC(4, 5));
+  ck('hasami:両クライアント盤/取り数一致', JSON.stringify(A.net.state.game.board) === JSON.stringify(B.net.state.game.board) && A.net.state.game.caps.black === B.net.state.game.caps.black);
   A.net.leave(); B.net.leave();
 }
 
