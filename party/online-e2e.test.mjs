@@ -101,7 +101,8 @@ function mkClient(kind) { // kind: 'gomoku' | 'othello' | 'ox' | 'connect4' | 'd
       // 着地index(=列最下段の空き)のみ合法。重力: 最下段 or 直下が埋まっている。
       canPut: (ng, cc) => cc >= 0 && ng.board[cc] === null && (Math.floor(cc / 7) === 5 || ng.board[cc + 7] !== null),
     } : kind === 'dots' ? {
-      ...base, hintCol: '#f2a541', undoNeedsOppTurn: true,
+      // ★実UI(index.html)と同契約: 箱完成で手番継続するため undoNeedsOppTurn:false (得点手も直前手が自分なら取消可)。
+      ...base, hintCol: '#f2a541', undoNeedsOppTurn: false,
       snapOf: ng => ng.turn + '/' + ng.last + '/' + ng.gameNo + '/' + ((ng.boxes || []).filter(Boolean).length),
       canPut: (ng, cc) => cc >= 0 && ng.board[cc] === null,
     } : {
@@ -336,6 +337,23 @@ const code = () => 'e2e' + Math.random().toString(36).slice(2, 5); // 実行ご�
   A.mirror(); B.mirror();
   ck('dots:箱0を黒が獲得(両client)', A.boxes && A.boxes[0] === 'black' && B.boxes && B.boxes[0] === 'black');
   ck('dots:箱完成で手番継続=黒(両client)', A.turnSeat === 'black' && B.turnSeat === 'black' && A.net.state.game.turn === 'black');
+  // ── まった(undo)契約: 箱完成の得点手も「手番継続中(=自分の番のまま)」に取り消せる (must-fix #64) ──
+  // この時点: 黒が辺21で箱0完成し手番継続=黒。得点手だが直前手は黒自身なので undoOk=true でなければならない。
+  ck('dots:得点手直後の まった可否(黒=可/白=不可)', black.OL.undoOk() === true && white.OL.undoOk() === false);
+  const blackScoreBefore = A.net.state.game.boxes.filter(v => v === 'black').length; // =1
+  black.tapL(); // まった (undoOk=true なので net.undo() が発火)
+  // 辺・箱所有・得点・手番 の4点が 両clientで巻き戻ることを検証
+  ck('dots:まったで得点辺21が両clientで消える', await until(() => A.net.state.game.board[21] === null && B.net.state.game.board[21] === null, 6000, () => { A.mirror(); B.mirror(); }));
+  A.mirror(); B.mirror();
+  ck('dots:まったで箱0所有が両clientで巻き戻る', A.boxes[0] === null && B.boxes[0] === null && A.net.state.game.boxes[0] === null && B.net.state.game.boxes[0] === null);
+  ck('dots:まったで黒スコアが減る(1→0, 両client)', blackScoreBefore === 1 &&
+    A.net.state.game.boxes.filter(v => v === 'black').length === 0 && B.net.state.game.boxes.filter(v => v === 'black').length === 0);
+  ck('dots:まった後は黒手番のまま(得点手を巻き戻し=黒が指し直し, 両client)', A.turnSeat === 'black' && B.turnSeat === 'black' && A.net.state.game.turn === 'black');
+  ck('dots:まった後の盤/箱が両client一致', JSON.stringify(A.net.state.game.board) === JSON.stringify(B.net.state.game.board) && JSON.stringify(A.net.state.game.boxes) === JSON.stringify(B.net.state.game.boxes));
+  // 巻き戻したので改めて 辺21で箱0完成 → 手番継続(以降のシナリオを継続)
+  await play('black', 21);
+  A.mirror(); B.mirror();
+  ck('dots:指し直しで箱0再獲得+手番継続=黒(両client)', A.boxes[0] === 'black' && B.boxes[0] === 'black' && A.turnSeat === 'black' && B.turnSeat === 'black');
   // 継続手: 黒がもう1手(箱未完成の辺16) → 交代して白番
   await play('black', 16);
   A.mirror(); B.mirror();

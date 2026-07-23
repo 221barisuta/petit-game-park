@@ -5579,7 +5579,9 @@ registerGame({
       else{banner(BSYM[res.winner]+' の かち！');A.fever();vib([30,50,30,50,30]);confetti();}
     }
     const OL=makeVsOnlineUI({net:DotsNet,btnL,btnR,btnExit:{x:59,y:FBY+56,w:302,h:40},hintCol:'#f2a541',
-      cellAt:edgeAt,onResult:fireOnlineResultFx,twoTapEnabled:()=>twoTapVs,undoNeedsOppTurn:true,
+      // ★箱完成で手番継続する契約: 得点手(手番=自分のまま)も直前手が自分なら「まった」可。
+      //   undoNeedsOppTurn:false → undoOk条件から ng.turn!==seat を外す(サーバーがsnapshotで権威的に巻き戻す)。
+      cellAt:edgeAt,onResult:fireOnlineResultFx,twoTapEnabled:()=>twoTapVs,undoNeedsOppTurn:false,
       enterReset(){screen='online';result=null;last=-1;hint=-1;hintT=0;for(let i=0;i<DOTS_BOXES;i++)boxes[i]=null;},
       leaveReset(){screen='setup';},
       newGameReset(){hint=-1;hintT=0;last=-1;},
