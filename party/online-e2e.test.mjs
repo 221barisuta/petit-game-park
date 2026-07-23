@@ -158,6 +158,65 @@ const code = () => 'e2e' + Math.random().toString(36).slice(2, 5); // 実行ご�
   A.net.leave(); B.net.leave();
 }
 
+// ══ オセロ: フル対局で 自動パス→終局→石数 を実機プロトコルで検証 ══
+// 「手番の席」を持つ側が常に最小indexの合法手を打つと 対局は決定的に60手で終局する(白45/黒19)。
+// 途中で黒が複数回 自動パスされ(手番維持のまま白が連打する)、パス時の手番同期・終局判定・石数一致を
+// 実DOプロトコル越しに検証する。 (task: パス処理はオンライン同期での手番ズレの温床 → パス→終局を必ず検証)
+{
+  const A = mkClient('othello'), B = mkClient('othello');
+  const room = code();
+  A.OL.enter(); B.OL.enter();
+  A.net.connect(room); B.net.connect(room);
+  ck('othello終局:両者着席', await until(() => A.net.state.seat && B.net.state.seat && A.net.state.game && B.net.state.game, 8000, () => { A.mirror(); B.mirror(); }));
+  const seatOf = c => c.net.state.seat; // 席は対局中固定 (rematch/swapなし)
+  const oppC = c => c === 'black' ? 'white' : 'black';
+  // must-fix#1: パスは「間接(sawPassフラグ)」でなく、発生時のサーバー権威stateを捕捉して
+  //   ①どの色がパスされたか(pass色配信) ②手番がパス色の相手で維持/スキップされるか を直接検証する。
+  let passEv = null;                          // 最初の自動パス発生時のスナップショット
+  let prevMover = null, sawConsecutive = false; // 同色が連続で手番=パスで相手がスキップされた証跡(連打)
+  let guard = 0;
+  while (!(A.result || B.result) && guard++ < 200) {
+    A.mirror(); B.mirror();
+    const st = A.net.state.game; // サーバー権威state (両者へ同一broadcast)
+    if (!st) { await new Promise(r => setTimeout(r, 60)); continue; }
+    if (st.pass && !passEv) {                       // 自動パス発生: pass=飛ばされた色 / turn=打ち続ける相手色
+      await until(() => B.net.state.game && B.net.state.game.pass, 3000, () => { A.mirror(); B.mirror(); }); // 相手clientも同broadcast受信まで待つ(片側snapshotはフレーク源)
+      const ast = A.net.state.game, bst = B.net.state.game;
+      passEv = {
+        passColor: ast.pass,                        // どの色がパスされたか(pass色配信)
+        turn: ast.turn,                             // 手番はパス色の相手で維持されているはず
+        passMoves: A.api.getValidMoves(ast.board, ast.pass).length,  // パスされた色は合法手0(正しくスキップ)
+        turnMoves: A.api.getValidMoves(ast.board, ast.turn).length,  // 手番側は合法手あり
+        bPass: bst && bst.pass, bTurn: bst && bst.turn,             // 相手clientにも同じpass色/手番が配信されるか
+      };
+    }
+    const turnSeat = st.turn;
+    const cur = seatOf(A) === turnSeat ? A : B;     // 手番の席を持つクライアントが打つ
+    const mv = cur.api.getValidMoves(st.board, turnSeat)[0];
+    if (mv === undefined) { await new Promise(r => setTimeout(r, 60)); continue; } // 自動パス反映待ち
+    if (prevMover === turnSeat) sawConsecutive = true; // 直前と同色が再度手番=パスで相手がスキップ(連打)
+    prevMover = turnSeat;
+    const before = st.board.filter(v => v).length;
+    cur.tapCell(mv); cur.tapCell(mv);               // 2タップ確定
+    await until(() => A.result || B.result || (A.net.state.game && A.net.state.game.board.filter(v => v).length > before), 6000, () => { A.mirror(); B.mirror(); });
+  }
+  // must-fix#2: 片側のresult受信だけで抜けるとフレーク。両clientの終局受信を待ってから検証する。
+  const bothEnded = await until(() => !!(A.result && B.result), 6000, () => { A.mirror(); B.mirror(); });
+  // ── 自動パスの色・手番維持を直接検証 (must-fix#1) ──
+  ck('othello終局:自動パス発生でpass色が配信される', !!(passEv && passEv.passColor));
+  ck('othello終局:パスされた色は合法手0で正しくスキップ', !!(passEv && passEv.passMoves === 0));
+  ck('othello終局:手番はパス色の相手で維持(合法手あり)', !!(passEv && passEv.turn === oppC(passEv.passColor) && passEv.turnMoves > 0));
+  ck('othello終局:pass色/手番が両クライアントへ同一配信', !!(passEv && passEv.passColor === passEv.bPass && passEv.turn === passEv.bTurn));
+  ck('othello終局:パスで同色が連続して手番を得る(相手が連打)', sawConsecutive);
+  ck('othello終局:終局到達(両クライアント)', bothEnded);
+  const fb = A.net.state.game.board; let bk = 0, wt = 0; for (const v of fb) { if (v === 'black') bk++; else if (v === 'white') wt++; }
+  const majority = bk > wt ? 'black' : wt > bk ? 'white' : undefined; // 石数の多い方が勝者(同数=引分)
+  ck('othello終局:石数と勝者が整合', A.result && (A.result.draw ? majority === undefined : A.result.winner === majority));
+  ck('othello終局:両クライアントの盤/勝者が一致', JSON.stringify(A.net.state.game.board) === JSON.stringify(B.net.state.game.board) && JSON.stringify(A.result) === JSON.stringify(B.result));
+  ck('othello終局:決着演出は各1回', A.results === 1 && B.results === 1);
+  A.net.leave(); B.net.leave();
+}
+
 // ══ まるばつ(三目): 着席/着手ミラー/3連決着/決着演出1回 ══
 {
   const A = mkClient('ox'), B = mkClient('ox');
@@ -171,17 +230,20 @@ const code = () => 'e2e' + Math.random().toString(36).slice(2, 5); // 実行ご�
   ck('ox:1タップでは未着手', black.board[4] === null && black.OL.st.pending === 4);
   black.tapCell(4); // 同マス2度目=確定 (中央4に着手)
   ck('ox:着手が相手にミラー', await until(() => white.board[4] === 'black', 6000, () => { A.mirror(); B.mirror(); }));
-  // 黒 [0,1,2] で上段3連。白は下段(6,7)で手番だけ消化。既に4に黒があるので勝ち筋は0,1,2で作る
-  white.tapCell(6); white.tapCell(6);
-  await until(() => black.board[6] === 'white', 6000, () => { A.mirror(); B.mirror(); });
+  // 黒 [0,1,2] で上段3連(勝者)。白は 3,5,6 で手番だけ消化する。
+  // 白の3手 {3,5,6} はどの3連ライン(行/列/対角)も作らず、黒の勝ち筋 0,1,2 も塞がない
+  // ため、黒が2を置く最終手まで決着せず、意図どおり黒が [0,1,2] で勝つ。
+  // (旧手順の 6→7→8 は下段3連で白が先に勝ってしまい誤り: PR#62 reviewer 指摘)
+  white.tapCell(3); white.tapCell(3);
+  await until(() => black.board[3] === 'white', 6000, () => { A.mirror(); B.mirror(); });
   black.tapCell(0); black.tapCell(0);
   await until(() => white.board[0] === 'black', 6000, () => { A.mirror(); B.mirror(); });
-  white.tapCell(7); white.tapCell(7);
-  await until(() => black.board[7] === 'white', 6000, () => { A.mirror(); B.mirror(); });
+  white.tapCell(5); white.tapCell(5);
+  await until(() => black.board[5] === 'white', 6000, () => { A.mirror(); B.mirror(); });
   black.tapCell(1); black.tapCell(1);
   await until(() => white.board[1] === 'black', 6000, () => { A.mirror(); B.mirror(); });
-  white.tapCell(8); white.tapCell(8);
-  await until(() => black.board[8] === 'white', 6000, () => { A.mirror(); B.mirror(); });
+  white.tapCell(6); white.tapCell(6);
+  await until(() => black.board[6] === 'white', 6000, () => { A.mirror(); B.mirror(); });
   black.tapCell(2); black.tapCell(2); // 黒 [0,1,2] で3連
   ck('ox:決着(黒勝ち)', await until(() => A.result && B.result, 6000, () => { A.mirror(); B.mirror(); }) && A.result.winner === 'black' && A.result.line.join() === '0,1,2');
   ck('ox:決着演出は各1回', A.results === 1 && B.results === 1);
