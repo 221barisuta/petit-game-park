@@ -12,6 +12,8 @@
 |---|---|
 | `index.js` | Worker エントリ。`routePartykitRequest` でルーティングし、`Gomoku extends Server`(partyserver) が `server.js` のロジックを委譲実行 |
 | `server.js` | ゲーム権威ロジック本体（座席割当・着手検証・勝敗確定・再接続・**席解放アラーム(30秒)**・観戦・もう一局先後入替）。framework非依存 |
+| `private-state.js` | 接続ごとの state projector。seat token を検証し、カードゲームでは本人手札だけを合成する汎用秘匿基盤 |
+| `nanarabe-core.js` / `nanarabe-server.js` | 七並べの純コアと3〜4人オンライン権威サーバー（CPU補充・パス3回脱落・手札強制公開） |
 | `gomoku-core.js` | `GO_N` と `checkGomoku` の**単一ソース**。`index.html` と verbatim 一致させる |
 | `parity.test.mjs` | `index.html` の `checkGomoku` と `gomoku-core.js` が同一出力か検証（divergence厳禁） |
 | `server.test.mjs` | サーバー権威ロジックの単体テスト（モック room/conn・席解放含む） |
@@ -25,6 +27,14 @@
 - `series`: `[{game, winner: pid|null}]`。`seats[].pid` は公開のプレイヤー識別（色は毎局入替のため pid で集計）。
 - 再戦成立時は先後を入替え、席が変わった接続へ新しい `assigned` を再送（クライアントの seat 更新）。
 - 接続パス: `wss://<host>/parties/main/<部屋コード>`（DOバインディング `Main` が kebab 化されて party `main` に対応）。
+
+### 手札ゲームの接続別 state
+
+- サーバーは `hands`（全手札）を DO storage の権威状態として保持する。
+- 公開 payload は `board/field`、`counts`（他家を含む残枚数）、席・手番・順位だけ。
+- `hello.token` と保存済み seat token が一致した接続にだけ `hand`（本人手札）を追加する。観戦者は `hand:[]`。
+- broadcast は共通 JSON の一斉送信を使わず、`private-state.js` が接続ごとに投影・送信する。
+- 七並べは `/parties/nanarabe/<部屋コード>`。3〜4人で、開始時の空席は CPU が埋める。
 
 ## セットアップ（依存インストール）
 ```sh
@@ -46,6 +56,18 @@ npx wrangler dev       # 既定 http://127.0.0.1:8787 で起動 (ws://127.0.0.1:
 ```sh
 node party/parity.test.mjs     # checkGomoku クライアント/サーバー一致
 node party/server.test.mjs     # サーバー権威ロジック（座席・検証・勝敗・再接続・rematch・席解放）
+node party/private-state.test.mjs
+node party/nanarabe-core.test.mjs
+node party/nanarabe-server.test.mjs
+node party/nanarabe-parity.test.mjs
+node party/card-privacy-e2e.test.mjs  # A/B/観戦/再接続の生payload秘匿E2E（プロセス内transport）
+```
+
+実DO WebSocketでも同じ秘匿E2Eを実行できる。
+
+```sh
+cd party && npx wrangler dev --port 8791 --local
+PARTY_E2E_HOST=127.0.0.1:8791 node party/card-privacy-e2e.test.mjs
 ```
 
 ### 実DOランタイムE2E（オンラインUI×実サーバー・16項目）
