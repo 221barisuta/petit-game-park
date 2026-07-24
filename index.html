@@ -906,7 +906,7 @@ function registerGame(def){GAMES.push(def)}
 // メニュー分類: versus=たいせん / それ以外=ひとり (新規ゲームも type で自動振り分け)
 const soloGames=()=>GAMES.filter(g=>g.type!=='versus');
 // たいせんの表示順 (#7 まるばつ→オセロ→五目→チキン。方針: マス目が多いほど下)。未定義idは末尾。
-const VS_ORDER=['ox','othello','gomoku','connect4','dots','hasami','chicken','daifugo'];
+const VS_ORDER=['ox','othello','gomoku','connect4','dots','hasami','chicken','daifugo','nanarabe'];
 const vsOrder=id=>{const i=VS_ORDER.indexOf(id);return i<0?99:i;};
 const versusGames=()=>GAMES.filter(g=>g.type==='versus').sort((a,b)=>vsOrder(a.id)-vsOrder(b.id));
 // デイリー抽選は「ひとり(非versus)」プールのみから選ぶ (versusはスコア競争にならないため除外)
@@ -1470,7 +1470,7 @@ function renderTotalRank(tt,tsub,wt,wsub){
 /* #14 ユーザー情報画面: PROFILE の編集UI (開くのは scr-select の「👤なまえ・ランキング」) */
 /* #backlog1 じぶんのきろく画面: スコア系はGAMES登録順のうちscore対象のみ、対戦系は勝敗/連勝も表示 */
 const REC_SCORE_GAMES=['tea','lane','spot','mole','chinitsu','2048','chicken'];
-const REC_VS_GAMES=['ox','gomoku','othello','daifugo','mahjong'];
+const REC_VS_GAMES=['ox','gomoku','othello','daifugo','nanarabe','mahjong'];
 function setupRecords(){
   const list=$('recList');
   const render=()=>{
@@ -1785,7 +1785,7 @@ function buildCards(){
     const c=document.createElement('button');
     c.className='gcard'+(isDaily?' daily':'');
     c.style.setProperty('--c',def.color);
-    const vsBadge=def.id==='chicken'?'🤖 CPUと たいせん':'👥 2人で たいせん'; // #1 チキンはCPUとの度胸試し
+    const vsBadge=def.vsBadge||(def.id==='chicken'?'🤖 CPUと たいせん':'👥 2人で たいせん'); // 多人数ゲームは登録側で専用文言
     c.innerHTML=`${isDaily?'<span class="badge">📅 今日のチャレンジ</span>':''}
       <span class="ic">${def.iconHtml||def.emoji}</span>
       <span class="tx"><span class="nm">${def.title}</span>
@@ -1892,7 +1892,7 @@ function boot(){
   setupRecords();
   // ?room=CODE[&g=<gameId>] で開いたら該当ゲームのオンライン対戦へ自動参加 (g省略=五目・従来互換)
   {const sp=new URLSearchParams(location.search),rp=sp.get('room'),gid=(sp.get('g')||'gomoku').toLowerCase();
-   const net=gid==='othello'?OthelloNet:gid==='daifugo'?DaifugoNet:gid==='ox'?TicTacToeNet:GomokuNet; // 部屋のparty空間を持つnetで可用性判定
+   const net=onlineNetById[gid]||GomokuNet; // 部屋のparty空間を持つnetで可用性判定
    if(rp&&net.available()){const def=GAMES.find(g=>g.id===gid)||GAMES.find(g=>g.id==='gomoku');
      if(def){pendingOnlineRoom=rp.toUpperCase();openGame(def,{});}}}
   window.__PGP={
@@ -3391,6 +3391,7 @@ function makeOnlineNet(opts){
 const GomokuNet=makeOnlineNet({party:'main',seatPrefix:'pgp2_gomoku_seat_',gameLabel:'五目並べ',gameId:'gomoku'});
 const OthelloNet=makeOnlineNet({party:'othello',seatPrefix:'pgp2_othello_seat_',gameLabel:'オセロ',gameId:'othello'});
 const DaifugoNet=makeOnlineNet({party:'daifugo',seatPrefix:'pgp2_daifugo_seat_',gameLabel:'大富豪',gameId:'daifugo'});
+const NanarabeNet=makeOnlineNet({party:'nanarabe',seatPrefix:'pgp2_nanarabe_seat_',gameLabel:'七並べ',gameId:'nanarabe'});
 // まるばつ(三目): 席色は共通契約どおり black/white。バー記号だけ ○/× に読み替え(盤の配色と一致)
 const TicTacToeNet=makeOnlineNet({party:'ox',seatPrefix:'pgp2_ox_seat_',gameLabel:'まるばつ',gameId:'ox',sym:{black:'○',white:'×'}});
 // コネクトフォー: 席色は共通契約どおり black/white。バー記号は 🔴(先手)/🟡(後手) に読み替え(盤の配色と一致)
@@ -3399,6 +3400,10 @@ const Connect4Net=makeOnlineNet({party:'connect4',seatPrefix:'pgp2_c4_seat_',gam
 const DotsNet=makeOnlineNet({party:'dots',seatPrefix:'pgp2_dots_seat_',gameLabel:'ドット&ボックス',gameId:'dots',sym:{black:'🔴',white:'🔵'}});
 // はさみ将棋: 席色 black/white。バー記号は ⚫(先手)/⚪(後手)。着手は from/to の hmove を net.raw で送る
 const HasamiNet=makeOnlineNet({party:'hasami',seatPrefix:'pgp2_hasami_seat_',gameLabel:'はさみ将棋',gameId:'hasami',sym:{black:'⚫',white:'⚪'}});
+const onlineNetById={
+  gomoku:GomokuNet,othello:OthelloNet,daifugo:DaifugoNet,nanarabe:NanarabeNet,ox:TicTacToeNet,
+  connect4:Connect4Net,dots:DotsNet,hasami:HasamiNet,
+};
 let activeNet=GomokuNet; // オンライン画面に入ったゲームの net を指す (renderOnlineBar/setupOnlineUI 共用)
 let pendingOnlineRoom=''; // ?room=CODE 自動参加用 (boot→gomoku create で消費)
 function roomLink(code,gameId){
@@ -3521,7 +3526,7 @@ function makeVsOnlineUI(cfg){
 /* オンライン情報バー(DOM)を現在のサーバー状態で更新 (activeNet=五目/オセロ 共用。大富豪は専用描画へ) */
 function renderOnlineBar(){
   const s=activeNet.state;if(s.status==='idle')return;
-  if(activeNet.gameId==='daifugo'){renderDaifugoBar(s);return;} // 多人数stateは2人対戦バーと形が違う
+  if(activeNet.gameId==='daifugo'||activeNet.gameId==='nanarabe'){renderCardGameBar(s);return;} // 多人数stateは専用canvas描画
   const g=s.game,me=s.seat;
   const SB=activeNet.sym||{black:'●',white:'○'}; // 席記号 (五目/オセロ=碁石 / まるばつ=○×)
   $('olRoomCode').textContent=s.code||'—';
@@ -3585,11 +3590,11 @@ function renderOnlineBar(){
 }
 /* 大富豪は canvas 側が 部屋コード/メンバー/状態 を全て描画するため、共有DOMバーは隠す
    (2人対戦用の座席バーとレイアウトが噛み合わず重なるのを防ぐ) */
-function renderDaifugoBar(){ $('onlineBar').classList.add('hidden'); }
+function renderCardGameBar(){ $('onlineBar').classList.add('hidden'); }
 function hideOnlineUI(){$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');}
 /* boot から1回だけ呼ぶ: オンライン入室UIのDOMハンドラを束ねる (activeNet=五目/オセロ 共用) */
 function setupOnlineUI(){
-  GomokuNet.state.onChange=renderOnlineBar;OthelloNet.state.onChange=renderOnlineBar;DaifugoNet.state.onChange=renderOnlineBar;TicTacToeNet.state.onChange=renderOnlineBar;Connect4Net.state.onChange=renderOnlineBar;DotsNet.state.onChange=renderOnlineBar;HasamiNet.state.onChange=renderOnlineBar; // 各netの変化を同じバーへ
+  GomokuNet.state.onChange=renderOnlineBar;OthelloNet.state.onChange=renderOnlineBar;DaifugoNet.state.onChange=renderOnlineBar;NanarabeNet.state.onChange=renderOnlineBar;TicTacToeNet.state.onChange=renderOnlineBar;Connect4Net.state.onChange=renderOnlineBar;DotsNet.state.onChange=renderOnlineBar;HasamiNet.state.onChange=renderOnlineBar; // 各netの変化を同じバーへ
   const commitName=()=>{activeNet.setName($('olName').value);$('olName').value=activeNet.getName();};
   const start=code=>{commitName();activeNet.connect(code);setRoomUrl(code);
     $('onlineSetup').classList.add('hidden');$('onlineBar').classList.remove('hidden');renderOnlineBar();};
@@ -6876,6 +6881,490 @@ registerGame({
       },
       onlineBack(){screen='setup';setRoomUrl('');},      // 入室UIの「もどる」から
       destroy(){DaifugoNet.leave();$('onlineSetup').classList.add('hidden');$('onlineBar').classList.add('hidden');setRoomUrl('');},
+    };
+  }
+});
+
+/* =========================================================================
+   ♠ 七並べ — 手札秘匿基盤の実証ゲーム (3〜4人 / CPUソロ / オンライン)
+   ========================================================================= */
+/* NANARABE-CORE-BEGIN (party/nanarabe-core.js と export を除き verbatim 一致) */
+/* 七並べ 共有コア (クライアント/サーバー共通の純ロジック)。
+   カード: {id:0..51,s:0..3,r:1..13} / suit順 ♠♥♦♣。
+   7は配札直後に場へ置く。場のカードと同じ suit の両隣だけを出せる。
+   パス3回で脱落し、残り手札はすべて公開して場へ強制配置する。 */
+
+const NANA_SUITS = ['♠', '♥', '♦', '♣'];
+
+function normalizeNanaPlayers(v) {
+  return Number(v) === 3 ? 3 : 4;
+}
+
+function makeNanaDeck() {
+  const out = [];
+  for (let s = 0; s < 4; s++) for (let r = 1; r <= 13; r++) out.push({ id: s * 13 + r - 1, s, r });
+  return out;
+}
+
+function shuffleNana(cards, rng = Math.random) {
+  const a = cards.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const t = a[i]; a[i] = a[j]; a[j] = t;
+  }
+  return a;
+}
+
+function sortNanaHand(cards) {
+  return cards.slice().sort((a, b) => a.s - b.s || a.r - b.r || a.id - b.id);
+}
+
+function newNanaRound(playerCount, deck = makeNanaDeck()) {
+  const n = normalizeNanaPlayers(playerCount);
+  const hands = Array.from({ length: n }, () => []);
+  deck.forEach((c, i) => hands[i % n].push(c));
+  const board = Array.from({ length: 4 }, () => new Array(13).fill(null));
+  for (let seat = 0; seat < n; seat++) {
+    const keep = [];
+    for (const c of hands[seat]) {
+      if (c.r === 7) board[c.s][6] = c;
+      else keep.push(c);
+    }
+    hands[seat] = sortNanaHand(keep);
+  }
+  const status = new Array(n).fill('playing');
+  const finishOrder = [];
+  for (let seat = 0; seat < n; seat++) {
+    if (!hands[seat].length) { status[seat] = 'finished'; finishOrder.push(seat); }
+  }
+  const first = status.findIndex(v => v === 'playing');
+  const g = {
+    n, hands, board, turn: first < 0 ? 0 : first,
+    passes: new Array(n).fill(0),
+    status,
+    finishOrder,
+    eliminationOrder: [],
+    ranking: [],
+    last: null,
+    ended: first < 0,
+  };
+  if (g.ended) g.ranking = finishOrder.slice();
+  return g;
+}
+
+function nanaCardPlayable(g, card) {
+  if (!g || !card || card.r === 7 || !g.board[card.s] || g.board[card.s][card.r - 1]) return false;
+  const left = card.r > 1 && g.board[card.s][card.r - 2];
+  const right = card.r < 13 && g.board[card.s][card.r];
+  return !!(left || right);
+}
+
+function nanaLegalCards(g, seat) {
+  if (!g || !Number.isInteger(seat) || !g.hands[seat] || g.status[seat] !== 'playing') return [];
+  return g.hands[seat].filter(c => nanaCardPlayable(g, c));
+}
+
+function nanaFinish(g) {
+  const active = g.status.filter(v => v === 'playing').length;
+  if (active) return false;
+  g.ended = true;
+  // 上がった人が先。脱落者同士は、より長く残った人を上位にする。
+  g.ranking = g.finishOrder.concat(g.eliminationOrder.slice().reverse());
+  return true;
+}
+
+function nanaAdvance(g, from) {
+  if (nanaFinish(g)) return;
+  for (let k = 1; k <= g.n; k++) {
+    const seat = (from + k) % g.n;
+    if (g.status[seat] === 'playing') { g.turn = seat; return; }
+  }
+}
+
+function nanaPlay(g, seat, cardId) {
+  if (!g || g.ended) return { ok: false, error: 'ゲームは おわっています' };
+  if (seat !== g.turn || g.status[seat] !== 'playing') return { ok: false, error: 'あなたの ばんでは ありません' };
+  const i = g.hands[seat].findIndex(c => c.id === Number(cardId));
+  if (i < 0) return { ok: false, error: 'てふだに ない カードです' };
+  const card = g.hands[seat][i];
+  if (!nanaCardPlayable(g, card)) return { ok: false, error: 'そのカードは まだ だせません' };
+  g.hands[seat].splice(i, 1);
+  g.board[card.s][card.r - 1] = card;
+  g.last = { seat, type: 'play', card };
+  let finishedSeat = null;
+  if (!g.hands[seat].length) {
+    g.status[seat] = 'finished';
+    g.finishOrder.push(seat);
+    finishedSeat = seat;
+  }
+  nanaAdvance(g, seat);
+  return { ok: true, card, finishedSeat, ended: g.ended };
+}
+
+function nanaPass(g, seat) {
+  if (!g || g.ended) return { ok: false, error: 'ゲームは おわっています' };
+  if (seat !== g.turn || g.status[seat] !== 'playing') return { ok: false, error: 'あなたの ばんでは ありません' };
+  g.passes[seat]++;
+  let eliminatedSeat = null;
+  const revealed = [];
+  if (g.passes[seat] >= 3) {
+    eliminatedSeat = seat;
+    g.status[seat] = 'eliminated';
+    g.eliminationOrder.push(seat);
+    for (const card of g.hands[seat]) {
+      g.board[card.s][card.r - 1] = card;
+      revealed.push(card);
+    }
+    g.hands[seat] = [];
+  }
+  g.last = { seat, type: 'pass', revealed: revealed.slice() };
+  nanaAdvance(g, seat);
+  return { ok: true, eliminatedSeat, revealed, ended: g.ended };
+}
+
+function nanaCpuChoose(g, seat, rng = Math.random) {
+  const legal = nanaLegalCards(g, seat);
+  if (!legal.length) return { type: 'pass' };
+  const hand = g.hands[seat];
+  const ownsOutward = c => {
+    const r = c.r < 7 ? c.r - 1 : c.r + 1;
+    return r >= 1 && r <= 13 && hand.some(h => h.s === c.s && h.r === r);
+  };
+  // 7から遠い端札を後に残し、次の外側も自分が持つ列を優先して主導権を保つ。
+  legal.sort((a, b) =>
+    (Math.abs(a.r - 7) * 10 - (ownsOutward(a) ? 3 : 0))
+    - (Math.abs(b.r - 7) * 10 - (ownsOutward(b) ? 3 : 0))
+    || a.s - b.s || a.r - b.r);
+  const best = legal[0];
+  // 戦略パスは最初の1回だけ。残り2回は詰まり用に温存し、脱落リスクを避ける。
+  if (g.passes[seat] === 0 && hand.length > 4 && Math.abs(best.r - 7) >= 4 && rng() < 0.35)
+    return { type: 'pass' };
+  return { type: 'play', cardId: best.id };
+}
+/* NANARABE-CORE-END */
+
+function runNanarabeTests(){
+  const {ck,done}=makeTest('nanarabe');
+  const R=newNanaRound(4,makeNanaDeck());
+  ck('deal-48-after-sevens',R.hands.reduce((n,h)=>n+h.length,0)===48);
+  ck('four-sevens-open',R.board.every(row=>row[6]&&row[6].r===7));
+  const legal=nanaLegalCards(R,0),c=legal[0];
+  ck('initial-only-neighbors',legal.every(x=>x.r===6||x.r===8));
+  ck('play-neighbor',!!c&&nanaPlay(R,0,c.id).ok&&R.board[c.s][c.r-1].id===c.id);
+  const P={n:3,hands:[[{id:0,s:0,r:1}],[],[]],board:Array.from({length:4},()=>new Array(13).fill(null)),
+    turn:0,passes:[2,0,0],status:['playing','finished','finished'],finishOrder:[1,2],eliminationOrder:[],ranking:[],last:null,ended:false};
+  P.board.forEach((row,s)=>row[6]={id:s*13+6,s,r:7});
+  ck('third-pass-eliminates-and-reveals',nanaPass(P,0).eliminatedSeat===0&&P.board[0][0].id===0);
+  return done();
+}
+if(typeof window!=='undefined'){window.runNanarabeTests=runNanarabeTests;SELFTESTS.push(runNanarabeTests);}
+
+registerGame({
+  id:'nanarabe',emoji:'♠️',title:'七ならべ',type:'versus',vsBadge:'👥 3〜4人 / CPU',
+  desc:'7から両どなりへ！パス3回で脱落',color:'#3f8f62',duration:null,noDaily:true,
+  howto:[
+    ['7️⃣','4まいの 7を さいしょに 場へ ならべる'],
+    ['↔️','同じマークの 両どなりへ 1まいずつ だす'],
+    ['✋','パスは3回で だつらく（手札は ぜんぶ公開）'],
+    ['🤖','ひとりでも CPU 2〜3人と あそべる'],
+    ['🌐','オンラインは あきせきを CPUが うめる'],
+  ],
+  create(ctx){
+    const A=ctx.audio,NAMES=['あなた','CPU 2','CPU 3','CPU 4'];
+    const bExit={x:10,y:10,w:52,h:36},bPass={x:18,y:650,w:174,h:48},bPlay={x:228,y:650,w:174,h:48};
+    const setupBtns=[
+      {x:48,y:180,w:324,h:58,kind:'local3',label:'🤖 3人で あそぶ'},
+      {x:48,y:254,w:324,h:58,kind:'local4',label:'🤖 4人で あそぶ'},
+      {x:48,y:344,w:324,h:58,kind:'online',label:NanarabeNet.available()?'🌐 オンライン たいせん':'🌐 オンライン (じゅんびちゅう)'},
+    ];
+    let screen='setup',L=null,selected=-1,cpuTimer=0,recorded=false;
+    let onlineToastSeq=NanarabeNet.state.toastSeq,onlineErr='';
+
+    const rankText=r=>r===1?'1st':r===2?'2nd':r===3?'3rd':r+'th';
+    const cardRank=r=>r===1?'A':r===11?'J':r===12?'Q':r===13?'K':String(r);
+    function drawNanaCard(g,c,x,y,w,h,selectedCard,small){
+      const red=c.s===1||c.s===2;
+      g.save();
+      g.fillStyle='#fff';g.strokeStyle=selectedCard?'#ffd23f':'#28324a';g.lineWidth=selectedCard?3:1.4;
+      rr(g,x,y,w,h,Math.min(6,w*.18));g.fill();g.stroke();
+      const col=red?'#d73545':'#20283a';
+      if(small){
+        outlinedText(g,cardRank(c.r),x+w/2,y+h*.36,Math.max(9,w*.42),col,'#fff',1);
+        outlinedText(g,NANA_SUITS[c.s],x+w/2,y+h*.72,Math.max(9,w*.38),col,'#fff',1);
+      }else{
+        outlinedText(g,cardRank(c.r),x+8,y+13,15,col,'#fff',2,1,'left');
+        outlinedText(g,NANA_SUITS[c.s],x+w/2,y+h*.61,25,col,'#fff',2);
+      }
+      g.restore();
+    }
+    function localView(){
+      if(!L)return null;
+      return {n:L.n,you:0,names:NAMES.slice(0,L.n),cpu:NAMES.slice(0,L.n).map((_,i)=>i>0),
+        counts:L.hands.map(h=>h.length),board:L.board,turn:L.turn,passes:L.passes,status:L.status,
+        ranking:L.ranking,hand:L.hands[0],ended:L.ended,host:true};
+    }
+    function onlineView(){
+      const g=NanarabeNet.state.game;if(!g||g.phase==='lobby'||!g.board)return null;
+      return {n:g.rules.playerCount,you:g.youSeat,names:g.seatsPub.map(s=>s?s.name:'—'),
+        cpu:g.seatsPub.map(s=>!!(s&&s.cpu)),counts:g.counts,board:g.board,turn:g.turn,passes:g.passes,
+        status:g.playerStatus,ranking:g.ranking,hand:g.hand||[],ended:g.phase==='ended',host:g.youSeat===g.hostSeat};
+    }
+    const view=()=>screen==='play'?localView():screen==='online'?onlineView():null;
+    function finishFeedback(r,seat){
+      if(r.finishedSeat!=null){banner((seat===0?'あなた':NAMES[seat])+' あがり！');A.ok();}
+      if(r.eliminatedSeat!=null){banner((seat===0?'あなた':NAMES[seat])+' パス3回で だつらく…');A.bad();}
+      if(r.ended&&!recorded&&screen==='play'){
+        recorded=true;const rank=L.ranking.indexOf(0);
+        statsRecordMatch('nanarabe',rank===0?'win':'lose');
+        rank===0?(A.fever(),confetti()):A.splash();
+      }
+    }
+    function startLocal(n){
+      L=newNanaRound(n,shuffleNana(makeNanaDeck()));
+      selected=-1;recorded=false;screen='play';A.pop();scheduleCpu();
+    }
+    function scheduleCpu(){cpuTimer=(L&&!L.ended&&L.turn!==0)?0.45+Math.random()*.45:0;}
+    function playerLabel(v,seat){
+      const st=v.status[seat],fi=v.ranking.indexOf(seat);
+      if(v.ended&&fi>=0)return rankText(fi+1);
+      if(st==='finished')return 'あがり';
+      if(st==='eliminated')return 'だつらく';
+      return '🂠'+v.counts[seat]+' / パス'+v.passes[seat];
+    }
+    function drawTable(g,v){
+      g.fillStyle='#286744';g.fillRect(0,0,W,H);
+      const gap=6,bw=(W-20-gap*(v.n-1))/v.n;
+      for(let i=0;i<v.n;i++){
+        const x=10+i*(bw+gap),turn=!v.ended&&v.turn===i,me=i===v.you;
+        g.save();g.fillStyle=turn?'#69508f':'rgba(10,30,22,.48)';rr(g,x,38,bw,64,9);g.fill();
+        if(me){g.strokeStyle='#21e6c1';g.lineWidth=2;rr(g,x,38,bw,64,9);g.stroke();}g.restore();
+        outlinedText(g,(v.cpu[i]?'🤖':'')+(v.names[i]||'—'),x+bw/2,55,11,'#fff','rgba(0,0,0,.5)',3);
+        outlinedText(g,playerLabel(v,i),x+bw/2,83,11,v.status[i]==='eliminated'?'#ff9aaa':'#ffe478','rgba(0,0,0,.5)',3);
+      }
+      const myTurn=!v.ended&&v.you>=0&&v.turn===v.you;
+      const turnName=v.names[v.turn]||'';
+      outlinedText(g,v.ended?'けっか はっぴょう！':myTurn?'あなたの ばん！':turnName+' の ばん…',
+        W/2,126,19,myTurn?'#ffe94a':'#fff','rgba(0,0,0,.55)',5);
+      outlinedText(g,'A  2  3  4  5  6  7  8  9  10  J  Q  K',W/2,154,11,'#d8f3df','rgba(0,0,0,.35)',2);
+      const cw=29,ch=42,x0=14;
+      for(let s=0;s<4;s++){
+        const y=168+s*49;
+        for(let r=0;r<13;r++){
+          const x=x0+r*30,c=v.board[s][r];
+          if(c)drawNanaCard(g,c,x,y,cw,ch,false,true);
+          else{
+            g.save();g.strokeStyle='rgba(220,245,225,.2)';g.lineWidth=1;g.setLineDash([3,3]);
+            rr(g,x,y,cw,ch,4);g.stroke();g.restore();
+          }
+        }
+      }
+      const hand=sortNanaHand(v.hand||[]),hm=hand.length,hw=48,hh=70;
+      const sp=hm>1?Math.min(28,(W-24-hw)/(hm-1)):0,hx=(W-(hw+sp*Math.max(0,hm-1)))/2,hy=542;
+      hand.forEach((c,i)=>drawNanaCard(g,c,hx+i*sp,hy-(selected===c.id?14:0),hw,hh,selected===c.id,false));
+      if(v.you<0)outlinedText(g,'👀 かんせんちゅう（手札は みえません）',W/2,615,14,'#fff','rgba(0,0,0,.5)',4);
+      else if(v.status[v.you]==='finished')outlinedText(g,'あがり！ のこりを みまもろう',W/2,615,14,'#ffe94a','rgba(0,0,0,.5)',4);
+      else if(v.status[v.you]==='eliminated')outlinedText(g,'だつらく… 手札は 場に公開されました',W/2,615,13,'#ffb0c0','rgba(0,0,0,.5)',4);
+      if(v.ended){drawEnd(g,v);return;}
+      const selectedCard=hand.find(c=>c.id===selected);
+      const canPlay=myTurn&&selectedCard&&nanaCardPlayable({board:v.board},selectedCard);
+      drawBtn(g,bPass,'✋ パス '+(v.you>=0?v.passes[v.you]+'/3':''),'#7a65b8',!myTurn,16);
+      drawBtn(g,bPlay,'カードを だす','#e44f80',!canPlay,16);
+    }
+    function drawEnd(g,v){
+      g.save();g.fillStyle='rgba(18,13,34,.9)';rr(g,52,420,316,216,16);g.fill();g.restore();
+      outlinedText(g,'🏆 けっか',W/2,449,22,'#ffd23f','#593b12',5);
+      v.ranking.forEach((seat,i)=>{
+        outlinedText(g,rankText(i+1)+'　'+(seat===v.you?'★ ':'')+(v.names[seat]||'—'),
+          W/2,480+i*30,14,i===0?'#ffe94a':seat===v.you?'#21e6c1':'#fff','rgba(0,0,0,.5)',4);
+      });
+      if(screen==='play'){
+        drawBtn(g,bPass,'⚙ せっていへ','#6d6382',false,15);
+        drawBtn(g,bPlay,'▶ もういちど','#e44f80',false,15);
+      }else{
+        drawBtn(g,bPass,'🚪 たいきょ','#9b684f',false,15);
+        drawBtn(g,bPlay,v.host?'▶ もういちど':'ホストを まつ…','#e44f80',!v.host,15);
+      }
+    }
+    function cardAt(v,x,y){
+      const hand=sortNanaHand(v.hand||[]),hm=hand.length;if(!hm)return null;
+      const hw=48,hh=70,sp=hm>1?Math.min(28,(W-24-hw)/(hm-1)):0,hx=(W-(hw+sp*(hm-1)))/2,hy=542;
+      for(let i=hm-1;i>=0;i--){
+        const cy=hy-(selected===hand[i].id?14:0),cx=hx+i*sp;
+        if(x>=cx&&x<=cx+hw&&y>=cy&&y<=cy+hh)return hand[i];
+      }
+      return null;
+    }
+    function drawSetup(g){
+      g.fillStyle='#263b50';g.fillRect(0,0,W,H);
+      outlinedText(g,'♠ 七ならべ',W/2,70,30,'#fff','#172536',7);
+      outlinedText(g,'7から 両どなりへ つなげよう！',W/2,111,15,'#cde6f5','#172536',4);
+      outlinedText(g,'パス3回で だつらく・手札は ぜんぶ公開',W/2,137,12,'#ffc3d0','#172536',3);
+      setupBtns.forEach(b=>drawBtn(g,b,b.label,b.kind==='online'?(NanarabeNet.available()?'#4d8cff':'#67677b'):'#3f9a66',
+        b.kind==='online'&&!NanarabeNet.available(),18));
+      outlinedText(g,'ローカルは あなた1人＋CPU',W/2,438,13,'#bcd0df','#172536',3);
+      outlinedText(g,'CPUは 端のカードを のこし、パスも温存します',W/2,470,12,'#bcd0df','#172536',3);
+    }
+    function onSetupTap(x,y){
+      for(const b of setupBtns){
+        if(!hitBtn(b,x,y))continue;
+        if(b.kind==='local3')startLocal(3);
+        else if(b.kind==='local4')startLocal(4);
+        else NanarabeNet.available()?enterOnline():A.bad();
+        return;
+      }
+    }
+    function enterOnline(){
+      if(!NanarabeNet.available())return;
+      activeNet=NanarabeNet;screen='online';selected=-1;onlineToastSeq=NanarabeNet.state.toastSeq;onlineErr='';
+      if(pendingOnlineRoom){
+        const code=pendingOnlineRoom;pendingOnlineRoom='';
+        NanarabeNet.connect(code);setRoomUrl(code);$('onlineBar').classList.remove('hidden');renderOnlineBar();
+      }else{
+        $('olName').value=NanarabeNet.getName();$('olCode').value='';$('olSetupMsg').textContent='';
+        $('onlineSetup').classList.remove('hidden');
+      }
+    }
+    function leaveOnline(){
+      NanarabeNet.raw({type:'leave'});NanarabeNet.leave();hideOnlineUI();setRoomUrl('');
+      selected=-1;screen='setup';A.pop();
+    }
+    function lobbyButtons(g){
+      const host=g.youSeat===g.hostSeat;
+      return [
+        {x:24,y:160,w:116,h:42,kind:'copy',label:'📋 コード',on:true},
+        {x:152,y:160,w:116,h:42,kind:'link',label:'🔗 リンク',on:true},
+        {x:280,y:160,w:116,h:42,kind:'share',label:'📤 共有',on:true},
+        {x:48,y:492,w:154,h:44,kind:'p3',label:'3人',on:host},
+        {x:218,y:492,w:154,h:44,kind:'p4',label:'4人',on:host},
+        {x:48,y:554,w:154,h:44,kind:'leave',label:'🚪 退出',on:true},
+        {x:218,y:554,w:154,h:44,kind:'start',label:host?'▶ はじめる':'ホスト待ち',on:host&&g.canStart},
+      ];
+    }
+    function drawLobby(g2,g){
+      const s=NanarabeNet.state;
+      g2.fillStyle='#286744';g2.fillRect(0,0,W,H);
+      outlinedText(g2,'🌐 オンライン 七ならべ',W/2,56,22,'#fff','rgba(0,0,0,.5)',6);
+      outlinedText(g2,'あいことば',W/2,91,12,'#d8f3df','rgba(0,0,0,.4)',3);
+      outlinedText(g2,s.code||'—',W/2,125,29,'#ffe94a','#5a3a10',7);
+      lobbyButtons(g).forEach(b=>drawBtn(g2,b,b.label,b.kind==='start'?'#e44f80':b.kind==='leave'?'#9b684f':'#4d8cff',!b.on,14));
+      outlinedText(g2,'メンバー '+g.joined+'/'+g.rules.playerCount+'（あきは CPU）',W/2,231,15,'#fff','rgba(0,0,0,.5)',4);
+      for(let i=0;i<g.rules.playerCount;i++){
+        const y=250+i*46,o=g.seatsPub[i];
+        g2.save();g2.fillStyle='rgba(0,0,0,.25)';rr(g2,48,y,324,36,8);g2.fill();g2.restore();
+        const nm=o?((o.cpu?'🤖 ':'')+o.name):'（あき → CPU）';
+        outlinedText(g2,(i===g.hostSeat?'👑 ':'')+nm,W/2,y+19,13,o?'#fff':'#a9c9b2','rgba(0,0,0,.4)',3);
+        if(i===g.youSeat)outlinedText(g2,'あなた',338,y+19,10,'#21e6c1','rgba(0,0,0,.5)',2);
+      }
+      outlinedText(g2,'人数: '+g.rules.playerCount+'人（ホストが変更）',W/2,457,13,'#d8f3df','rgba(0,0,0,.4)',3);
+      outlinedText(g2,'1人から開始OK・足りない席はCPUが参加',W/2,628,12,'#b9d9c2','rgba(0,0,0,.4)',3);
+    }
+    function drawOnline(g2){
+      const s=NanarabeNet.state,g=s.game;
+      if(!g){
+        g2.fillStyle='#286744';g2.fillRect(0,0,W,H);
+        outlinedText(g2,s.status==='error'?(s.error||'エラー'):'せつぞくちゅう…',W/2,330,18,'#fff','rgba(0,0,0,.5)',5);
+        drawBtn(g2,bExit,'🚪','#6d6382',false,14);return;
+      }
+      if(g.phase==='lobby'){drawLobby(g2,g);return;}
+      const v=onlineView();if(v)drawTable(g2,v);
+      drawBtn(g2,bExit,'🚪','#6d6382',false,14);
+    }
+    function onLobbyTap(x,y,g){
+      for(const b of lobbyButtons(g)){
+        if(!hitBtn(b,x,y))continue;
+        if(!b.on){A.bad();return;}
+        if(b.kind==='copy'){copyText(NanarabeNet.state.code);banner('あいことばを コピー');}
+        else if(b.kind==='link'){copyText(roomLink(NanarabeNet.state.code));banner('リンクを コピー');}
+        else if(b.kind==='share'){
+          const url=roomLink(NanarabeNet.state.code);
+          if(navigator.share)navigator.share({title:'七ならべ であそぼ！',text:'いっしょに七ならべ！',url}).catch(()=>{});
+          else{copyText(url);banner('リンクを コピー');}
+        }else if(b.kind==='p3')NanarabeNet.raw({type:'setPlayers',playerCount:3});
+        else if(b.kind==='p4')NanarabeNet.raw({type:'setPlayers',playerCount:4});
+        else if(b.kind==='start')NanarabeNet.raw({type:'start'});
+        else if(b.kind==='leave')leaveOnline();
+        A.pop();return;
+      }
+    }
+    function onTableTap(x,y,v,online){
+      if(hitBtn(bExit,x,y)&&online){leaveOnline();return;}
+      if(v.ended){
+        if(hitBtn(bPlay,x,y)){
+          if(online){if(v.host)NanarabeNet.raw({type:'again'});else A.bad();}
+          else startLocal(v.n);
+          return;
+        }
+        if(hitBtn(bPass,x,y)){online?leaveOnline():(screen='setup',L=null,A.pop());return;}
+        return;
+      }
+      if(v.you<0||v.status[v.you]!=='playing'){
+        if(hitBtn(bPass,x,y)||hitBtn(bPlay,x,y))A.bad();
+        return;
+      }
+      if(hitBtn(bPass,x,y)){
+        if(v.turn!==v.you){A.bad();return;}
+        if(online)NanarabeNet.raw({type:'pass'});
+        else{const r=nanaPass(L,0);if(r.ok){selected=-1;finishFeedback(r,0);scheduleCpu();}}
+        A.pop();return;
+      }
+      if(hitBtn(bPlay,x,y)){
+        if(v.turn!==v.you||selected<0){A.bad();return;}
+        if(online)NanarabeNet.raw({type:'play',cardId:selected});
+        else{
+          const r=nanaPlay(L,0,selected);
+          if(!r.ok){banner(r.error);A.bad();return;}
+          finishFeedback(r,0);scheduleCpu();
+        }
+        selected=-1;A.pop();return;
+      }
+      const c=cardAt(v,x,y);
+      if(c){selected=selected===c.id?-1:c.id;A.pop();}
+    }
+    function onOnlineTap(x,y){
+      const g=NanarabeNet.state.game;
+      if(!g){if(hitBtn(bExit,x,y))leaveOnline();return;}
+      if(g.phase==='lobby'){onLobbyTap(x,y,g);return;}
+      const v=onlineView();if(v)onTableTap(x,y,v,true);
+    }
+    if(pendingOnlineRoom)enterOnline();
+
+    return {
+      onDown(x,y){
+        if(screen==='setup'){onSetupTap(x,y);return;}
+        if(screen==='online'){onOnlineTap(x,y);return;}
+        const v=localView();
+        if(v)onTableTap(x,y,v,false);
+      },
+      update(dt){
+        if(screen==='play'&&L&&!L.ended&&L.turn!==0&&cpuTimer>0){
+          cpuTimer-=dt;
+          if(cpuTimer<=0){
+            const seat=L.turn,m=nanaCpuChoose(L,seat);
+            const r=m.type==='play'?nanaPlay(L,seat,m.cardId):nanaPass(L,seat);
+            if(r.ok)finishFeedback(r,seat);
+            scheduleCpu();
+          }
+        }
+        if(screen==='online'){
+          const s=NanarabeNet.state;
+          if(s.toastSeq!==onlineToastSeq){onlineToastSeq=s.toastSeq;if(s.toastMsg){banner(s.toastMsg);A.coin();}}
+          if(s.error&&s.error!==onlineErr){onlineErr=s.error;banner(s.error);A.bad();}
+          const v=onlineView();if(v&&selected>=0&&!v.hand.some(c=>c.id===selected))selected=-1;
+        }
+      },
+      draw(g){
+        if(screen==='setup')drawSetup(g);
+        else if(screen==='online')drawOnline(g);
+        else{const v=localView();if(v)drawTable(g,v);}
+      },
+      hudInfo(){
+        const v=view();
+        if(screen==='setup')return '3〜4人 / CPU';
+        if(!v)return '';
+        return v.you>=0?'てふだ '+v.counts[v.you]+'まい':'かんせん';
+      },
+      onlineBack(){screen='setup';setRoomUrl('');},
+      destroy(){NanarabeNet.leave();hideOnlineUI();setRoomUrl('');},
     };
   }
 });
