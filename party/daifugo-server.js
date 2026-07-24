@@ -17,6 +17,7 @@ import {
   normalizeRules, defaultRules, makeDeck, shuffle, titlesFor,
   newRound, applyAction, cpuChoose, ctxOf, applyExchange,
 } from './daifugo-core.js';
+import { hiddenHandState, sendProjectedState, broadcastProjectedState } from './private-state.js';
 
 const GRACE_MS = 60000; // 切断猶予: 再接続が無ければ ロビー=席解放 / 対局中=CPU代打ち
 
@@ -283,8 +284,6 @@ export default class DaifugoServer {
 
   stateFor(conn) {
     const g = this.game, live = this.liveTokens();
-    const cs = conn.state || {};
-    const youSeat = (cs.seat != null && cs.seat >= 0 && g.seats[cs.seat] && g.seats[cs.seat].token === cs.token) ? cs.seat : -1;
     let spectators = 0;
     for (const c of this.room.getConnections()) {
       const s2 = c.state;
@@ -292,26 +291,28 @@ export default class DaifugoServer {
     }
     const seatsPub = g.seats.map(s => s ? { name: s.name, cpu: !!s.cpu, connected: s.cpu ? true : live.has(s.token), pid: s.pid } : null);
     const r = g.round;
-    const base = {
-      type: 'state',
+    const publicState = {
       status: g.phase === 'lobby' ? 'waiting' : (g.phase === 'ended' ? 'ended' : 'playing'),
       phase: g.phase, gameNo: g.gameNo, rules: g.rules,
-      youSeat, hostSeat: this.hostSeat(),
+      hostSeat: this.hostSeat(),
       joined: g.seats.filter(s => s && !s.cpu).length,
       canStart: g.phase === 'lobby' && (g.rules.fillWithCPU ? this.humanCount() >= 1 : g.seats.every(s => s)),
       seatsPub, spectators,
     };
     if (r) {
-      base.counts = r.hands.map(h => h.length);
-      base.turn = r.turn;
-      base.passed = r.passed;
-      base.finished = r.finished;
-      base.field = { top: r.field.top, cards: r.field.cards, owner: r.field.owner, lock: r.field.lock };
-      base.st = r.st;
-      base.hand = youSeat >= 0 ? r.hands[youSeat] : []; // ★手札は本人の分だけ。他人の手札は送らない
+      publicState.turn = r.turn;
+      publicState.passed = r.passed;
+      publicState.finished = r.finished;
+      publicState.field = { top: r.field.top, cards: r.field.cards, owner: r.field.owner, lock: r.field.lock };
+      publicState.st = r.st;
     }
-    return base;
+    return hiddenHandState({
+      conn,
+      seats: g.seats,
+      hands: r ? r.hands : [],
+      publicState,
+    });
   }
-  sendState(conn) { try { conn.send(JSON.stringify(this.stateFor(conn))); } catch (e) {} }
-  broadcastState() { for (const c of this.room.getConnections()) this.sendState(c); }
+  sendState(conn) { sendProjectedState(conn, c => this.stateFor(c)); }
+  broadcastState() { broadcastProjectedState(this.room, c => this.stateFor(c)); }
 }

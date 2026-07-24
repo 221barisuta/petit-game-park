@@ -18,6 +18,8 @@
      - result: {winner:'black'|'white', line?} | {draw:true} | null。series は基盤が winner の pid で記録
    接続パス互換: wss://<host>/parties/<party>/<部屋コード> (party は wrangler の DOバインディング名 kebab) */
 
+import { sendProjectedState, broadcastProjectedState } from './private-state.js';
+
 export const MARKS = ['black', 'white'];
 export const GRACE_MS = 30000; // 席解放の猶予: 切断後この時間 再接続が無ければ席を解放
 
@@ -61,7 +63,7 @@ export class VersusServer {
   // ── 接続/切断 ───────────────────────────────────────────
   onConnect(conn) {
     // hello を受けて座席割当する。接続直後に現在状態だけ送る (観戦者にも盤面が見える)
-    conn.send(JSON.stringify(this.stateMsg()));
+    this.sendState(conn);
   }
   async onClose(conn) {
     // 席プレイヤーが切断 → 切断時刻を記録し解放アラームを仕掛ける (猶予内に再接続が無ければ onAlarm で解放)
@@ -341,7 +343,11 @@ export class VersusServer {
       ...this.extraState(g), // ゲーム固有フィールド (例 オセロ {pass})
     };
   }
-  broadcastState() { this.room.broadcast(JSON.stringify(this.stateMsg())); }
+  // 既定の盤ゲームは全員同じ公開state。手札ゲームは stateFor(conn) をoverrideして
+  // private-state.js の hiddenHandState() で本人手札だけを足す。
+  stateFor(_conn) { return this.stateMsg(); }
+  sendState(conn) { sendProjectedState(conn, c => this.stateFor(c)); }
+  broadcastState() { broadcastProjectedState(this.room, c => this.stateFor(c)); }
 }
 
 /* SimpleGridServer: 「空マスへ石を1つ置くだけ(反転なし)」の2人対戦の共通実装。
