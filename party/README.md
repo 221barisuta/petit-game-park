@@ -77,13 +77,17 @@ PARTY_E2E_HOST=127.0.0.1:8791 node party/card-privacy-e2e.test.mjs
 PARTY_E2E_HOST=127.0.0.1:8791 node party/pageone-privacy-e2e.test.mjs
 ```
 
-### 実DOランタイムE2E（オンラインUI×実サーバー・16項目）
-`index.html` のオンラインUI層（makeOnlineNet/makeVsOnlineUI）を抽出し、ローカルの実DOに
+### オンラインUI×サーバーE2E（盤ゲーム6種・60項目）
+`index.html` のオンラインUI層（makeOnlineNet/makeVsOnlineUI）を抽出し、既定のプロセス内WebSocket transportに
 2クライアントで接続して 着席／1タップ非確定→2度タップ確定／着手ミラー／待った可否と巻き戻し／
 決着演出1回だけ／再戦オファー→承諾→新対局／退室／オセロ非合法マス拒否 を機械検証する。
 ```sh
-cd party && npx wrangler dev --port 8787 --local   # 別ターミナルで起動（--local=メモリ内DO・本番に触れない）
-node party/online-e2e.test.mjs                     # [online e2e] pass=16 / fail=0 で成功
+node party/online-e2e.test.mjs                     # [online e2e] pass=60 / fail=0 で成功
+```
+実DOランタイムでも同じシナリオを実行できる。
+```sh
+cd party && npx wrangler dev --port 8787 --local   # 別ターミナル
+E2E_HOST=localhost:8787 node party/online-e2e.test.mjs
 ```
 
 ## デプロイ（★ユーザー操作が必要 — Cloudflare アカウント）

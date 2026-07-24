@@ -4,25 +4,104 @@
    2クライアントで接続して、五目=着席/1タップ非確定/着手ミラー/待った/決着演出1回/
    再戦オファー→承諾→新対局/退室、オセロ=非合法マス拒否/着手ミラー を機械検証する。
 
-   実行:  cd party && npx wrangler dev --port 8787 --local   (別ターミナル)
-          node party/online-e2e.test.mjs                      (リポジトリルートから)
-   依存:  devDependencies の ws (npm install 済みであること)
-   注意:  --local のDOはメモリ内なので本番データには一切触れない */
+   実行:  node party/online-e2e.test.mjs                      (既定: process内WebSocket transport)
+   実DO:  cd party && npx wrangler dev --port 8787 --local   (別ターミナル)
+          E2E_HOST=localhost:8787 node party/online-e2e.test.mjs
+   注意:  どちらもメモリ内の部屋なので本番データには一切触れない */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { WebSocket as WS } from 'ws';
+import GomokuServer from './server.js';
+import OthelloServer from './othello-server.js';
+import TicTacToeServer from './ox-server.js';
+import Connect4Server from './c4-server.js';
+import DotsServer from './dots-server.js';
+import HasamiServer from './hasami-server.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const html = readFileSync(join(here, '..', 'index.html'), 'utf8');
-const HOST = process.env.E2E_HOST || 'localhost:8787';
+const NETWORK = !!process.env.E2E_HOST;
+const HOST = process.env.E2E_HOST || 'in-process';
 
-// ── 接続先の事前チェック (wrangler dev 未起動なら分かりやすく終了) ──
-try {
-  await fetch(`http://${HOST}/`);
-} catch (e) {
-  console.error(`[online e2e] ${HOST} に接続できません。先に \`cd party && npx wrangler dev --port 8787 --local\` を起動してください`);
-  process.exit(2);
+// ── loopback待受が禁止されたCIでも同じclient/server protocolを通せるprocess内transport ──
+const serverTypes = {
+  main: GomokuServer,
+  othello: OthelloServer,
+  ox: TicTacToeServer,
+  connect4: Connect4Server,
+  dots: DotsServer,
+  hasami: HasamiServer,
+};
+const inProcessRooms = new Map();
+let inProcessConnNo = 0;
+class InProcessRoom {
+  constructor() {
+    this.conns = new Set();
+    const map = new Map();
+    this.storage = {
+      get: async key => map.get(key),
+      put: async (key, value) => void map.set(key, value),
+      setAlarm: async () => {},
+      deleteAlarm: async () => {},
+    };
+  }
+  getConnections() { return this.conns; }
+  broadcast(raw) { for (const conn of this.conns) conn.send(raw); }
+}
+function inProcessEntry(url) {
+  const match = String(url).match(/\/parties\/([^/]+)\/([^/?#]+)/);
+  if (!match || !serverTypes[match[1]]) throw new Error('unknown in-process party URL: ' + url);
+  const key = match[1] + '/' + match[2];
+  if (!inProcessRooms.has(key)) {
+    const room = new InProcessRoom(), server = new serverTypes[match[1]](room);
+    inProcessRooms.set(key, { room, server, ready: server.onStart() });
+  }
+  return inProcessRooms.get(key);
+}
+class InProcessWebSocket {
+  constructor(url) {
+    this.url = url;
+    this.readyState = 0;
+    this.entry = inProcessEntry(url);
+    this.conn = {
+      id: 'online-e2e-' + (++inProcessConnNo),
+      state: undefined,
+      setState(state) { this.state = state; },
+      send: raw => queueMicrotask(() => {
+        if (this.readyState === 1 && this.onmessage) this.onmessage({ data: String(raw) });
+      }),
+    };
+    queueMicrotask(async () => {
+      await this.entry.ready;
+      if (this.readyState === 3) return;
+      this.entry.room.conns.add(this.conn);
+      this.readyState = 1;
+      await this.entry.server.onConnect(this.conn);
+      if (this.onopen) this.onopen();
+    });
+  }
+  send(raw) {
+    if (this.readyState !== 1) return;
+    queueMicrotask(() => void this.entry.server.onMessage(String(raw), this.conn));
+  }
+  close() {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    this.entry.room.conns.delete(this.conn);
+    queueMicrotask(() => void this.entry.server.onClose(this.conn));
+    if (this.onclose) queueMicrotask(() => this.onclose());
+  }
+}
+
+let WS = InProcessWebSocket;
+if (NETWORK) {
+  try {
+    await fetch(`http://${HOST}/`);
+    WS = (await import('ws')).WebSocket;
+  } catch (e) {
+    console.error(`[online e2e] ${HOST} に接続できません。先に \`cd party && npx wrangler dev --port 8787 --local\` を起動してください`);
+    process.exit(2);
+  }
 }
 
 // ── index.html からネット層〜オンラインUIファクトリを抽出 (連続領域) ──
