@@ -14,6 +14,7 @@
 | `server.js` | ゲーム権威ロジック本体（座席割当・着手検証・勝敗確定・再接続・**席解放アラーム(30秒)**・観戦・もう一局先後入替）。framework非依存 |
 | `private-state.js` | 接続ごとの state projector。seat token を検証し、カードゲームでは本人手札だけを合成する汎用秘匿基盤 |
 | `nanarabe-core.js` / `nanarabe-server.js` | 七並べの純コアと3〜4人オンライン権威サーバー（CPU補充・パス3回脱落・手札強制公開） |
+| `pageone-core.js` / `pageone-server.js` | ページワンの純コアと3〜4人オンライン権威サーバー（特殊札・宣言・CPU補充・順位） |
 | `gomoku-core.js` | `GO_N` と `checkGomoku` の**単一ソース**。`index.html` と verbatim 一致させる |
 | `parity.test.mjs` | `index.html` の `checkGomoku` と `gomoku-core.js` が同一出力か検証（divergence厳禁） |
 | `server.test.mjs` | サーバー権威ロジックの単体テスト（モック room/conn・席解放含む） |
@@ -35,6 +36,7 @@
 - `hello.token` と保存済み seat token が一致した接続にだけ `hand`（本人手札）を追加する。観戦者は `hand:[]`。
 - broadcast は共通 JSON の一斉送信を使わず、`private-state.js` が接続ごとに投影・送信する。
 - 七並べは `/parties/nanarabe/<部屋コード>`。3〜4人で、開始時の空席は CPU が埋める。
+- ページワンは `/parties/page-one/<部屋コード>`。山札内容も非公開で、公開するのは場札と山札枚数だけ。
 
 ## セットアップ（依存インストール）
 ```sh
@@ -61,6 +63,10 @@ node party/nanarabe-core.test.mjs
 node party/nanarabe-server.test.mjs
 node party/nanarabe-parity.test.mjs
 node party/card-privacy-e2e.test.mjs  # A/B/観戦/再接続の生payload秘匿E2E（プロセス内transport）
+node party/pageone-core.test.mjs
+node party/pageone-server.test.mjs
+node party/pageone-parity.test.mjs
+node party/pageone-privacy-e2e.test.mjs
 ```
 
 実DO WebSocketでも同じ秘匿E2Eを実行できる。
@@ -68,6 +74,7 @@ node party/card-privacy-e2e.test.mjs  # A/B/観戦/再接続の生payload秘匿E
 ```sh
 cd party && npx wrangler dev --port 8791 --local
 PARTY_E2E_HOST=127.0.0.1:8791 node party/card-privacy-e2e.test.mjs
+PARTY_E2E_HOST=127.0.0.1:8791 node party/pageone-privacy-e2e.test.mjs
 ```
 
 ### 実DOランタイムE2E（オンラインUI×実サーバー・16項目）

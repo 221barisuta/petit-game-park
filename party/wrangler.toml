@@ -84,3 +84,12 @@ class_name = "Nanarabe"
 [[migrations]]
 tag = "v8"
 new_sqlite_classes = ["Nanarabe"]
+
+# ページワン: バインディング名 "PageOne" → party "page-one" (/parties/page-one/<code>)
+[[durable_objects.bindings]]
+name = "PageOne"
+class_name = "PageOne"
+
+[[migrations]]
+tag = "v9"
+new_sqlite_classes = ["PageOne"]

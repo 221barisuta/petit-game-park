@@ -17,6 +17,7 @@ import Connect4Server from './c4-server.js';
 import DotsServer from './dots-server.js';
 import HasamiServer from './hasami-server.js';
 import NanarabeServer from './nanarabe-server.js';
+import PageOneServer from './pageone-server.js';
 
 export class Gomoku extends Server {
   static options = { hibernate: true }; // WebSocket Hibernation (接続stateは setState で永続)
@@ -203,9 +204,32 @@ export class Nanarabe extends Server {
   async onAlarm() { await this.ensure(); return this.logic.onAlarm(); }
 }
 
+// ページワン: 3〜4人・手札秘匿・CPU補充。別DO=別部屋空間。
+export class PageOne extends Server {
+  static options = { hibernate: true };
+
+  constructor(ctx, env) {
+    super(ctx, env);
+    const room = {
+      storage: ctx.storage,
+      getConnections: () => this.getConnections(),
+      broadcast: msg => this.broadcast(msg),
+    };
+    this.logic = new PageOneServer(room);
+  }
+  async ensure() { if (!this.logic.game) await this.logic.onStart(); }
+
+  async onStart() { await this.logic.onStart(); }
+  async onConnect(conn) { await this.ensure(); return this.logic.onConnect(conn); }
+  async onMessage(conn, message) { await this.ensure(); return this.logic.onMessage(message, conn); }
+  async onClose(conn) { await this.ensure(); return this.logic.onClose(conn); }
+  onError() { return this.logic.onError(); }
+  async onAlarm() { await this.ensure(); return this.logic.onAlarm(); }
+}
+
 export default {
   async fetch(request, env) {
-    // /parties/main/→Gomoku, /othello/, /daifugo/, /ox/, /connect4/, /dots/, /hasami/, /nanarabe/。それ以外は 404
+    // /parties/main/→Gomoku。ほか各DOはclass名のkebab-case party path。未登録は404。
     return (await routePartykitRequest(request, env)) || new Response('not found', { status: 404 });
   },
 };
