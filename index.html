@@ -906,7 +906,7 @@ function registerGame(def){GAMES.push(def)}
 // メニュー分類: versus=たいせん / それ以外=ひとり (新規ゲームも type で自動振り分け)
 const soloGames=()=>GAMES.filter(g=>g.type!=='versus');
 // たいせんの表示順 (#7 まるばつ→オセロ→五目→チキン。方針: マス目が多いほど下)。未定義idは末尾。
-const VS_ORDER=['ox','othello','gomoku','connect4','dots','hasami','chicken','daifugo','nanarabe'];
+const VS_ORDER=['ox','othello','gomoku','connect4','dots','hasami','chicken','daifugo','nanarabe','pageone'];
 const vsOrder=id=>{const i=VS_ORDER.indexOf(id);return i<0?99:i;};
 const versusGames=()=>GAMES.filter(g=>g.type==='versus').sort((a,b)=>vsOrder(a.id)-vsOrder(b.id));
 // デイリー抽選は「ひとり(非versus)」プールのみから選ぶ (versusはスコア競争にならないため除外)
@@ -1470,7 +1470,7 @@ function renderTotalRank(tt,tsub,wt,wsub){
 /* #14 ユーザー情報画面: PROFILE の編集UI (開くのは scr-select の「👤なまえ・ランキング」) */
 /* #backlog1 じぶんのきろく画面: スコア系はGAMES登録順のうちscore対象のみ、対戦系は勝敗/連勝も表示 */
 const REC_SCORE_GAMES=['tea','lane','spot','mole','chinitsu','2048','chicken'];
-const REC_VS_GAMES=['ox','gomoku','othello','daifugo','nanarabe','mahjong'];
+const REC_VS_GAMES=['ox','gomoku','othello','daifugo','nanarabe','pageone','mahjong'];
 function setupRecords(){
   const list=$('recList');
   const render=()=>{
@@ -3392,6 +3392,7 @@ const GomokuNet=makeOnlineNet({party:'main',seatPrefix:'pgp2_gomoku_seat_',gameL
 const OthelloNet=makeOnlineNet({party:'othello',seatPrefix:'pgp2_othello_seat_',gameLabel:'オセロ',gameId:'othello'});
 const DaifugoNet=makeOnlineNet({party:'daifugo',seatPrefix:'pgp2_daifugo_seat_',gameLabel:'大富豪',gameId:'daifugo'});
 const NanarabeNet=makeOnlineNet({party:'nanarabe',seatPrefix:'pgp2_nanarabe_seat_',gameLabel:'七並べ',gameId:'nanarabe'});
+const PageOneNet=makeOnlineNet({party:'page-one',seatPrefix:'pgp2_pageone_seat_',gameLabel:'ページワン',gameId:'pageone'});
 // まるばつ(三目): 席色は共通契約どおり black/white。バー記号だけ ○/× に読み替え(盤の配色と一致)
 const TicTacToeNet=makeOnlineNet({party:'ox',seatPrefix:'pgp2_ox_seat_',gameLabel:'まるばつ',gameId:'ox',sym:{black:'○',white:'×'}});
 // コネクトフォー: 席色は共通契約どおり black/white。バー記号は 🔴(先手)/🟡(後手) に読み替え(盤の配色と一致)
@@ -3401,7 +3402,7 @@ const DotsNet=makeOnlineNet({party:'dots',seatPrefix:'pgp2_dots_seat_',gameLabel
 // はさみ将棋: 席色 black/white。バー記号は ⚫(先手)/⚪(後手)。着手は from/to の hmove を net.raw で送る
 const HasamiNet=makeOnlineNet({party:'hasami',seatPrefix:'pgp2_hasami_seat_',gameLabel:'はさみ将棋',gameId:'hasami',sym:{black:'⚫',white:'⚪'}});
 const onlineNetById={
-  gomoku:GomokuNet,othello:OthelloNet,daifugo:DaifugoNet,nanarabe:NanarabeNet,ox:TicTacToeNet,
+  gomoku:GomokuNet,othello:OthelloNet,daifugo:DaifugoNet,nanarabe:NanarabeNet,pageone:PageOneNet,ox:TicTacToeNet,
   connect4:Connect4Net,dots:DotsNet,hasami:HasamiNet,
 };
 let activeNet=GomokuNet; // オンライン画面に入ったゲームの net を指す (renderOnlineBar/setupOnlineUI 共用)
@@ -7365,6 +7366,636 @@ registerGame({
       },
       onlineBack(){screen='setup';setRoomUrl('');},
       destroy(){NanarabeNet.leave();hideOnlineUI();setRoomUrl('');},
+    };
+  }
+});
+
+/* =========================================================================
+   🃏 ページワン — トランプ版UNO (3〜4人 / CPUソロ / オンライン)
+   ========================================================================= */
+/* PAGEONE-CORE-BEGIN (party/pageone-core.js と export を除き verbatim 一致) */
+/* ページワン共有コア (クライアント/サーバー共通の純ロジック)。
+   採用ルール:
+   - 3〜4人、54枚 (通常52+ジョーカー2)、初期5枚。
+   - 同じ suit / rank またはジョーカーを出す。出せない時だけ1枚引き、手番終了。
+   - 2は次の人へ+2。同スート条件を無視して2を重ねられ、4枚=+8が上限。
+   - 8は suit 指定、Jは次の1人をskip、Qは方向反転、ジョーカーは suit 指定+4。
+   - +4は重ね返せない。特殊札で上がっても効果を適用する。
+   - 2枚から1枚へ出す同一actionで pageOne=true が必要。忘れると即座に2枚引く。
+   - 上がり順で順位を決め、最後の1人は自動的に最下位。 */
+
+const PAGEONE_SUITS = ['♠', '♥', '♦', '♣'];
+
+function normalizePageOnePlayers(v) {
+  return Number(v) === 3 ? 3 : 4;
+}
+
+function makePageOneDeck() {
+  const out = [];
+  for (let s = 0; s < 4; s++) for (let r = 1; r <= 13; r++) out.push({ id: s * 13 + r - 1, s, r });
+  out.push({ id: 52, s: 4, r: 0, joker: true }, { id: 53, s: 4, r: 0, joker: true });
+  return out;
+}
+
+function shufflePageOne(cards, rng = Math.random) {
+  const a = cards.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const t = a[i]; a[i] = a[j]; a[j] = t;
+  }
+  return a;
+}
+
+function isPageOneJoker(card) {
+  return !!(card && (card.joker || card.r === 0));
+}
+
+function sortPageOneHand(cards) {
+  return cards.slice().sort((a, b) =>
+    Number(isPageOneJoker(a)) - Number(isPageOneJoker(b))
+    || a.s - b.s || a.r - b.r || a.id - b.id);
+}
+
+function pageOneInitialCard(card) {
+  return card && !isPageOneJoker(card) && ![2, 8, 11, 12].includes(card.r);
+}
+
+function newPageOneRound(playerCount, deck = makePageOneDeck()) {
+  const n = normalizePageOnePlayers(playerCount);
+  const drawPile = deck.slice();
+  const hands = Array.from({ length: n }, () => []);
+  for (let k = 0; k < 5; k++) {
+    for (let seat = 0; seat < n; seat++) {
+      const card = drawPile.pop();
+      if (card) hands[seat].push(card);
+    }
+  }
+  let topIndex = -1;
+  for (let i = drawPile.length - 1; i >= 0; i--) {
+    if (pageOneInitialCard(drawPile[i])) { topIndex = i; break; }
+  }
+  if (topIndex < 0) topIndex = drawPile.length - 1;
+  const top = drawPile.splice(topIndex, 1)[0] || null;
+  for (let seat = 0; seat < n; seat++) hands[seat] = sortPageOneHand(hands[seat]);
+  return {
+    n,
+    hands,
+    drawPile,
+    discard: top ? [top] : [],
+    activeSuit: top ? top.s : 0,
+    turn: 0,
+    direction: 1,
+    pendingDraw: 0,
+    pendingKind: null,
+    status: new Array(n).fill('playing'),
+    finishOrder: [],
+    ranking: [],
+    last: null,
+    ended: false,
+  };
+}
+
+function pageOneTop(g) {
+  return g && g.discard && g.discard.length ? g.discard[g.discard.length - 1] : null;
+}
+
+function pageOneCardPlayable(g, card) {
+  if (!g || !card || g.ended) return false;
+  if (g.pendingDraw > 0) return g.pendingKind === 'two' && card.r === 2 && !isPageOneJoker(card);
+  const top = pageOneTop(g);
+  return isPageOneJoker(card) || !top || card.s === g.activeSuit || card.r === top.r;
+}
+
+function pageOneLegalCards(g, seat) {
+  if (!g || !Number.isInteger(seat) || !g.hands[seat] || g.status[seat] !== 'playing') return [];
+  return g.hands[seat].filter(card => pageOneCardPlayable(g, card));
+}
+
+function pageOneRefill(g, rng) {
+  if (g.drawPile.length || g.discard.length <= 1) return;
+  const top = g.discard[g.discard.length - 1];
+  g.drawPile = shufflePageOne(g.discard.slice(0, -1), rng);
+  g.discard = [top];
+}
+
+function pageOneDrawCards(g, seat, count, rng) {
+  const cards = [];
+  for (let i = 0; i < count; i++) {
+    pageOneRefill(g, rng);
+    const card = g.drawPile.pop();
+    if (!card) break;
+    g.hands[seat].push(card);
+    cards.push(card);
+  }
+  g.hands[seat] = sortPageOneHand(g.hands[seat]);
+  return cards;
+}
+
+function pageOneFinishIfNeeded(g) {
+  const active = [];
+  for (let seat = 0; seat < g.n; seat++) if (g.status[seat] === 'playing') active.push(seat);
+  if (active.length > 1) return false;
+  if (active.length === 1) {
+    g.status[active[0]] = 'finished';
+    g.finishOrder.push(active[0]);
+  }
+  g.ranking = g.finishOrder.slice();
+  g.ended = true;
+  return true;
+}
+
+function pageOneAdvance(g, from, steps = 1) {
+  if (pageOneFinishIfNeeded(g)) return;
+  let seat = from;
+  for (let step = 0; step < steps; step++) {
+    for (let k = 1; k <= g.n; k++) {
+      const candidate = (seat + g.direction * k + g.n * 2) % g.n;
+      if (g.status[candidate] === 'playing') { seat = candidate; break; }
+    }
+  }
+  g.turn = seat;
+}
+
+function validChosenSuit(v) {
+  return Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) < 4;
+}
+
+function pageOnePlay(g, seat, cardId, options = {}, rng = Math.random) {
+  if (!g || g.ended) return { ok: false, error: 'ゲームは おわっています' };
+  if (seat !== g.turn || g.status[seat] !== 'playing') return { ok: false, error: 'あなたの ばんでは ありません' };
+  const index = g.hands[seat].findIndex(card => card.id === Number(cardId));
+  if (index < 0) return { ok: false, error: 'てふだに ない カードです' };
+  const card = g.hands[seat][index];
+  if (!pageOneCardPlayable(g, card)) return { ok: false, error: 'そのカードは だせません' };
+  const choosesSuit = isPageOneJoker(card) || card.r === 8;
+  if (choosesSuit && !validChosenSuit(options.suit)) return { ok: false, error: 'つぎの マークを えらんでください' };
+
+  const before = g.hands[seat].length;
+  g.hands[seat].splice(index, 1);
+  g.discard.push(card);
+  g.activeSuit = choosesSuit ? Number(options.suit) : card.s;
+
+  let steps = 1;
+  if (card.r === 2 && !isPageOneJoker(card)) {
+    g.pendingDraw += 2;
+    g.pendingKind = 'two';
+  } else if (isPageOneJoker(card)) {
+    g.pendingDraw = 4;
+    g.pendingKind = 'joker';
+  } else {
+    g.pendingDraw = 0;
+    g.pendingKind = null;
+    if (card.r === 11) steps = 2;
+    else if (card.r === 12) g.direction *= -1;
+  }
+
+  const pageOneNeeded = before === 2 && g.hands[seat].length === 1;
+  const pageOneMiss = pageOneNeeded && options.pageOne !== true;
+  const penaltyCards = pageOneMiss ? pageOneDrawCards(g, seat, 2, rng) : [];
+  let finishedSeat = null;
+  if (!g.hands[seat].length) {
+    g.status[seat] = 'finished';
+    g.finishOrder.push(seat);
+    finishedSeat = seat;
+  }
+  g.last = {
+    seat,
+    type: 'play',
+    card,
+    activeSuit: g.activeSuit,
+    pageOne: pageOneNeeded && !pageOneMiss,
+    pageOneMiss,
+    penalty: penaltyCards.length,
+  };
+  pageOneAdvance(g, seat, steps);
+  return {
+    ok: true,
+    card,
+    pageOneMiss,
+    penalty: penaltyCards.length,
+    finishedSeat,
+    ended: g.ended,
+  };
+}
+
+function pageOneDraw(g, seat, rng = Math.random) {
+  if (!g || g.ended) return { ok: false, error: 'ゲームは おわっています' };
+  if (seat !== g.turn || g.status[seat] !== 'playing') return { ok: false, error: 'あなたの ばんでは ありません' };
+  const pending = g.pendingDraw;
+  if (!pending && pageOneLegalCards(g, seat).length) return { ok: false, error: 'だせる カードが あります' };
+  const kind = g.pendingKind;
+  const cards = pageOneDrawCards(g, seat, pending || 1, rng);
+  g.pendingDraw = 0;
+  g.pendingKind = null;
+  g.last = { seat, type: pending ? 'penalty' : 'draw', count: cards.length, penaltyKind: kind };
+  pageOneAdvance(g, seat, 1);
+  return { ok: true, cards, count: cards.length, penalty: pending, ended: g.ended };
+}
+
+function pageOneBestSuit(hand, fallback = 0) {
+  const counts = [0, 0, 0, 0];
+  for (const card of hand) if (!isPageOneJoker(card) && card.s >= 0 && card.s < 4) counts[card.s]++;
+  let best = fallback >= 0 && fallback < 4 ? fallback : 0;
+  for (let suit = 0; suit < 4; suit++) if (counts[suit] > counts[best]) best = suit;
+  return best;
+}
+
+function pageOneSpecialCost(card) {
+  if (isPageOneJoker(card)) return 1000;
+  if (card.r === 2) return 300;
+  if (card.r === 8) return 220;
+  if (card.r === 11) return 140;
+  if (card.r === 12) return 130;
+  return 0;
+}
+
+function pageOneCpuChoose(g, seat) {
+  const legal = pageOneLegalCards(g, seat);
+  if (!legal.length) return { type: 'draw' };
+  const hand = g.hands[seat];
+  const ranked = legal.map(card => {
+    const rest = hand.filter(c => c.id !== card.id);
+    const suit = pageOneBestSuit(rest, isPageOneJoker(card) ? g.activeSuit : card.s);
+    const keptSuitCount = rest.filter(c => !isPageOneJoker(c) && c.s === (card.r === 8 || isPageOneJoker(card) ? suit : card.s)).length;
+    return { card, suit, keptSuitCount, cost: pageOneSpecialCost(card) };
+  }).sort((a, b) =>
+    a.cost - b.cost
+    || b.keptSuitCount - a.keptSuitCount
+    || a.card.r - b.card.r
+    || a.card.id - b.card.id);
+  const best = ranked[0];
+  return {
+    type: 'play',
+    cardId: best.card.id,
+    suit: (best.card.r === 8 || isPageOneJoker(best.card)) ? best.suit : undefined,
+    pageOne: hand.length === 2,
+  };
+}
+/* PAGEONE-CORE-END */
+
+function runPageOneTests(){
+  const {ck,done}=makeTest('pageone');
+  const R=newPageOneRound(4,makePageOneDeck());
+  ck('deck-54',makePageOneDeck().length===54);
+  ck('initial-five',R.hands.every(h=>h.length===5));
+  ck('private-zones-total-54',R.hands.flat().length+R.drawPile.length+R.discard.length===54);
+  const q={id:11,s:0,r:12},x={id:20,s:1,r:8},g={
+    n:3,hands:[[q,x],[{id:25,s:1,r:13}],[{id:38,s:2,r:13}]],drawPile:makePageOneDeck().slice(30),
+    discard:[{id:4,s:0,r:5}],activeSuit:0,turn:0,direction:1,pendingDraw:0,pendingKind:null,
+    status:['playing','playing','playing'],finishOrder:[],ranking:[],last:null,ended:false};
+  ck('q-reverses',pageOnePlay(g,0,q.id).ok&&g.direction===-1&&g.turn===2);
+  return done();
+}
+if(typeof window!=='undefined'){window.runPageOneTests=runPageOneTests;SELFTESTS.push(runPageOneTests);}
+
+registerGame({
+  id:'pageone',emoji:'🃏',title:'ページワン',type:'versus',vsBadge:'👥 3〜4人 / CPU',
+  desc:'同じマークか数字！残り1枚で宣言',color:'#c94767',duration:null,noDaily:true,
+  howto:[
+    ['🃏','同じマーク・同じ数字か ジョーカーを だす'],
+    ['📣','のこり1まいに なる手で「ページワン！」'],
+    ['2️⃣','2は +2（2で最大+8まで かさねられる）'],
+    ['8️⃣','8はマーク指定・Jはスキップ・Qは逆回り'],
+    ['🤡','ジョーカーはマーク指定＋つぎの人が4まい'],
+  ],
+  create(ctx){
+    const A=ctx.audio,NAMES=['あなた','CPU 2','CPU 3','CPU 4'];
+    const bExit={x:10,y:10,w:52,h:36},bDraw={x:18,y:652,w:174,h:46},bPlay={x:228,y:652,w:174,h:46};
+    const bDeclare={x:108,y:604,w:204,h:36};
+    const suitBtns=PAGEONE_SUITS.map((s,i)=>({x:72+i*70,y:431,w:58,h:40,suit:i,label:s}));
+    const setupBtns=[
+      {x:48,y:180,w:324,h:58,kind:'local3',label:'🤖 3人で あそぶ'},
+      {x:48,y:254,w:324,h:58,kind:'local4',label:'🤖 4人で あそぶ'},
+      {x:48,y:344,w:324,h:58,kind:'online',label:PageOneNet.available()?'🌐 オンライン たいせん':'🌐 オンライン (じゅんびちゅう)'},
+    ];
+    let screen='setup',L=null,selected=-1,chosenSuit=-1,declared=false,cpuTimer=0,recorded=false;
+    let onlineToastSeq=PageOneNet.state.toastSeq,onlineErr='',lastOnlineKey='';
+
+    const rankText=r=>r===1?'1st':r===2?'2nd':r===3?'3rd':r+'th';
+    const cardRank=c=>isPageOneJoker(c)?'JOKER':c.r===1?'A':c.r===11?'J':c.r===12?'Q':c.r===13?'K':String(c.r);
+    function drawPageCard(g,c,x,y,w,h,selectedCard,legal){
+      const joker=isPageOneJoker(c),red=!joker&&(c.s===1||c.s===2);
+      g.save();
+      g.fillStyle=joker?'#252038':'#fff';
+      g.strokeStyle=selectedCard?'#ffd23f':legal?'#45e69a':'#28324a';
+      g.lineWidth=selectedCard?4:legal?2.5:1.5;
+      rr(g,x,y,w,h,Math.min(8,w*.18));g.fill();g.stroke();
+      if(joker){
+        outlinedText(g,'★',x+w/2,y+h*.43,Math.max(18,w*.48),'#ffd23f','#8b2a75',3);
+        outlinedText(g,'JOKER',x+w/2,y+h*.72,Math.max(8,w*.18),'#fff','#252038',2);
+      }else{
+        const col=red?'#d73545':'#20283a';
+        outlinedText(g,cardRank(c),x+9,y+15,Math.max(12,w*.24),col,'#fff',2,1,'left');
+        outlinedText(g,PAGEONE_SUITS[c.s],x+w/2,y+h*.61,Math.max(22,w*.42),col,'#fff',2);
+      }
+      g.restore();
+    }
+    function localView(){
+      if(!L)return null;
+      return {n:L.n,you:0,names:NAMES.slice(0,L.n),cpu:NAMES.slice(0,L.n).map((_,i)=>i>0),
+        counts:L.hands.map(h=>h.length),top:pageOneTop(L),activeSuit:L.activeSuit,turn:L.turn,
+        direction:L.direction,pendingDraw:L.pendingDraw,pendingKind:L.pendingKind,drawCount:L.drawPile.length,
+        status:L.status,ranking:L.ranking,last:L.last,hand:L.hands[0],ended:L.ended,host:true};
+    }
+    function onlineView(){
+      const g=PageOneNet.state.game;if(!g||g.phase==='lobby'||!g.top)return null;
+      return {n:g.rules.playerCount,you:g.youSeat,names:g.seatsPub.map(s=>s?s.name:'—'),
+        cpu:g.seatsPub.map(s=>!!(s&&s.cpu)),counts:g.counts,top:g.top,activeSuit:g.activeSuit,turn:g.turn,
+        direction:g.direction,pendingDraw:g.pendingDraw,pendingKind:g.pendingKind,drawCount:g.drawCount,
+        status:g.playerStatus,ranking:g.ranking,last:g.last,hand:g.hand||[],ended:g.phase==='ended',
+        host:g.youSeat===g.hostSeat};
+    }
+    const view=()=>screen==='play'?localView():screen==='online'?onlineView():null;
+    const playable=(v,c)=>pageOneCardPlayable({
+      ended:v.ended,pendingDraw:v.pendingDraw,pendingKind:v.pendingKind,discard:[v.top],activeSuit:v.activeSuit,
+    },c);
+    function resetChoice(){selected=-1;chosenSuit=-1;declared=false;}
+    function finishFeedback(r,seat){
+      const name=seat===0?'あなた':NAMES[seat];
+      if(r.pageOneMiss){banner(name+' ページワン わすれ！ +2');A.bad();}
+      if(r.finishedSeat!=null){banner(name+' あがり！');A.ok();}
+      if(r.ended&&!recorded&&screen==='play'){
+        recorded=true;const rank=L.ranking.indexOf(0);
+        statsRecordMatch('pageone',rank===0?'win':'lose');
+        rank===0?(A.fever(),confetti()):A.splash();
+      }
+    }
+    function startLocal(n){
+      L=newPageOneRound(n,shufflePageOne(makePageOneDeck()));
+      resetChoice();recorded=false;screen='play';A.pop();scheduleCpu();
+    }
+    function scheduleCpu(){cpuTimer=(L&&!L.ended&&L.turn!==0)?0.42+Math.random()*.38:0;}
+    function playerLabel(v,seat){
+      const rank=v.ranking.indexOf(seat);
+      if(v.ended&&rank>=0)return rankText(rank+1);
+      if(v.status[seat]==='finished')return 'あがり';
+      return '🂠 '+v.counts[seat]+'まい';
+    }
+    function drawTable(g,v){
+      g.fillStyle='#18583d';g.fillRect(0,0,W,H);
+      const gap=6,bw=(W-20-gap*(v.n-1))/v.n;
+      for(let i=0;i<v.n;i++){
+        const x=10+i*(bw+gap),turn=!v.ended&&v.turn===i,me=i===v.you;
+        g.save();g.fillStyle=turn?'#7b426e':'rgba(8,25,18,.5)';rr(g,x,38,bw,62,9);g.fill();
+        if(me){g.strokeStyle='#21e6c1';g.lineWidth=2;rr(g,x,38,bw,62,9);g.stroke();}g.restore();
+        outlinedText(g,(v.cpu[i]?'🤖':'')+(v.names[i]||'—'),x+bw/2,55,11,'#fff','rgba(0,0,0,.5)',3);
+        outlinedText(g,playerLabel(v,i),x+bw/2,81,11,'#ffe478','rgba(0,0,0,.5)',3);
+      }
+      const myTurn=!v.ended&&v.you>=0&&v.status[v.you]==='playing'&&v.turn===v.you;
+      const turnName=v.names[v.turn]||'';
+      outlinedText(g,v.ended?'けっか はっぴょう！':myTurn?'あなたの ばん！':turnName+' の ばん…',
+        W/2,124,19,myTurn?'#ffe94a':'#fff','rgba(0,0,0,.55)',5);
+      const dir=v.direction===1?'↻':'↺';
+      outlinedText(g,dir+' '+(v.direction===1?'右まわり':'左まわり')+
+        (v.pendingDraw?('　⚠ '+v.pendingDraw+'まい'):''),
+        W/2,151,13,v.pendingDraw?'#ffb3c5':'#cceedd','rgba(0,0,0,.4)',3);
+
+      // 山札は枚数だけ、捨て札は一番上だけを描く（秘匿契約）。
+      g.save();g.fillStyle='#402b64';g.strokeStyle='#a99bd0';g.lineWidth=2;rr(g,68,190,78,112,9);g.fill();g.stroke();g.restore();
+      outlinedText(g,'🂠',107,235,38,'#e7dcff','#26163d',4);
+      outlinedText(g,'山 '+v.drawCount+'枚',107,286,12,'#fff','rgba(0,0,0,.4)',3);
+      drawPageCard(g,v.top,171,184,82,120,false,false);
+      outlinedText(g,'場のマーク '+PAGEONE_SUITS[v.activeSuit],W/2,326,15,'#ffe478','rgba(0,0,0,.45)',4);
+      if(v.last&&v.last.pageOne)outlinedText(g,'📣 ページワン！',W/2,354,17,'#ff9ed0','rgba(0,0,0,.5)',4);
+      else if(v.last&&v.last.pageOneMiss)outlinedText(g,'宣言わすれ +2！',W/2,354,15,'#ff9aaa','rgba(0,0,0,.5)',4);
+      else if(v.pendingDraw)outlinedText(g,v.pendingKind==='two'?'2を重ねるか 引こう':'4まい 引こう',W/2,354,15,'#ffb3c5','rgba(0,0,0,.5)',4);
+      else outlinedText(g,'同じマーク / 数字を だそう',W/2,354,13,'#cceedd','rgba(0,0,0,.45)',3);
+
+      const hand=sortPageOneHand(v.hand||[]),hm=hand.length,cw=54,ch=82;
+      const sp=hm>1?Math.min(32,(W-24-cw)/(hm-1)):0,hx=(W-(cw+sp*Math.max(0,hm-1)))/2,hy=507;
+      hand.forEach((c,i)=>drawPageCard(g,c,hx+i*sp,hy-(selected===c.id?14:0),cw,ch,selected===c.id,myTurn&&playable(v,c)));
+      if(v.you<0)outlinedText(g,'👀 かんせん中（手札は非公開）',W/2,615,13,'#fff','rgba(0,0,0,.5)',4);
+      else if(v.status[v.you]==='finished')outlinedText(g,'あがり！ のこりを みまもろう',W/2,615,13,'#ffe94a','rgba(0,0,0,.5)',4);
+
+      const chosen=hand.find(c=>c.id===selected),choose=chosen&&(chosen.r===8||isPageOneJoker(chosen));
+      if(choose){
+        outlinedText(g,'つぎのマーク',W/2,414,12,'#fff','rgba(0,0,0,.45)',3);
+        suitBtns.forEach(b=>drawBtn(g,b,b.label,chosenSuit===b.suit?'#e44f80':'#675b88',false,18));
+      }
+      if(v.ended){drawEnd(g,v);return;}
+      const canPlay=!!(myTurn&&chosen&&playable(v,chosen)&&(!choose||chosenSuit>=0));
+      const canDraw=!!(myTurn&&(v.pendingDraw>0||!hand.some(c=>playable(v,c))));
+      const needsDeclare=myTurn&&hand.length===2;
+      drawBtn(g,bDeclare,declared?'📣 ページワン！ 宣言中':'📣 ページワン宣言',
+        declared?'#e44f80':'#756a95',!needsDeclare,13);
+      drawBtn(g,bDraw,v.pendingDraw?('+'+v.pendingDraw+'まい 引く'):'山から 1まい','#6f62a9',!canDraw,15);
+      drawBtn(g,bPlay,'カードを だす','#d74668',!canPlay,15);
+    }
+    function drawEnd(g,v){
+      g.save();g.fillStyle='rgba(18,13,34,.92)';rr(g,52,402,316,238,16);g.fill();g.restore();
+      outlinedText(g,'🏆 けっか',W/2,431,22,'#ffd23f','#593b12',5);
+      v.ranking.forEach((seat,i)=>outlinedText(g,rankText(i+1)+'　'+(seat===v.you?'★ ':'')+(v.names[seat]||'—'),
+        W/2,464+i*30,14,i===0?'#ffe94a':seat===v.you?'#21e6c1':'#fff','rgba(0,0,0,.5)',4));
+      if(screen==='play'){
+        drawBtn(g,bDraw,'⚙ せっていへ','#6d6382',false,15);
+        drawBtn(g,bPlay,'▶ もういちど','#d74668',false,15);
+      }else{
+        drawBtn(g,bDraw,'🚪 たいきょ','#9b684f',false,15);
+        drawBtn(g,bPlay,v.host?'▶ もういちど':'ホストを まつ…','#d74668',!v.host,15);
+      }
+    }
+    function cardAt(v,x,y){
+      const hand=sortPageOneHand(v.hand||[]),hm=hand.length;if(!hm)return null;
+      const cw=54,ch=82,sp=hm>1?Math.min(32,(W-24-cw)/(hm-1)):0,hx=(W-(cw+sp*(hm-1)))/2,hy=507;
+      for(let i=hm-1;i>=0;i--){
+        const cy=hy-(selected===hand[i].id?14:0),cx=hx+i*sp;
+        if(x>=cx&&x<=cx+cw&&y>=cy&&y<=cy+ch)return hand[i];
+      }
+      return null;
+    }
+    function drawSetup(g){
+      g.fillStyle='#263b50';g.fillRect(0,0,W,H);
+      outlinedText(g,'🃏 ページワン',W/2,70,30,'#fff','#172536',7);
+      outlinedText(g,'同じマークか 数字を つなげよう！',W/2,111,15,'#cde6f5','#172536',4);
+      outlinedText(g,'のこり1まいで「ページワン！」',W/2,137,13,'#ffc3d0','#172536',3);
+      setupBtns.forEach(b=>drawBtn(g,b,b.label,b.kind==='online'?(PageOneNet.available()?'#4d8cff':'#67677b'):'#c94767',
+        b.kind==='online'&&!PageOneNet.available(),18));
+      outlinedText(g,'ローカルは あなた1人＋CPU',W/2,438,13,'#bcd0df','#172536',3);
+      outlinedText(g,'CPUは特殊札を温存し、宣言を忘れません',W/2,470,12,'#bcd0df','#172536',3);
+    }
+    function onSetupTap(x,y){
+      for(const b of setupBtns){
+        if(!hitBtn(b,x,y))continue;
+        if(b.kind==='local3')startLocal(3);
+        else if(b.kind==='local4')startLocal(4);
+        else PageOneNet.available()?enterOnline():A.bad();
+        return;
+      }
+    }
+    function enterOnline(){
+      if(!PageOneNet.available())return;
+      activeNet=PageOneNet;screen='online';resetChoice();onlineToastSeq=PageOneNet.state.toastSeq;onlineErr='';lastOnlineKey='';
+      if(pendingOnlineRoom){
+        const code=pendingOnlineRoom;pendingOnlineRoom='';
+        PageOneNet.connect(code);setRoomUrl(code,'pageone');$('onlineBar').classList.remove('hidden');renderOnlineBar();
+      }else{
+        $('olName').value=PageOneNet.getName();$('olCode').value='';$('olSetupMsg').textContent='';
+        $('onlineSetup').classList.remove('hidden');
+      }
+    }
+    function leaveOnline(){
+      PageOneNet.raw({type:'leave'});PageOneNet.leave();hideOnlineUI();setRoomUrl('');
+      resetChoice();screen='setup';A.pop();
+    }
+    function lobbyButtons(g){
+      const host=g.youSeat===g.hostSeat;
+      return [
+        {x:24,y:160,w:116,h:42,kind:'copy',label:'📋 コード',on:true},
+        {x:152,y:160,w:116,h:42,kind:'link',label:'🔗 リンク',on:true},
+        {x:280,y:160,w:116,h:42,kind:'share',label:'📤 共有',on:true},
+        {x:48,y:492,w:154,h:44,kind:'p3',label:'3人',on:host},
+        {x:218,y:492,w:154,h:44,kind:'p4',label:'4人',on:host},
+        {x:48,y:554,w:154,h:44,kind:'leave',label:'🚪 退出',on:true},
+        {x:218,y:554,w:154,h:44,kind:'start',label:host?'▶ はじめる':'ホスト待ち',on:host&&g.canStart},
+      ];
+    }
+    function drawLobby(g2,g){
+      const s=PageOneNet.state;
+      g2.fillStyle='#18583d';g2.fillRect(0,0,W,H);
+      outlinedText(g2,'🌐 オンライン ページワン',W/2,56,22,'#fff','rgba(0,0,0,.5)',6);
+      outlinedText(g2,'あいことば',W/2,91,12,'#d8f3df','rgba(0,0,0,.4)',3);
+      outlinedText(g2,s.code||'—',W/2,125,29,'#ffe94a','#5a3a10',7);
+      lobbyButtons(g).forEach(b=>drawBtn(g2,b,b.label,b.kind==='start'?'#d74668':b.kind==='leave'?'#9b684f':'#4d8cff',!b.on,14));
+      outlinedText(g2,'メンバー '+g.joined+'/'+g.rules.playerCount+'（あきは CPU）',W/2,231,15,'#fff','rgba(0,0,0,.5)',4);
+      for(let i=0;i<g.rules.playerCount;i++){
+        const y=250+i*46,o=g.seatsPub[i];
+        g2.save();g2.fillStyle='rgba(0,0,0,.25)';rr(g2,48,y,324,36,8);g2.fill();g2.restore();
+        const nm=o?((o.cpu?'🤖 ':'')+o.name):'（あき → CPU）';
+        outlinedText(g2,(i===g.hostSeat?'👑 ':'')+nm,W/2,y+19,13,o?'#fff':'#a9c9b2','rgba(0,0,0,.4)',3);
+        if(i===g.youSeat)outlinedText(g2,'あなた',338,y+19,10,'#21e6c1','rgba(0,0,0,.5)',2);
+      }
+      outlinedText(g2,'人数: '+g.rules.playerCount+'人（ホストが変更）',W/2,457,13,'#d8f3df','rgba(0,0,0,.4)',3);
+      outlinedText(g2,'1人から開始OK・足りない席はCPUが参加',W/2,628,12,'#b9d9c2','rgba(0,0,0,.4)',3);
+    }
+    function drawOnline(g2){
+      const s=PageOneNet.state,g=s.game;
+      if(!g){
+        g2.fillStyle='#18583d';g2.fillRect(0,0,W,H);
+        outlinedText(g2,s.status==='error'?(s.error||'エラー'):'せつぞくちゅう…',W/2,330,18,'#fff','rgba(0,0,0,.5)',5);
+        drawBtn(g2,bExit,'🚪','#6d6382',false,14);return;
+      }
+      if(g.phase==='lobby'){drawLobby(g2,g);return;}
+      const v=onlineView();if(v)drawTable(g2,v);
+      drawBtn(g2,bExit,'🚪','#6d6382',false,14);
+    }
+    function onLobbyTap(x,y,g){
+      for(const b of lobbyButtons(g)){
+        if(!hitBtn(b,x,y))continue;
+        if(!b.on){A.bad();return;}
+        if(b.kind==='copy'){copyText(PageOneNet.state.code);banner('あいことばを コピー');}
+        else if(b.kind==='link'){copyText(roomLink(PageOneNet.state.code,'pageone'));banner('リンクを コピー');}
+        else if(b.kind==='share'){
+          const url=roomLink(PageOneNet.state.code,'pageone');
+          if(navigator.share)navigator.share({title:'ページワン であそぼ！',text:'いっしょにページワン！',url}).catch(()=>{});
+          else{copyText(url);banner('リンクを コピー');}
+        }else if(b.kind==='p3')PageOneNet.raw({type:'setPlayers',playerCount:3});
+        else if(b.kind==='p4')PageOneNet.raw({type:'setPlayers',playerCount:4});
+        else if(b.kind==='start')PageOneNet.raw({type:'start'});
+        else if(b.kind==='leave')leaveOnline();
+        A.pop();return;
+      }
+    }
+    function onTableTap(x,y,v,online){
+      if(hitBtn(bExit,x,y)&&online){leaveOnline();return;}
+      if(v.ended){
+        if(hitBtn(bPlay,x,y)){
+          if(online){if(v.host)PageOneNet.raw({type:'again'});else A.bad();}
+          else startLocal(v.n);
+          return;
+        }
+        if(hitBtn(bDraw,x,y)){online?leaveOnline():(screen='setup',L=null,A.pop());return;}
+        return;
+      }
+      if(v.you<0||v.status[v.you]!=='playing'){
+        if(hitBtn(bDraw,x,y)||hitBtn(bPlay,x,y)||hitBtn(bDeclare,x,y))A.bad();
+        return;
+      }
+      const hand=v.hand||[],myTurn=v.turn===v.you;
+      if(hitBtn(bDeclare,x,y)){
+        if(!myTurn||hand.length!==2){A.bad();return;}
+        declared=!declared;A.pop();return;
+      }
+      for(const b of suitBtns){
+        if(hitBtn(b,x,y)&&selected>=0){
+          const card=hand.find(c=>c.id===selected);
+          if(card&&(card.r===8||isPageOneJoker(card))){chosenSuit=b.suit;A.pop();return;}
+        }
+      }
+      if(hitBtn(bDraw,x,y)){
+        if(!myTurn||(v.pendingDraw<=0&&hand.some(c=>playable(v,c)))){A.bad();return;}
+        if(online)PageOneNet.raw({type:'draw'});
+        else{const r=pageOneDraw(L,0);if(r.ok){finishFeedback(r,0);scheduleCpu();}else{banner(r.error);A.bad();}}
+        resetChoice();A.pop();return;
+      }
+      if(hitBtn(bPlay,x,y)){
+        const card=hand.find(c=>c.id===selected),choose=card&&(card.r===8||isPageOneJoker(card));
+        if(!myTurn||!card||!playable(v,card)||(choose&&chosenSuit<0)){A.bad();return;}
+        if(online)PageOneNet.raw({type:'play',cardId:card.id,suit:choose?chosenSuit:undefined,pageOne:declared});
+        else{
+          const r=pageOnePlay(L,0,card.id,{suit:choose?chosenSuit:undefined,pageOne:declared});
+          if(!r.ok){banner(r.error);A.bad();return;}
+          finishFeedback(r,0);scheduleCpu();
+        }
+        resetChoice();A.pop();return;
+      }
+      const card=cardAt(v,x,y);
+      if(card){
+        if(selected===card.id)resetChoice();
+        else{selected=card.id;chosenSuit=-1;}
+        A.pop();
+      }
+    }
+    function onOnlineTap(x,y){
+      const g=PageOneNet.state.game;
+      if(!g){if(hitBtn(bExit,x,y))leaveOnline();return;}
+      if(g.phase==='lobby'){onLobbyTap(x,y,g);return;}
+      const v=onlineView();if(v)onTableTap(x,y,v,true);
+    }
+    if(pendingOnlineRoom)enterOnline();
+
+    return {
+      onDown(x,y){
+        if(screen==='setup'){onSetupTap(x,y);return;}
+        if(screen==='online'){onOnlineTap(x,y);return;}
+        const v=localView();if(v)onTableTap(x,y,v,false);
+      },
+      update(dt){
+        if(screen==='play'&&L&&!L.ended&&L.turn!==0&&cpuTimer>0){
+          cpuTimer-=dt;
+          if(cpuTimer<=0){
+            const seat=L.turn,move=pageOneCpuChoose(L,seat);
+            const r=move.type==='play'
+              ?pageOnePlay(L,seat,move.cardId,{suit:move.suit,pageOne:true})
+              :pageOneDraw(L,seat);
+            if(r.ok)finishFeedback(r,seat);
+            scheduleCpu();
+          }
+        }
+        if(screen==='online'){
+          const s=PageOneNet.state;
+          if(s.toastSeq!==onlineToastSeq){onlineToastSeq=s.toastSeq;if(s.toastMsg){banner(s.toastMsg);A.coin();}}
+          if(s.error&&s.error!==onlineErr){onlineErr=s.error;banner(s.error);A.bad();}
+          const v=onlineView();
+          if(v){
+            const key=v.counts.join(',')+'|'+v.turn+'|'+(v.top&&v.top.id)+'|'+v.pendingDraw;
+            if(lastOnlineKey&&key!==lastOnlineKey&&selected>=0&&!v.hand.some(c=>c.id===selected))resetChoice();
+            lastOnlineKey=key;
+          }
+        }
+      },
+      draw(g){
+        if(screen==='setup')drawSetup(g);
+        else if(screen==='online')drawOnline(g);
+        else{const v=localView();if(v)drawTable(g,v);}
+      },
+      hudInfo(){
+        const v=view();
+        if(screen==='setup')return '3〜4人 / CPU';
+        if(!v)return '';
+        return v.you>=0?'てふだ '+v.counts[v.you]+'まい':'かんせん';
+      },
+      onlineBack(){screen='setup';setRoomUrl('');},
+      destroy(){PageOneNet.leave();hideOnlineUI();setRoomUrl('');},
     };
   }
 });
