@@ -75,3 +75,12 @@ class_name = "Hasami"
 [[migrations]]
 tag = "v7"
 new_sqlite_classes = ["Hasami"]
+
+# 七並べ: バインディング名 "Nanarabe" → party "nanarabe" (/parties/nanarabe/<code>)
+[[durable_objects.bindings]]
+name = "Nanarabe"
+class_name = "Nanarabe"
+
+[[migrations]]
+tag = "v8"
+new_sqlite_classes = ["Nanarabe"]
