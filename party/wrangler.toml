@@ -93,3 +93,12 @@ class_name = "PageOne"
 [[migrations]]
 tag = "v9"
 new_sqlite_classes = ["PageOne"]
+
+# スピード: バインディング名 "Speed" → party "speed" (/parties/speed/<code>)
+[[durable_objects.bindings]]
+name = "Speed"
+class_name = "Speed"
+
+[[migrations]]
+tag = "v10"
+new_sqlite_classes = ["Speed"]

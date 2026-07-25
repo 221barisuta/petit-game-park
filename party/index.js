@@ -18,6 +18,7 @@ import DotsServer from './dots-server.js';
 import HasamiServer from './hasami-server.js';
 import NanarabeServer from './nanarabe-server.js';
 import PageOneServer from './pageone-server.js';
+import SpeedServer from './speed-server.js';
 
 export class Gomoku extends Server {
   static options = { hibernate: true }; // WebSocket Hibernation (接続stateは setState で永続)
@@ -216,6 +217,29 @@ export class PageOne extends Server {
       broadcast: msg => this.broadcast(msg),
     };
     this.logic = new PageOneServer(room);
+  }
+  async ensure() { if (!this.logic.game) await this.logic.onStart(); }
+
+  async onStart() { await this.logic.onStart(); }
+  async onConnect(conn) { await this.ensure(); return this.logic.onConnect(conn); }
+  async onMessage(conn, message) { await this.ensure(); return this.logic.onMessage(message, conn); }
+  async onClose(conn) { await this.ensure(); return this.logic.onClose(conn); }
+  onError() { return this.logic.onError(); }
+  async onAlarm() { await this.ensure(); return this.logic.onAlarm(); }
+}
+
+// スピード: 2人リアルタイム同時操作。別DO内でplay到着順を直列化する。
+export class Speed extends Server {
+  static options = { hibernate: true };
+
+  constructor(ctx, env) {
+    super(ctx, env);
+    const room = {
+      storage: ctx.storage,
+      getConnections: () => this.getConnections(),
+      broadcast: msg => this.broadcast(msg),
+    };
+    this.logic = new SpeedServer(room);
   }
   async ensure() { if (!this.logic.game) await this.logic.onStart(); }
 
