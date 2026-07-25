@@ -31,13 +31,14 @@ const ck = (name, cond) => {
 const room = new Room(), server = new SpeedServer(room);
 server.rand = () => 0.999999;
 await server.onStart();
-const connect = async (id, name, token = '') => {
+const connectTo = async (testRoom, testServer, id, name, token = '') => {
   const conn = new Conn(id);
-  room.conns.add(conn);
-  server.onConnect(conn);
-  await server.onMessage(JSON.stringify({ type: 'hello', name, token }), conn);
+  testRoom.conns.add(conn);
+  testServer.onConnect(conn);
+  await testServer.onMessage(JSON.stringify({ type: 'hello', name, token }), conn);
   return conn;
 };
+const connect = (id, name, token = '') => connectTo(room, server, id, name, token);
 const A = await connect('a', 'A'), B = await connect('b', 'B');
 ck('2人が別席へ着席', A.lastOf('assigned').seat === 0 && B.lastOf('assigned').seat === 1);
 await server.onMessage(JSON.stringify({ type: 'start' }), A);
@@ -79,6 +80,46 @@ server.now = () => 72000;
 await server.onAlarm();
 ck('60秒後は相手の不戦勝', A.lastOf('state').phase === 'ended' &&
   A.lastOf('state').result.winner === 0 && A.lastOf('state').result.forfeit);
+ck('不戦勝確定時に失効席を解放して過去alarmを再登録しない',
+  server.game.seats[1] === null && room.alarm === null);
+const C = await connect('c', 'C');
+ck('不戦勝後の空席へ新規参加してロビーへ戻れる',
+  C.lastOf('assigned').seat === 1 && C.lastOf('state').phase === 'lobby');
+
+const leaveRoom = new Room(), leaveServer = new SpeedServer(leaveRoom);
+leaveServer.rand = () => 0.999999;
+await leaveServer.onStart();
+const LA = await connectTo(leaveRoom, leaveServer, 'la', 'LA');
+const LB = await connectTo(leaveRoom, leaveServer, 'lb', 'LB');
+await leaveServer.onMessage(JSON.stringify({ type: 'start' }), LA);
+leaveServer.finishForfeit(0, 1);
+await leaveServer.save();
+leaveServer.broadcastState();
+await leaveServer.onMessage(JSON.stringify({ type: 'leave' }), LB);
+ck('終了後の退出で席を解放する', leaveServer.game.seats[1] === null);
+const LC = await connectTo(leaveRoom, leaveServer, 'lc', 'LC');
+ck('終了後の退出席へ新規参加してロビーへ戻れる',
+  LC.lastOf('assigned').seat === 1 && LC.lastOf('state').phase === 'lobby');
+
+const expiryRoom = new Room(), expiryServer = new SpeedServer(expiryRoom);
+expiryServer.rand = () => 0.999999;
+await expiryServer.onStart();
+const EA = await connectTo(expiryRoom, expiryServer, 'ea', 'EA');
+const EB = await connectTo(expiryRoom, expiryServer, 'eb', 'EB');
+await expiryServer.onMessage(JSON.stringify({ type: 'start' }), EA);
+expiryServer.finishForfeit(0, 1);
+await expiryServer.save();
+expiryServer.broadcastState();
+expiryServer.now = () => 5000;
+expiryRoom.conns.delete(EB);
+await expiryServer.onClose(EB);
+expiryServer.now = () => 65001;
+await expiryServer.onAlarm();
+ck('終了後の切断席を60秒で解放してalarmを解除する',
+  expiryServer.game.seats[1] === null && expiryRoom.alarm === null);
+const EC = await connectTo(expiryRoom, expiryServer, 'ec', 'EC');
+ck('終了後に失効した席へ新規参加してロビーへ戻れる',
+  EC.lastOf('assigned').seat === 1 && EC.lastOf('state').phase === 'lobby');
 
 console.log(`\n[speed server] pass=${pass} fail=${fail}`);
 if (fail) process.exit(1);

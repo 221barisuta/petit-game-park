@@ -114,9 +114,10 @@ export default class SpeedServer {
       if (g.phase === 'playing') {
         if (expired.length === 2) this.finishForfeit(null, null);
         else this.finishForfeit(1 - expired[0], expired[0]);
-      } else if (g.phase === 'lobby') {
-        for (const seat of expired) g.seats[seat] = null;
       }
+      // playing から ended へ遷移した場合も含め、失効席は同じ alarm で必ず解放する。
+      // disc を残すと過去時刻の alarm を再登録し続け、部屋も埋まったままになる。
+      for (const seat of expired) g.seats[seat] = null;
       await this.save();
       this.broadcastState();
     }
@@ -151,7 +152,7 @@ export default class SpeedServer {
       if (seat >= 0) {
         g.seats[seat].name = name;
         g.seats[seat].disc = null;
-      } else if (g.phase === 'lobby') {
+      } else if (g.phase === 'lobby' || g.phase === 'ended') {
         const open = g.seats.findIndex(s => !s);
         if (open >= 0) {
           seat = open;
@@ -159,6 +160,12 @@ export default class SpeedServer {
             token: crypto.randomUUID(), name, disc: null,
             pid: crypto.randomUUID().slice(0, 8),
           };
+          // 終了結果は残席へ表示したまま空席を待てる。次の参加者が着席した時点で
+          // 古いラウンドを破棄し、通常の start が使えるロビーへ戻す。
+          if (g.phase === 'ended') {
+            g.phase = 'lobby';
+            g.round = null;
+          }
         }
       }
       const assignedToken = seat >= 0 ? g.seats[seat].token : '';
@@ -233,7 +240,8 @@ export default class SpeedServer {
     if (m.type === 'leave') {
       if (seat < 0) return;
       if (g.phase === 'playing') this.finishForfeit(1 - seat, seat);
-      else if (g.phase === 'lobby') g.seats[seat] = null;
+      // lobby / ended に加え、直前で playing から ended にした席も解放する。
+      g.seats[seat] = null;
       conn.setState({ ...(conn.state || {}), seat: -1, token: '' });
       await this.save();
       await this.scheduleAlarm();

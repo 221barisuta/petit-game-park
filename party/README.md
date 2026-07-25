@@ -75,6 +75,7 @@ node party/speed-core.test.mjs
 node party/speed-server.test.mjs
 node party/speed-parity.test.mjs
 node party/speed-protocol-e2e.test.mjs
+node party/speed-client-reconcile.test.mjs
 ```
 
 実DO WebSocketでも同じ秘匿E2Eを実行できる。

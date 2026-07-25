@@ -3393,6 +3393,22 @@ const OthelloNet=makeOnlineNet({party:'othello',seatPrefix:'pgp2_othello_seat_',
 const DaifugoNet=makeOnlineNet({party:'daifugo',seatPrefix:'pgp2_daifugo_seat_',gameLabel:'大富豪',gameId:'daifugo'});
 const NanarabeNet=makeOnlineNet({party:'nanarabe',seatPrefix:'pgp2_nanarabe_seat_',gameLabel:'七並べ',gameId:'nanarabe'});
 const PageOneNet=makeOnlineNet({party:'page-one',seatPrefix:'pgp2_pageone_seat_',gameLabel:'ページワン',gameId:'pageone'});
+/* SPEED-REJECT-QUEUE-BEGIN */
+function drainSpeedRejects(queue,pending){
+  const rejected=queue.splice(0,queue.length),byOpId=new Map();
+  for(const reject of rejected){
+    const opId=String((reject&&reject.opId)||'');
+    if(opId)byOpId.set(opId,reject);
+  }
+  const returned=[],remaining=[];
+  for(const op of pending){
+    const reject=byOpId.get(String((op&&op.opId)||''));
+    if(reject)returned.push({op,reject});
+    else remaining.push(op);
+  }
+  return {rejected,returned,pending:remaining};
+}
+/* SPEED-REJECT-QUEUE-END */
 /* スピード専用ネット層。共通のターン制UIへ変更を入れず、楽観playのACK/REJECTを扱う。 */
 const SpeedNet=(()=>{
   const seatPrefix='pgp2_speed_seat_',party='speed',gameLabel='スピード',gameId='speed';
@@ -3400,7 +3416,7 @@ const SpeedNet=(()=>{
   const {randName,getName,setName}=PROFILE;
   const ri=n=>Math.floor(Math.random()*n);
   const state={ws:null,code:'',status:'idle',seat:null,game:null,error:'',onChange:null,
-    _left:false,_retry:0,acceptedSeq:0,rejectedSeq:0,lastAccepted:null,lastRejected:null};
+    _left:false,_retry:0,acceptedSeq:0,lastAccepted:null,rejectedQueue:[]};
   const host=()=>String((window.PGP_CONFIG||{}).partyHost||'').trim();
   const available=()=>!!host();
   const emit=()=>{if(state.onChange)state.onChange();};
@@ -3408,7 +3424,7 @@ const SpeedNet=(()=>{
   function disconnect(){clearTimeout(state._retry);if(state.ws){try{state.ws.onclose=null;state.ws.close();}catch(e){}state.ws=null;}}
   function connect(code){
     disconnect();state.code=code;state.status='connecting';state.seat=null;state.game=null;state.error='';
-    state._left=false;state.lastAccepted=null;state.lastRejected=null;emit();
+    state._left=false;state.lastAccepted=null;state.rejectedQueue.length=0;emit();
     const raw=host().replace(/\/$/,'');
     const base=/^wss?:\/\//.test(raw)?raw
       :((/(localhost|127\.0\.0\.1|0\.0\.0\.0|^192\.168\.|:\d+$)/.test(raw)?'ws://':'wss://')+raw);
@@ -3423,7 +3439,7 @@ const SpeedNet=(()=>{
       else if(m.type==='playAccepted'){state.acceptedSeq++;state.lastAccepted=m;emit();}
       else if(m.type==='playRejected'){
         if(m.state){state.game=m.state;state.status=m.state.status||state.status;}
-        state.rejectedSeq++;state.lastRejected=m;emit();
+        state.rejectedQueue.push(m);emit();
       }else if(m.type==='error'){state.error=m.msg||'';emit();}
     };
     ws.onclose=()=>{state.ws=null;if(state.status==='idle'||state._left)return;
@@ -3431,7 +3447,8 @@ const SpeedNet=(()=>{
       state._retry=setTimeout(()=>{if(state.code&&!state._left)connect(state.code);},1500);};
     ws.onerror=()=>{if(state.status==='connecting'){state.status='error';state.error='つうしん エラー';emit();}};
   }
-  function leave(){state._left=true;disconnect();state.status='idle';state.code='';state.seat=null;state.game=null;emit();}
+  function leave(){state._left=true;disconnect();state.status='idle';state.code='';state.seat=null;state.game=null;
+    state.rejectedQueue.length=0;emit();}
   const raw=o=>{if(state.ws&&state.ws.readyState===1)state.ws.send(JSON.stringify(o));};
   return {state,available,host,getName,setName,randName,genCode,connect,disconnect,leave,seatKey,gameLabel,gameId,
     raw,rename:n=>{setName(n);raw({type:'rename',name:PROFILE.dispName()});},
@@ -8224,7 +8241,7 @@ registerGame({
     ];
     let screen='setup',level=clamp(getInt('pgp2_speed_level',2),1,3),L=null;
     let selected=-1,cpuTimer=0,cpuKey='',pending=[],returnFx=null;
-    let onlineAccepted=SpeedNet.state.acceptedSeq,onlineRejected=SpeedNet.state.rejectedSeq,onlineErr='';
+    let onlineAccepted=SpeedNet.state.acceptedSeq,onlineErr='';
     let recordedLocal=false,recordedOnlineNo=-1,resultFxKey='';
 
     const rankText=r=>r===1?'A':r===11?'J':r===12?'Q':r===13?'K':String(r);
@@ -8295,7 +8312,7 @@ registerGame({
     function enterOnline(){
       if(!SpeedNet.available())return;
       activeNet=SpeedNet;SpeedNet.state.onChange=renderOnlineBar;screen='online';selected=-1;pending=[];returnFx=null;
-      onlineAccepted=SpeedNet.state.acceptedSeq;onlineRejected=SpeedNet.state.rejectedSeq;onlineErr='';resultFxKey='';
+      onlineAccepted=SpeedNet.state.acceptedSeq;SpeedNet.state.rejectedQueue.length=0;onlineErr='';resultFxKey='';
       if(pendingOnlineRoom){
         const code=pendingOnlineRoom;pendingOnlineRoom='';
         SpeedNet.connect(code);setRoomUrl(code,'speed');renderCardGameBar();
@@ -8481,9 +8498,11 @@ registerGame({
     }
     function reconcileOnline(dt){
       const s=SpeedNet.state,auth=onlineView();
-      if(s.rejectedSeq!==onlineRejected){
-        onlineRejected=s.rejectedSeq;const rej=s.lastRejected,p=pending.find(x=>x.opId===(rej&&rej.opId));
-        if(p){returnFx={card:p.card,slot:p.slot,pile:p.pile,t:.45};pending=pending.filter(x=>x!==p);}
+      const rejected=drainSpeedRejects(s.rejectedQueue,pending);
+      if(rejected.rejected.length){
+        pending=rejected.pending;
+        const item=rejected.returned[rejected.returned.length-1],rej=rejected.rejected[rejected.rejected.length-1];
+        if(item){const p=item.op;returnFx={card:p.card,slot:p.slot,pile:p.pile,t:.45};}
         banner((rej&&rej.code==='stale')?'ひと足さき！ カードを もどします':((rej&&rej.reason)||'カードを もどします'));A.bad();
       }
       if(s.acceptedSeq!==onlineAccepted)onlineAccepted=s.acceptedSeq;
