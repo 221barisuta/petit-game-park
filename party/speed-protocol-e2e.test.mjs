@@ -45,6 +45,16 @@ const publicSnap = s => JSON.stringify({
   phase: s.phase, fields: s.fields, centers: s.centers,
   counts: s.counts, pileVersions: s.pileVersions, ready: s.ready, result: s.result,
 });
+const cardIds = (value, out = []) => {
+  if (!value || typeof value !== 'object') return out;
+  if (Number.isInteger(value.id) && Number.isInteger(value.s) && Number.isInteger(value.r)) {
+    out.push(value.id);
+    return out;
+  }
+  if (Array.isArray(value)) value.forEach(v => cardIds(v, out));
+  else Object.values(value).forEach(v => cardIds(v, out));
+  return out;
+};
 
 const room = new Room(), server = new SpeedServer(room);
 server.rand = () => 0.999999; // デッキ順を保ち、双方の「4」を台札「5」へ競合可能にする。
@@ -54,6 +64,11 @@ await A.send({ type: 'hello', name: 'A' });
 await B.send({ type: 'hello', name: 'B' });
 await A.send({ type: 'start' });
 const initial = A.latest('state'), observedVersion = initial.pileVersions[0];
+const publicCardIds = new Set(initial.fields.flat().filter(Boolean).map(c => c.id)
+  .concat(initial.centers.filter(Boolean).map(c => c.id)));
+ck('伏せ山は枚数だけでカード内容を配信しない',
+  !Object.hasOwn(initial, 'stocks') && !Object.hasOwn(initial, 'hands') && !Object.hasOwn(initial, 'hand') &&
+  cardIds(initial).every(id => publicCardIds.has(id)));
 
 await Promise.all([
   A.send({ type: 'play', opId: 'sim-a', slot: 3, pile: 0, expectedVersion: observedVersion }),

@@ -15,6 +15,7 @@
 | `private-state.js` | 接続ごとの state projector。seat token を検証し、カードゲームでは本人手札だけを合成する汎用秘匿基盤 |
 | `nanarabe-core.js` / `nanarabe-server.js` | 七並べの純コアと3〜4人オンライン権威サーバー（CPU補充・パス3回脱落・手札強制公開） |
 | `pageone-core.js` / `pageone-server.js` | ページワンの純コアと3〜4人オンライン権威サーバー（特殊札・宣言・CPU補充・順位） |
+| `speed-core.js` / `speed-server.js` | スピードの純コアと2人リアルタイム権威サーバー（到着順競合・せーの同期・60秒不戦勝） |
 | `gomoku-core.js` | `GO_N` と `checkGomoku` の**単一ソース**。`index.html` と verbatim 一致させる |
 | `parity.test.mjs` | `index.html` の `checkGomoku` と `gomoku-core.js` が同一出力か検証（divergence厳禁） |
 | `server.test.mjs` | サーバー権威ロジックの単体テスト（モック room/conn・席解放含む） |
@@ -37,6 +38,9 @@
 - broadcast は共通 JSON の一斉送信を使わず、`private-state.js` が接続ごとに投影・送信する。
 - 七並べは `/parties/nanarabe/<部屋コード>`。3〜4人で、開始時の空席は CPU が埋める。
 - ページワンは `/parties/page-one/<部屋コード>`。山札内容も非公開で、公開するのは場札と山札枚数だけ。
+- スピードは `/parties/speed/<部屋コード>`。`play{opId,slot,pile,expectedVersion}` を到着順に処理し、
+  台札世代が一致した先着だけを `playAccepted`、後着を正規state付き `playRejected` とする。
+  両者が出せない時は双方の `ready` が揃ってから2つの台札を1回のstate更新で同期する。
 
 ## セットアップ（依存インストール）
 ```sh
@@ -67,6 +71,10 @@ node party/pageone-core.test.mjs
 node party/pageone-server.test.mjs
 node party/pageone-parity.test.mjs
 node party/pageone-privacy-e2e.test.mjs
+node party/speed-core.test.mjs
+node party/speed-server.test.mjs
+node party/speed-parity.test.mjs
+node party/speed-protocol-e2e.test.mjs
 ```
 
 実DO WebSocketでも同じ秘匿E2Eを実行できる。

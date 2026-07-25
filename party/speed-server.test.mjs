@@ -55,6 +55,12 @@ ck('後着はstale reject', B.lastOf('playRejected').code === 'stale');
 ck('rejectに正規stateと戻る場札を同梱',
   B.lastOf('playRejected').state.fields[1][3].r === 4 &&
   B.lastOf('playRejected').state.pileVersions[0] === version + 1);
+const afterRaceVersion = A.lastOf('state').pileVersions[0];
+await server.onMessage(JSON.stringify({
+  type: 'play', opId: 'race-a', slot: 3, pile: 0, expectedVersion: version,
+}), A);
+ck('同一opId再送は冪等で二重に出さない',
+  A.lastOf('playAccepted').duplicate === true && A.lastOf('state').pileVersions[0] === afterRaceVersion);
 
 const tokenB = B.lastOf('assigned').token;
 server.now = () => 1000;

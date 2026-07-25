@@ -269,7 +269,7 @@ export default class SpeedServer {
       paused: pausedSeats.length > 0,
       pausedSeats,
       pauseDeadline: pausedSeats.length
-        ? Math.min(...pausedSeats.map(i => Number(g.seats[i].disc || this.now()) + GRACE_MS))
+        ? Math.min(...pausedSeats.map(i => Number(g.seats[i].disc ?? this.now()) + GRACE_MS))
         : null,
     };
     if (r) Object.assign(publicState, {

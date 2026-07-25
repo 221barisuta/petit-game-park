@@ -906,7 +906,7 @@ function registerGame(def){GAMES.push(def)}
 // メニュー分類: versus=たいせん / それ以外=ひとり (新規ゲームも type で自動振り分け)
 const soloGames=()=>GAMES.filter(g=>g.type!=='versus');
 // たいせんの表示順 (#7 まるばつ→オセロ→五目→チキン。方針: マス目が多いほど下)。未定義idは末尾。
-const VS_ORDER=['ox','othello','gomoku','connect4','dots','hasami','chicken','daifugo','nanarabe','pageone'];
+const VS_ORDER=['ox','othello','gomoku','connect4','dots','hasami','chicken','daifugo','nanarabe','pageone','speed'];
 const vsOrder=id=>{const i=VS_ORDER.indexOf(id);return i<0?99:i;};
 const versusGames=()=>GAMES.filter(g=>g.type==='versus').sort((a,b)=>vsOrder(a.id)-vsOrder(b.id));
 // デイリー抽選は「ひとり(非versus)」プールのみから選ぶ (versusはスコア競争にならないため除外)
@@ -1470,7 +1470,7 @@ function renderTotalRank(tt,tsub,wt,wsub){
 /* #14 ユーザー情報画面: PROFILE の編集UI (開くのは scr-select の「👤なまえ・ランキング」) */
 /* #backlog1 じぶんのきろく画面: スコア系はGAMES登録順のうちscore対象のみ、対戦系は勝敗/連勝も表示 */
 const REC_SCORE_GAMES=['tea','lane','spot','mole','chinitsu','2048','chicken'];
-const REC_VS_GAMES=['ox','gomoku','othello','daifugo','nanarabe','pageone','mahjong'];
+const REC_VS_GAMES=['ox','gomoku','othello','daifugo','nanarabe','pageone','speed','mahjong'];
 function setupRecords(){
   const list=$('recList');
   const render=()=>{
@@ -1898,7 +1898,7 @@ function boot(){
   window.__PGP={
     get game(){return game},get phase(){return phase},get def(){return curDef},
     get score(){return score},get combo(){return combo},get feverT(){return feverT},
-    GAMES,openGame,show,checkWin,runTicTacToeTests,checkGomoku,runGomokuTests,getGomokuHint,runGomokuHintTests,getGomokuCpuMove,runGomokuCpuTests,GomokuNet
+    GAMES,openGame,show,checkWin,runTicTacToeTests,checkGomoku,runGomokuTests,getGomokuHint,runGomokuHintTests,getGomokuCpuMove,runGomokuCpuTests,GomokuNet,SpeedNet
   };
   // ?selftest を付けて開くと各ゲームが SELFTESTS に登録した純ロジックテストを一括実行
   if(/[?&]selftest/.test(location.search))SELFTESTS.forEach(f=>f());
@@ -3393,6 +3393,50 @@ const OthelloNet=makeOnlineNet({party:'othello',seatPrefix:'pgp2_othello_seat_',
 const DaifugoNet=makeOnlineNet({party:'daifugo',seatPrefix:'pgp2_daifugo_seat_',gameLabel:'大富豪',gameId:'daifugo'});
 const NanarabeNet=makeOnlineNet({party:'nanarabe',seatPrefix:'pgp2_nanarabe_seat_',gameLabel:'七並べ',gameId:'nanarabe'});
 const PageOneNet=makeOnlineNet({party:'page-one',seatPrefix:'pgp2_pageone_seat_',gameLabel:'ページワン',gameId:'pageone'});
+/* スピード専用ネット層。共通のターン制UIへ変更を入れず、楽観playのACK/REJECTを扱う。 */
+const SpeedNet=(()=>{
+  const seatPrefix='pgp2_speed_seat_',party='speed',gameLabel='スピード',gameId='speed';
+  const seatKey=code=>seatPrefix+code;
+  const {randName,getName,setName}=PROFILE;
+  const ri=n=>Math.floor(Math.random()*n);
+  const state={ws:null,code:'',status:'idle',seat:null,game:null,error:'',onChange:null,
+    _left:false,_retry:0,acceptedSeq:0,rejectedSeq:0,lastAccepted:null,lastRejected:null};
+  const host=()=>String((window.PGP_CONFIG||{}).partyHost||'').trim();
+  const available=()=>!!host();
+  const emit=()=>{if(state.onChange)state.onChange();};
+  function genCode(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='';for(let i=0;i<6;i++)s+=c[ri(c.length)];return s;}
+  function disconnect(){clearTimeout(state._retry);if(state.ws){try{state.ws.onclose=null;state.ws.close();}catch(e){}state.ws=null;}}
+  function connect(code){
+    disconnect();state.code=code;state.status='connecting';state.seat=null;state.game=null;state.error='';
+    state._left=false;state.lastAccepted=null;state.lastRejected=null;emit();
+    const raw=host().replace(/\/$/,'');
+    const base=/^wss?:\/\//.test(raw)?raw
+      :((/(localhost|127\.0\.0\.1|0\.0\.0\.0|^192\.168\.|:\d+$)/.test(raw)?'ws://':'wss://')+raw);
+    let ws;
+    try{ws=new WebSocket(`${base}/parties/${party}/${encodeURIComponent(code.toLowerCase())}`);}
+    catch(e){state.status='error';state.error='せつぞく できません';emit();return;}
+    state.ws=ws;
+    ws.onopen=()=>ws.send(JSON.stringify({type:'hello',name:PROFILE.dispName(),token:store.get(seatKey(code),'')||''}));
+    ws.onmessage=ev=>{let m;try{m=JSON.parse(ev.data);}catch{return;}
+      if(m.type==='assigned'){state.seat=m.seat;if(m.token)store.set(seatKey(code),m.token);emit();}
+      else if(m.type==='state'){state.game=m;state.status=m.status||'waiting';emit();}
+      else if(m.type==='playAccepted'){state.acceptedSeq++;state.lastAccepted=m;emit();}
+      else if(m.type==='playRejected'){
+        if(m.state){state.game=m.state;state.status=m.state.status||state.status;}
+        state.rejectedSeq++;state.lastRejected=m;emit();
+      }else if(m.type==='error'){state.error=m.msg||'';emit();}
+    };
+    ws.onclose=()=>{state.ws=null;if(state.status==='idle'||state._left)return;
+      state.status='disconnected';emit();clearTimeout(state._retry);
+      state._retry=setTimeout(()=>{if(state.code&&!state._left)connect(state.code);},1500);};
+    ws.onerror=()=>{if(state.status==='connecting'){state.status='error';state.error='つうしん エラー';emit();}};
+  }
+  function leave(){state._left=true;disconnect();state.status='idle';state.code='';state.seat=null;state.game=null;emit();}
+  const raw=o=>{if(state.ws&&state.ws.readyState===1)state.ws.send(JSON.stringify(o));};
+  return {state,available,host,getName,setName,randName,genCode,connect,disconnect,leave,seatKey,gameLabel,gameId,
+    raw,rename:n=>{setName(n);raw({type:'rename',name:PROFILE.dispName()});},
+    play:(slot,pile,expectedVersion,opId)=>raw({type:'play',slot,pile,expectedVersion,opId})};
+})();
 // まるばつ(三目): 席色は共通契約どおり black/white。バー記号だけ ○/× に読み替え(盤の配色と一致)
 const TicTacToeNet=makeOnlineNet({party:'ox',seatPrefix:'pgp2_ox_seat_',gameLabel:'まるばつ',gameId:'ox',sym:{black:'○',white:'×'}});
 // コネクトフォー: 席色は共通契約どおり black/white。バー記号は 🔴(先手)/🟡(後手) に読み替え(盤の配色と一致)
@@ -3403,7 +3447,7 @@ const DotsNet=makeOnlineNet({party:'dots',seatPrefix:'pgp2_dots_seat_',gameLabel
 const HasamiNet=makeOnlineNet({party:'hasami',seatPrefix:'pgp2_hasami_seat_',gameLabel:'はさみ将棋',gameId:'hasami',sym:{black:'⚫',white:'⚪'}});
 const onlineNetById={
   gomoku:GomokuNet,othello:OthelloNet,daifugo:DaifugoNet,nanarabe:NanarabeNet,pageone:PageOneNet,ox:TicTacToeNet,
-  connect4:Connect4Net,dots:DotsNet,hasami:HasamiNet,
+  connect4:Connect4Net,dots:DotsNet,hasami:HasamiNet,speed:SpeedNet,
 };
 let activeNet=GomokuNet; // オンライン画面に入ったゲームの net を指す (renderOnlineBar/setupOnlineUI 共用)
 let pendingOnlineRoom=''; // ?room=CODE 自動参加用 (boot→gomoku create で消費)
@@ -3527,7 +3571,7 @@ function makeVsOnlineUI(cfg){
 /* オンライン情報バー(DOM)を現在のサーバー状態で更新 (activeNet=五目/オセロ 共用。大富豪は専用描画へ) */
 function renderOnlineBar(){
   const s=activeNet.state;if(s.status==='idle')return;
-  if(activeNet.gameId==='daifugo'||activeNet.gameId==='nanarabe'){renderCardGameBar(s);return;} // 多人数stateは専用canvas描画
+  if(activeNet.gameId==='daifugo'||activeNet.gameId==='nanarabe'||activeNet.gameId==='speed'){renderCardGameBar(s);return;} // 専用canvas描画
   const g=s.game,me=s.seat;
   const SB=activeNet.sym||{black:'●',white:'○'}; // 席記号 (五目/オセロ=碁石 / まるばつ=○×)
   $('olRoomCode').textContent=s.code||'—';
@@ -7996,6 +8040,502 @@ registerGame({
       },
       onlineBack(){screen='setup';setRoomUrl('');},
       destroy(){PageOneNet.leave();hideOnlineUI();setRoomUrl('');},
+    };
+  }
+});
+
+/* =========================================================================
+   ⚡ スピード — 2人リアルタイム同時操作（CPU / オンライン）
+   ========================================================================= */
+/* SPEED-CORE-BEGIN (party/speed-core.js と export を除き verbatim 一致) */
+/* スピード共有コア（クライアント / サーバー共通）。
+   カード: {id:0..51,s:0..3,r:1..13}。A(1) と K(13) は隣接する。
+   各自26枚を 場札4 + 初期台札1 + 伏せ山21 に分ける。 */
+
+const SPEED_SUITS = ['♠', '♥', '♦', '♣'];
+
+function makeSpeedDeck() {
+  const out = [];
+  for (let s = 0; s < 4; s++)
+    for (let r = 1; r <= 13; r++) out.push({ id: s * 13 + r - 1, s, r });
+  return out;
+}
+
+function shuffleSpeed(cards, rng = Math.random) {
+  const a = cards.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const t = a[i]; a[i] = a[j]; a[j] = t;
+  }
+  return a;
+}
+
+function speedRanksAdjacent(a, b) {
+  const d = Math.abs(Number(a) - Number(b));
+  return d === 1 || d === 12;
+}
+
+function newSpeedRound(deck = makeSpeedDeck()) {
+  if (!Array.isArray(deck) || deck.length !== 52) throw new Error('speed deck must contain 52 cards');
+  const halves = [deck.slice(0, 26), deck.slice(26, 52)];
+  const fields = halves.map(cards => cards.slice(0, 4));
+  const centers = halves.map(cards => [cards[4]]);
+  const stocks = halves.map(cards => cards.slice(5));
+  return {
+    stocks,
+    fields,
+    centers,
+    pileVersions: [0, 0],
+    ready: [false, false],
+    last: { type: 'start', cards: centers.map(p => p[p.length - 1]) },
+    ended: false,
+    result: null,
+  };
+}
+
+function speedTop(g, pile) {
+  const p = g && g.centers && g.centers[pile];
+  return Array.isArray(p) && p.length ? p[p.length - 1] : null;
+}
+
+function speedCardPlayable(g, card, pile) {
+  const top = speedTop(g, pile);
+  return !!(card && top && speedRanksAdjacent(card.r, top.r));
+}
+
+function speedLegalMoves(g, seat) {
+  if (!g || g.ended || (seat !== 0 && seat !== 1) || !Array.isArray(g.fields[seat])) return [];
+  const out = [];
+  for (let slot = 0; slot < g.fields[seat].length; slot++) {
+    const card = g.fields[seat][slot];
+    if (!card) continue;
+    for (let pile = 0; pile < 2; pile++)
+      if (speedCardPlayable(g, card, pile)) out.push({ slot, pile, cardId: card.id });
+  }
+  return out;
+}
+
+function speedStuck(g) {
+  return !!(g && !g.ended && speedLegalMoves(g, 0).length === 0 && speedLegalMoves(g, 1).length === 0);
+}
+
+function speedCanShowdown(g) {
+  return speedStuck(g) && g.stocks.some(stock => stock.length > 0);
+}
+
+function finishIfExhausted(g, seat) {
+  if (g.stocks[seat].length || g.fields[seat].some(Boolean)) return false;
+  g.ended = true;
+  g.result = { winner: seat };
+  return true;
+}
+
+function finishDeadlock(g) {
+  if (!speedStuck(g) || g.stocks.some(stock => stock.length)) return false;
+  g.ended = true;
+  g.result = { draw: true, reason: 'deadlock' };
+  return true;
+}
+
+function speedPlay(g, seat, slot, pile, expectedVersion) {
+  if (!g || g.ended) return { ok: false, error: 'ゲームは おわっています', code: 'ended' };
+  if (seat !== 0 && seat !== 1) return { ok: false, error: 'かんせん中は だせません', code: 'spectator' };
+  slot = Number(slot); pile = Number(pile);
+  if (!Number.isInteger(slot) || slot < 0 || slot >= 4 || !Number.isInteger(pile) || pile < 0 || pile >= 2)
+    return { ok: false, error: 'カードか 台札が ただしくありません', code: 'range' };
+  if (Number(expectedVersion) !== g.pileVersions[pile])
+    return { ok: false, error: '相手のカードが ひと足さきでした', code: 'stale' };
+  const card = g.fields[seat][slot];
+  if (!card) return { ok: false, error: 'そのカードは もう ありません', code: 'missing' };
+  if (!speedCardPlayable(g, card, pile))
+    return { ok: false, error: 'その台札には だせません', code: 'rank' };
+
+  g.centers[pile].push(card);
+  g.pileVersions[pile]++;
+  const replacement = g.stocks[seat].length ? g.stocks[seat].shift() : null;
+  g.fields[seat][slot] = replacement;
+  g.ready = [false, false];
+  g.last = {
+    type: 'play', seat, slot, pile, card,
+    replacement: replacement ? { seat, slot } : null,
+    pileVersion: g.pileVersions[pile],
+  };
+  const won = finishIfExhausted(g, seat);
+  if (!won) finishDeadlock(g);
+  return { ok: true, card, replacement, won, ended: g.ended, result: g.result };
+}
+
+function speedReady(g, seat) {
+  if (!g || g.ended) return { ok: false, error: 'ゲームは おわっています', code: 'ended' };
+  if (seat !== 0 && seat !== 1) return { ok: false, error: 'かんせん中は おせません', code: 'spectator' };
+  if (!speedCanShowdown(g)) return { ok: false, error: 'まだ だせるカードが あります', code: 'not-stuck' };
+  g.ready[seat] = true;
+  if (!g.ready[0] || !g.ready[1]) return { ok: true, updated: false };
+
+  const cards = [null, null];
+  for (let pile = 0; pile < 2; pile++) {
+    if (!g.stocks[pile].length) continue;
+    const card = g.stocks[pile].shift();
+    g.centers[pile].push(card);
+    g.pileVersions[pile]++;
+    cards[pile] = card;
+  }
+  g.ready = [false, false];
+  g.last = { type: 'showdown', cards, pileVersions: g.pileVersions.slice() };
+  finishDeadlock(g);
+  return { ok: true, updated: true, cards, ended: g.ended, result: g.result };
+}
+/* SPEED-CORE-END */
+
+function runSpeedTests(){
+  const {ck,done}=makeTest('speed');
+  ck('a-k-cycle',speedRanksAdjacent(1,13)&&!speedRanksAdjacent(2,13));
+  const r=newSpeedRound(makeSpeedDeck());
+  ck('deal-26-each',r.fields[0].length===4&&r.stocks[0].length===21&&r.centers[0].length===1);
+  ck('initial-four-on-five',speedLegalMoves(r,0).some(m=>m.slot===3&&m.pile===0));
+  const p=speedPlay(r,0,3,0,0);
+  ck('play-refills-and-versions',p.ok&&r.fields[0][3].id===5&&r.pileVersions[0]===1);
+  ck('stale-rejected',speedPlay(r,1,3,0,0).code==='stale');
+  return done();
+}
+if(typeof window!=='undefined'){window.runSpeedTests=runSpeedTests;SELFTESTS.push(runSpeedTests);}
+
+registerGame({
+  id:'speed',emoji:'⚡',title:'スピード',type:'versus',vsBadge:'👥 2人 / CPU',
+  desc:'同時に出す！台札の±1へ早いもの勝ち',color:'#ed5b32',duration:null,noDaily:true,
+  howto:[
+    ['⚡','じゅんばんなし！場の4まいから すばやく出す'],
+    ['↕️','台札の数字より 1つ上か下（AとKもつながる）'],
+    ['🖐','両方とも出せない時は 2人で「せーの」'],
+    ['🏆','山と場札を 先にぜんぶ出した人のかち'],
+    ['🌐','オンラインはサーバー到着順。競合したカードは手元へ戻る'],
+  ],
+  create(ctx){
+    const A=ctx.audio,LV=['よわい','ふつう','つよい'];
+    const REACT=[[1.5,2.5],[.8,1.5],[.4,.8]];
+    const bExit={x:10,y:10,w:52,h:36},bReady={x:100,y:624,w:220,h:48};
+    const bLeft={x:54,y:400,w:148,h:44},bRight={x:218,y:400,w:148,h:44};
+    const setupBtns=[
+      {x:48,y:174,w:324,h:54,kind:'cpu',level:1,label:'🤖 よわい　1.5〜2.5秒'},
+      {x:48,y:240,w:324,h:54,kind:'cpu',level:2,label:'🤖 ふつう　0.8〜1.5秒'},
+      {x:48,y:306,w:324,h:54,kind:'cpu',level:3,label:'🤖 つよい　0.4〜0.8秒'},
+      {x:48,y:390,w:324,h:58,kind:'online',
+        label:SpeedNet.available()?'🌐 オンライン たいせん':'🌐 オンライン (じゅんびちゅう)'},
+    ];
+    let screen='setup',level=clamp(getInt('pgp2_speed_level',2),1,3),L=null;
+    let selected=-1,cpuTimer=0,cpuKey='',pending=[],returnFx=null;
+    let onlineAccepted=SpeedNet.state.acceptedSeq,onlineRejected=SpeedNet.state.rejectedSeq,onlineErr='';
+    let recordedLocal=false,recordedOnlineNo=-1,resultFxKey='';
+
+    const rankText=r=>r===1?'A':r===11?'J':r===12?'Q':r===13?'K':String(r);
+    const fieldRect=(slot,bottom)=>({x:56+slot*80,y:bottom?492:82,w:68,h:92});
+    const centerRect=pile=>({x:pile===0?104:230,y:278,w:86,h:120});
+    const otherSeat=v=>v.you===0?1:0;
+    const liveTop=(v,pile)=>v.centers[pile];
+    const playable=(v,card,pile)=>!!(card&&liveTop(v,pile)&&speedRanksAdjacent(card.r,liveTop(v,pile).r));
+    function drawCard(g,c,r,opt){
+      if(!c)return;
+      opt=opt||{};const red=c.s===1||c.s===2;
+      g.save();g.globalAlpha=opt.alpha==null?1:opt.alpha;
+      g.fillStyle='#fffdf7';g.strokeStyle=opt.pending?'#ffe34f':opt.legal?'#44efa1':opt.selected?'#ffd23f':'#302841';
+      g.lineWidth=opt.pending||opt.selected?4:opt.legal?2.5:1.5;rr(g,r.x,r.y,r.w,r.h,8);g.fill();g.stroke();
+      const col=red?'#dd334e':'#20263b';
+      outlinedText(g,rankText(c.r),r.x+10,r.y+16,Math.max(15,r.w*.27),col,'#fff',2,1,'left');
+      outlinedText(g,SPEED_SUITS[c.s],r.x+r.w/2,r.y+r.h*.59,Math.max(27,r.w*.46),col,'#fff',2);
+      g.restore();
+    }
+    function localView(){
+      if(!L)return null;
+      return {you:0,names:['あなた','CPU '+LV[level-1]],fields:L.fields,
+        centers:[speedTop(L,0),speedTop(L,1)],pileVersions:L.pileVersions,ready:L.ready,
+        counts:L.stocks.map(s=>s.length),result:L.result,canShowdown:speedCanShowdown(L),
+        paused:false,status:L.ended?'ended':'playing',host:true,gameNo:1};
+    }
+    function onlineView(){
+      const g=SpeedNet.state.game;if(!g||g.phase==='lobby'||!g.fields)return null;
+      return {you:g.youSeat,names:g.seatsPub.map(s=>s?s.name:'—'),fields:g.fields,
+        centers:g.centers,pileVersions:g.pileVersions,ready:g.ready,counts:g.counts,
+        result:g.result,canShowdown:g.canShowdown,paused:g.paused,status:g.status,
+        pauseDeadline:g.pauseDeadline,host:g.youSeat===g.hostSeat,gameNo:g.gameNo};
+    }
+    function shadowOnline(){
+      const base=onlineView();if(!base)return null;
+      const v={...base,fields:base.fields.map(row=>row.slice()),centers:base.centers.slice(),
+        pileVersions:base.pileVersions.slice(),ready:base.ready.slice(),counts:base.counts.slice()};
+      for(const p of pending){
+        const card=v.fields[p.seat]&&v.fields[p.seat][p.slot];
+        if(!card||card.id!==p.card.id)continue;
+        v.fields[p.seat][p.slot]=null;v.centers[p.pile]=p.card;
+        v.pileVersions[p.pile]=Math.max(v.pileVersions[p.pile],p.expectedVersion+1);
+      }
+      return v;
+    }
+    const view=()=>screen==='play'?localView():screen==='online'?shadowOnline():null;
+    function cpuDelay(){const r=REACT[level-1];return r[0]+Math.random()*(r[1]-r[0]);}
+    function localStateKey(){return L?L.pileVersions.join(',')+'|'+L.fields[1].map(c=>c?c.id:'-').join(',')+'|'+L.ready[1]:'';}
+    function resetCpuClock(){cpuKey=localStateKey();cpuTimer=L&&!L.ended&&!L.ready[1]?cpuDelay():0;}
+    function finishFx(v){
+      if(!v||!v.result)return;
+      const key=(screen==='online'?'o'+v.gameNo:'l')+JSON.stringify(v.result);
+      if(resultFxKey===key)return;resultFxKey=key;
+      if(v.result.draw){banner('ひきわけ！');A.ok();}
+      else if(v.you>=0&&v.result.winner===v.you){banner(v.result.forfeit?'ふせんしょう！':'あなたの かち！');A.fever();confetti();}
+      else{banner(v.result.forfeit?'あいての ふせんしょう':'あいての かち');A.splash();}
+      if(screen==='play'&&!recordedLocal){
+        recordedLocal=true;statsRecordMatch('speed',v.result.draw?'draw':v.result.winner===0?'win':'lose');
+      }else if(screen==='online'&&v.you>=0&&recordedOnlineNo!==v.gameNo){
+        recordedOnlineNo=v.gameNo;statsRecordMatch('speed',v.result.draw?'draw':v.result.winner===v.you?'win':'lose');
+      }
+    }
+    function startLocal(lv){
+      level=lv;store.set('pgp2_speed_level',String(level));
+      L=newSpeedRound(shuffleSpeed(makeSpeedDeck()));screen='play';selected=-1;pending=[];returnFx=null;
+      recordedLocal=false;resultFxKey='';resetCpuClock();A.pop();
+    }
+    function enterOnline(){
+      if(!SpeedNet.available())return;
+      activeNet=SpeedNet;SpeedNet.state.onChange=renderOnlineBar;screen='online';selected=-1;pending=[];returnFx=null;
+      onlineAccepted=SpeedNet.state.acceptedSeq;onlineRejected=SpeedNet.state.rejectedSeq;onlineErr='';resultFxKey='';
+      if(pendingOnlineRoom){
+        const code=pendingOnlineRoom;pendingOnlineRoom='';
+        SpeedNet.connect(code);setRoomUrl(code,'speed');renderCardGameBar();
+      }else{
+        $('olName').value=SpeedNet.getName();$('olCode').value='';$('olSetupMsg').textContent='';
+        $('onlineSetup').classList.remove('hidden');
+      }
+    }
+    function leaveOnline(){
+      SpeedNet.raw({type:'leave'});SpeedNet.leave();hideOnlineUI();setRoomUrl('');
+      pending=[];selected=-1;screen='setup';A.pop();
+    }
+    function drawSetup(g){
+      g.fillStyle='#232642';g.fillRect(0,0,W,H);
+      outlinedText(g,'⚡ スピード',W/2,68,32,'#fff','#15172c',8);
+      outlinedText(g,'じゅんばんなし！ はやいもの勝ち',W/2,111,16,'#ffe36e','#15172c',4);
+      outlinedText(g,'CPUの はやさを えらんでね',W/2,145,13,'#cdd5ef','#15172c',3);
+      setupBtns.forEach(b=>drawBtn(g,b,b.label,b.kind==='online'?(SpeedNet.available()?'#4d8cff':'#62677a')
+        :(b.level===level?'#ed5b32':'#a7473d'),b.kind==='online'&&!SpeedNet.available(),17));
+      outlinedText(g,'場札をタップ → 出せる台札が1つなら即出し',W/2,493,13,'#d4dbef','#15172c',3);
+      outlinedText(g,'両方へ出せる時だけ 台札をえらびます',W/2,520,12,'#d4dbef','#15172c',3);
+      outlinedText(g,'オンラインは切断中一時停止・60秒で不戦勝',W/2,565,12,'#ffbeb5','#15172c',3);
+    }
+    function lobbyButtons(g){
+      const host=g.youSeat===g.hostSeat;
+      return [
+        {x:24,y:162,w:116,h:42,kind:'copy',label:'📋 コード',on:true},
+        {x:152,y:162,w:116,h:42,kind:'link',label:'🔗 リンク',on:true},
+        {x:280,y:162,w:116,h:42,kind:'share',label:'📤 共有',on:true},
+        {x:48,y:520,w:154,h:48,kind:'leave',label:'🚪 退出',on:true},
+        {x:218,y:520,w:154,h:48,kind:'start',label:host?'▶ はじめる':'ホスト待ち',on:host&&g.canStart},
+      ];
+    }
+    function drawLobby(g2,g){
+      g2.fillStyle='#174d3b';g2.fillRect(0,0,W,H);
+      outlinedText(g2,'🌐 オンライン スピード',W/2,58,23,'#fff','rgba(0,0,0,.5)',6);
+      outlinedText(g2,'あいことば',W/2,96,12,'#c9f3e3','rgba(0,0,0,.4)',3);
+      outlinedText(g2,SpeedNet.state.code||'—',W/2,129,29,'#ffe94a','#50350d',7);
+      lobbyButtons(g).forEach(b=>drawBtn(g2,b,b.label,b.kind==='start'?'#ed5b32':b.kind==='leave'?'#9b684f':'#4d8cff',!b.on,14));
+      for(let i=0;i<2;i++){
+        const y=252+i*86,s=g.seatsPub[i];
+        g2.save();g2.fillStyle='rgba(0,0,0,.27)';rr(g2,52,y,316,62,12);g2.fill();g2.restore();
+        outlinedText(g2,(i===g.hostSeat?'👑 ':'')+(s?s.name:'あいてを まっています'),W/2,y+23,16,s?'#fff':'#a9c9bd','rgba(0,0,0,.45)',4);
+        if(s)outlinedText(g2,s.connected?'🟢 せつぞく中':'⚠ せつだん中',W/2,y+46,11,s.connected?'#7cf2af':'#ffc0b7','rgba(0,0,0,.4)',3);
+        if(i===g.youSeat)outlinedText(g2,'あなた',333,y+23,10,'#21e6c1','rgba(0,0,0,.5)',2);
+      }
+      outlinedText(g2,'2人そろったら ホストがスタート',W/2,455,14,'#d4f1e5','rgba(0,0,0,.4)',3);
+      outlinedText(g2,'山札の中身は相手にも観戦者にも見えません',W/2,605,12,'#b8d8cc','rgba(0,0,0,.4)',3);
+    }
+    function drawPlay(g,v){
+      g.fillStyle='#176344';g.fillRect(0,0,W,H);
+      const you=v.you>=0?v.you:0,opp=you===0?1:0;
+      outlinedText(g,(v.names[opp]||'あいて')+'　山 '+v.counts[opp]+'枚',W/2,53,14,'#fff','rgba(0,0,0,.5)',4);
+      for(let slot=0;slot<4;slot++)drawCard(g,v.fields[opp][slot],fieldRect(slot,false),{});
+      let status='⚡ すばやく だそう！';
+      if(v.paused){
+        const sec=Math.max(0,Math.ceil((Number(v.pauseDeadline||Date.now())-Date.now())/1000));
+        status='⏸ あいての復帰まち　'+sec+'秒';
+      }else if(v.canShowdown)status='出せない！ せーの をおそう';
+      else if(selected>=0)status='左右の 台札をえらんでね';
+      else if(v.you<0)status='👀 かんせん中';
+      outlinedText(g,status,W/2,218,16,v.canShowdown?'#ffe94a':'#fff','rgba(0,0,0,.55)',5);
+      for(let pile=0;pile<2;pile++){
+        const p=pending.find(x=>x.pile===pile),r=centerRect(pile);
+        g.save();g.fillStyle='rgba(20,35,28,.45)';rr(g,r.x-6,r.y-6,r.w+12,r.h+12,12);g.fill();g.restore();
+        drawCard(g,v.centers[pile],r,{pending:!!p,alpha:p ? .8 : 1});
+        if(p)outlinedText(g,'送信中',r.x+r.w/2,r.y+r.h+18,11,'#ffe94a','rgba(0,0,0,.5)',3);
+      }
+      const myFields=v.fields[you]||[];
+      for(let slot=0;slot<4;slot++){
+        const card=myFields[slot],legal=card&&!v.paused&&(playable(v,card,0)||playable(v,card,1));
+        drawCard(g,card,fieldRect(slot,true),{legal,selected:selected===slot});
+      }
+      outlinedText(g,(v.you<0?'観戦':(v.names[you]||'あなた'))+'　山 '+v.counts[you]+'枚',W/2,603,14,'#fff','rgba(0,0,0,.5)',4);
+      const readyOn=v.you>=0&&v.ready[v.you];
+      if(!v.result)drawBtn(g,bReady,readyOn?'⏳ あいての「せーの」待ち':'🖐 せーの！',readyOn?'#7a6ca4':'#ed5b32',
+        v.you<0||v.paused||!v.canShowdown||readyOn,17);
+      drawBtn(g,bExit,'🚪','#655d78',false,14);
+      if(returnFx&&returnFx.t>0){
+        const k=1-returnFx.t/.45,from=centerRect(returnFx.pile),to=fieldRect(returnFx.slot,true);
+        drawCard(g,returnFx.card,{x:lerp(from.x,to.x,k),y:lerp(from.y,to.y,k),w:lerp(from.w,to.w,k),h:lerp(from.h,to.h,k)},
+          {pending:true,alpha:.9});
+      }
+      if(v.paused){
+        g.save();g.fillStyle='rgba(18,15,35,.72)';rr(g,42,246,336,210,18);g.fill();g.restore();
+        outlinedText(g,'⏸ いちじていし',W/2,292,25,'#ffe94a','rgba(0,0,0,.5)',6);
+        outlinedText(g,'あいてが さいせつぞくするまで',W/2,337,15,'#fff','rgba(0,0,0,.5)',4);
+        outlinedText(g,'カードは うごかせません',W/2,367,14,'#d8d1ea','rgba(0,0,0,.5)',4);
+        outlinedText(g,'60秒で ふせんしょう',W/2,407,14,'#ffb8ae','rgba(0,0,0,.5)',4);
+      }
+      if(v.result)drawResult(g,v);
+    }
+    function drawResult(g,v){
+      g.save();g.fillStyle='rgba(18,13,34,.91)';rr(g,42,226,336,246,18);g.fill();g.restore();
+      const win=!v.result.draw&&v.you>=0&&v.result.winner===v.you;
+      outlinedText(g,v.result.draw?'🤝 ひきわけ':win?'🏆 あなたの かち！':'あいての かち',W/2,270,25,
+        win?'#ffe94a':'#fff','rgba(0,0,0,.55)',6);
+      if(v.result.forfeit)outlinedText(g,'せつだん 60秒で ふせんしょう',W/2,310,13,'#ffc1b7','rgba(0,0,0,.5)',3);
+      const local=screen==='play';
+      drawBtn(g,bLeft,local?'⚙ せっていへ':'🚪 たいきょ','#6b6380',false,14);
+      drawBtn(g,bRight,local?'▶ もういちど':v.host?'▶ もういちど':'ホスト待ち','#ed5b32',!local&&!v.host,14);
+    }
+    function cardAtBottom(x,y){
+      for(let slot=3;slot>=0;slot--){const r=fieldRect(slot,true);if(hitBtn(r,x,y))return slot;}
+      return -1;
+    }
+    function pileAt(x,y){
+      for(let p=0;p<2;p++)if(hitBtn(centerRect(p),x,y))return p;
+      return -1;
+    }
+    function submitOnline(v,slot,pile){
+      if(v.you<0||pending.some(p=>p.seat===v.you&&p.slot===slot)){A.bad();return;}
+      const card=v.fields[v.you][slot];
+      if(!card||!playable(v,card,pile)){A.bad();return;}
+      const opId='sp-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8);
+      const op={opId,seat:v.you,slot,pile,card,expectedVersion:v.pileVersions[pile],at:performance.now()};
+      pending.push(op);SpeedNet.play(slot,pile,op.expectedVersion,opId);selected=-1;A.pop();vib(8);
+    }
+    function playSlot(v,slot,pile){
+      if(v.paused||v.result||v.you<0)return A.bad();
+      const card=v.fields[v.you][slot];if(!card)return A.bad();
+      const piles=[0,1].filter(p=>playable(v,card,p));
+      if(pile==null){
+        if(piles.length===1)pile=piles[0];
+        else if(piles.length===2){selected=slot;A.pop();return;}
+        else return A.bad();
+      }
+      if(!piles.includes(pile))return A.bad();
+      if(screen==='online')submitOnline(v,slot,pile);
+      else{
+        const r=speedPlay(L,0,slot,pile,L.pileVersions[pile]);
+        if(r.ok){selected=-1;A.pop();vib(8);resetCpuClock();finishFx(localView());}
+        else{banner(r.error);A.bad();}
+      }
+    }
+    function onGameTap(x,y,v){
+      if(hitBtn(bExit,x,y)){screen==='online'?leaveOnline():(screen='setup',L=null,A.pop());return;}
+      if(v.result){
+        if(hitBtn(bLeft,x,y)){screen==='online'?leaveOnline():(screen='setup',L=null,A.pop());return;}
+        if(hitBtn(bRight,x,y)){
+          if(screen==='online'){if(v.host)SpeedNet.raw({type:'again'});else A.bad();}
+          else startLocal(level);
+        }return;
+      }
+      if(hitBtn(bReady,x,y)){
+        if(v.you<0||v.paused||!v.canShowdown||v.ready[v.you])return A.bad();
+        if(screen==='online')SpeedNet.raw({type:'ready'});
+        else{const r=speedReady(L,0);if(!r.ok){banner(r.error);A.bad();}else{A.go();resetCpuClock();}}
+        return;
+      }
+      const pile=pileAt(x,y);
+      if(pile>=0&&selected>=0){playSlot(v,selected,pile);return;}
+      const slot=cardAtBottom(x,y);
+      if(slot>=0){playSlot(v,slot,null);return;}
+      selected=-1;
+    }
+    function onLobbyTap(x,y,g){
+      for(const b of lobbyButtons(g)){
+        if(!hitBtn(b,x,y))continue;
+        if(!b.on){A.bad();return;}
+        if(b.kind==='copy'){copyText(SpeedNet.state.code);banner('あいことばを コピー');}
+        else if(b.kind==='link'){copyText(roomLink(SpeedNet.state.code,'speed'));banner('リンクを コピー');}
+        else if(b.kind==='share'){
+          const url=roomLink(SpeedNet.state.code,'speed');
+          if(navigator.share)navigator.share({title:'スピード であそぼ！',text:'いっしょにスピード！',url}).catch(()=>{});
+          else{copyText(url);banner('リンクを コピー');}
+        }else if(b.kind==='start')SpeedNet.raw({type:'start'});
+        else if(b.kind==='leave')leaveOnline();
+        A.pop();return;
+      }
+    }
+    function updateLocal(dt){
+      if(!L||L.ended){finishFx(localView());return;}
+      const key=localStateKey();if(key!==cpuKey){cpuKey=key;cpuTimer=L.ready[1]?0:cpuDelay();}
+      if(L.ready[1])return;
+      cpuTimer-=dt;if(cpuTimer>0)return;
+      const moves=speedLegalMoves(L,1);
+      if(moves.length){
+        const move=pick(moves),r=speedPlay(L,1,move.slot,move.pile,L.pileVersions[move.pile]);
+        if(r.ok){A.tick();finishFx(localView());}
+      }else if(speedCanShowdown(L))speedReady(L,1);
+      resetCpuClock();
+    }
+    function reconcileOnline(dt){
+      const s=SpeedNet.state,auth=onlineView();
+      if(s.rejectedSeq!==onlineRejected){
+        onlineRejected=s.rejectedSeq;const rej=s.lastRejected,p=pending.find(x=>x.opId===(rej&&rej.opId));
+        if(p){returnFx={card:p.card,slot:p.slot,pile:p.pile,t:.45};pending=pending.filter(x=>x!==p);}
+        banner((rej&&rej.code==='stale')?'ひと足さき！ カードを もどします':((rej&&rej.reason)||'カードを もどします'));A.bad();
+      }
+      if(s.acceptedSeq!==onlineAccepted)onlineAccepted=s.acceptedSeq;
+      if(auth&&auth.you>=0){
+        pending=pending.filter(p=>{
+          const current=auth.fields[p.seat]&&auth.fields[p.seat][p.slot];
+          return !(auth.pileVersions[p.pile]>p.expectedVersion&&(!current||current.id!==p.card.id));
+        });
+      }
+      const now=performance.now(),timed=pending.filter(p=>now-p.at>5000);
+      if(timed.length){pending=pending.filter(p=>now-p.at<=5000);banner('つうしんを かくにん中…');}
+      if(returnFx){returnFx.t-=dt;if(returnFx.t<=0)returnFx=null;}
+      if(s.error&&s.error!==onlineErr){onlineErr=s.error;banner(s.error);A.bad();}
+      if(auth){if(selected>=0&&!(auth.fields[auth.you]&&auth.fields[auth.you][selected]))selected=-1;finishFx(auth);}
+    }
+    if(pendingOnlineRoom)enterOnline();
+
+    return {
+      onDown(x,y){
+        if(screen==='setup'){
+          for(const b of setupBtns)if(hitBtn(b,x,y)){
+            if(b.kind==='cpu')startLocal(b.level);else SpeedNet.available()?enterOnline():A.bad();return;
+          }return;
+        }
+        if(screen==='online'){
+          const g=SpeedNet.state.game;
+          if(!g){if(hitBtn(bExit,x,y))leaveOnline();return;}
+          if(g.phase==='lobby'){onLobbyTap(x,y,g);return;}
+        }
+        const v=view();if(v)onGameTap(x,y,v);
+      },
+      update(dt){
+        if(screen==='play')updateLocal(dt);
+        else if(screen==='online')reconcileOnline(dt);
+      },
+      draw(g){
+        if(screen==='setup')drawSetup(g);
+        else if(screen==='online'){
+          const s=SpeedNet.state,g0=s.game;
+          if(!g0){g.fillStyle='#174d3b';g.fillRect(0,0,W,H);
+            outlinedText(g,s.status==='error'?(s.error||'エラー'):'せつぞくちゅう…',W/2,330,18,'#fff','rgba(0,0,0,.5)',5);
+            drawBtn(g,bExit,'🚪','#655d78',false,14);}
+          else if(g0.phase==='lobby')drawLobby(g,g0);
+          else{const v=shadowOnline();if(v)drawPlay(g,v);}
+        }else{const v=localView();if(v)drawPlay(g,v);}
+      },
+      hudInfo(){
+        const v=view();if(screen==='setup')return '2人 / CPU';
+        return v&&v.you>=0?'山 '+v.counts[v.you]+'枚':screen==='online'?'オンライン':'';
+      },
+      onlineBack(){screen='setup';setRoomUrl('');},
+      destroy(){SpeedNet.leave();hideOnlineUI();setRoomUrl('');pending=[];},
     };
   }
 });
