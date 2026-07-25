@@ -61,6 +61,16 @@ export default class SpeedServer {
     return this.game.seats.map(s => !!(s && live.has(s.token)));
   }
 
+  resetEmptyRoom() {
+    const g = this.game;
+    if (g.seats.some(Boolean)) return false;
+    // 終局結果や途中切断の round を空室へ持ち越さない。
+    // 同じ room ID の次の2人が通常の lobby/start フローを使える状態へ戻す。
+    g.phase = 'lobby';
+    g.round = null;
+    return true;
+  }
+
   pausedSeats() {
     if (this.game.phase !== 'playing') return [];
     const connected = this.connectedSeats(), out = [];
@@ -118,6 +128,7 @@ export default class SpeedServer {
       // playing から ended へ遷移した場合も含め、失効席は同じ alarm で必ず解放する。
       // disc を残すと過去時刻の alarm を再登録し続け、部屋も埋まったままになる。
       for (const seat of expired) g.seats[seat] = null;
+      this.resetEmptyRoom();
       await this.save();
       this.broadcastState();
     }
@@ -242,6 +253,7 @@ export default class SpeedServer {
       if (g.phase === 'playing') this.finishForfeit(1 - seat, seat);
       // lobby / ended に加え、直前で playing から ended にした席も解放する。
       g.seats[seat] = null;
+      this.resetEmptyRoom();
       conn.setState({ ...(conn.state || {}), seat: -1, token: '' });
       await this.save();
       await this.scheduleAlarm();

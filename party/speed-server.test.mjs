@@ -95,11 +95,17 @@ await leaveServer.onMessage(JSON.stringify({ type: 'start' }), LA);
 leaveServer.finishForfeit(0, 1);
 await leaveServer.save();
 leaveServer.broadcastState();
+await leaveServer.onMessage(JSON.stringify({ type: 'leave' }), LA);
 await leaveServer.onMessage(JSON.stringify({ type: 'leave' }), LB);
-ck('終了後の退出で席を解放する', leaveServer.game.seats[1] === null);
+ck('終局後に両者が退出すると空室をロビーへリセット',
+  leaveServer.game.seats.every(s => s === null) &&
+  leaveServer.game.phase === 'lobby' && leaveServer.game.round === null);
 const LC = await connectTo(leaveRoom, leaveServer, 'lc', 'LC');
-ck('終了後の退出席へ新規参加してロビーへ戻れる',
-  LC.lastOf('assigned').seat === 1 && LC.lastOf('state').phase === 'lobby');
+const LD = await connectTo(leaveRoom, leaveServer, 'ld', 'LD');
+await leaveServer.onMessage(JSON.stringify({ type: 'start' }), LC);
+ck('同じroom IDへ新しい2人が入り対局を開始できる',
+  LC.lastOf('assigned').seat === 0 && LD.lastOf('assigned').seat === 1 &&
+  LC.lastOf('state').phase === 'playing' && LD.lastOf('state').phase === 'playing');
 
 const expiryRoom = new Room(), expiryServer = new SpeedServer(expiryRoom);
 expiryServer.rand = () => 0.999999;
@@ -120,6 +126,29 @@ ck('終了後の切断席を60秒で解放してalarmを解除する',
 const EC = await connectTo(expiryRoom, expiryServer, 'ec', 'EC');
 ck('終了後に失効した席へ新規参加してロビーへ戻れる',
   EC.lastOf('assigned').seat === 1 && EC.lastOf('state').phase === 'lobby');
+
+const allGoneRoom = new Room(), allGoneServer = new SpeedServer(allGoneRoom);
+allGoneServer.rand = () => 0.999999;
+await allGoneServer.onStart();
+const GA = await connectTo(allGoneRoom, allGoneServer, 'ga', 'GA');
+const GB = await connectTo(allGoneRoom, allGoneServer, 'gb', 'GB');
+await allGoneServer.onMessage(JSON.stringify({ type: 'start' }), GA);
+allGoneServer.now = () => 10000;
+allGoneRoom.conns.delete(GA);
+await allGoneServer.onClose(GA);
+allGoneRoom.conns.delete(GB);
+await allGoneServer.onClose(GB);
+allGoneServer.now = () => 70001;
+await allGoneServer.onAlarm();
+ck('対局中の全員切断タイムアウトでも空室をロビーへリセット',
+  allGoneServer.game.seats.every(s => s === null) &&
+  allGoneServer.game.phase === 'lobby' && allGoneServer.game.round === null &&
+  allGoneRoom.alarm === null);
+const GC = await connectTo(allGoneRoom, allGoneServer, 'gc', 'GC');
+const GD = await connectTo(allGoneRoom, allGoneServer, 'gd', 'GD');
+await allGoneServer.onMessage(JSON.stringify({ type: 'start' }), GC);
+ck('全員切断後も同じroom IDで新規対局を開始できる',
+  GC.lastOf('state').phase === 'playing' && GD.lastOf('state').phase === 'playing');
 
 console.log(`\n[speed server] pass=${pass} fail=${fail}`);
 if (fail) process.exit(1);

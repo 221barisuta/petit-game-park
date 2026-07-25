@@ -3400,13 +3400,15 @@ function drainSpeedRejects(queue,pending){
     const opId=String((reject&&reject.opId)||'');
     if(opId)byOpId.set(opId,reject);
   }
-  const returned=[],remaining=[];
+  const returned=[];
   for(const op of pending){
     const reject=byOpId.get(String((op&&op.opId)||''));
     if(reject)returned.push({op,reject});
-    else remaining.push(op);
   }
-  return {rejected,returned,pending:remaining};
+  // REJECT の state はサーバー権威の完全スナップショット。
+  // 対象外pendingも含む全overlayを捨て、表示をそのstateへ完全同期する。
+  // 未処理playが後で受理された場合は、続くstate配信で再び表示される。
+  return {rejected,returned,pending:rejected.length?[]:pending};
 }
 /* SPEED-REJECT-QUEUE-END */
 /* スピード専用ネット層。共通のターン制UIへ変更を入れず、楽観playのACK/REJECTを扱う。 */
