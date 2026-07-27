@@ -1096,6 +1096,8 @@ function makeCtx(def,rng,plays){
       scoreRecordId=id||def.id;
       bestKey=isDaily?`pgp2_dbest_${seed}_${scoreRecordId}`:`pgp2_best_${scoreRecordId}`;
       best=getInt(bestKey,0);bestBeaten=false;
+      $('hudBest').textContent='BEST '+best;
+      $('hudBest').classList.remove('beat');
     },
     finishGame(o){finishFromGame(o||{})}
   };
@@ -1113,6 +1115,7 @@ function openGame(def,opts){
   show('scr-game');
   resizeCanvas();
   const plays=playsOf(def.id);
+  const hasPlayed=def.id==='2048'?t2048HasPlayed(playsOf):plays>0;
   game=def.create(makeCtx(def,mulberry32(seed),plays));
   elapsed=0;phase='idle';lastSec=-1;lastHudScore=null;
   const isVersus=def.type==='versus';
@@ -1127,7 +1130,7 @@ function openGame(def,opts){
   $('hudTime').textContent=def.duration?('⏱'+def.duration):'';
   startLoop();
   track('game_start',{game:def.id,daily:isDaily?1:0,retry:opts.retry?1:0});
-  if(opts.forceHowto||(!opts.retry&&plays===0)){
+  if(opts.forceHowto||(!opts.retry&&!hasPlayed)){
     showHowto(def);
     track('howto_shown',{game:def.id});
   }else{
@@ -11119,6 +11122,8 @@ const T2048_MODES={
   normal:{label:'🔵 ふつう',size:4,spawn:[2,4],goal:2048,recordId:'2048'},
   hard:{label:'🔴 むずかしい',size:4,spawn:[4,8],goal:4096,recordId:'2048_hard'}
 };
+function t2048HasPlayed(readPlays){return Object.values(T2048_MODES).some(({recordId})=>readPlays(recordId)>0);}
+function t2048RecordScope(mode,readBest){const recordId=T2048_MODES[mode].recordId;return {recordId,best:readBest&&readBest(recordId)};}
 function t2048Move(cells,dir,n=Math.sqrt(cells.length)){ // → {cells,gained,moved,moves:[{from,to,val,merged}]}
   const out=cells.slice();
   let gained=0,moved=false;const moves=[];
@@ -11178,6 +11183,9 @@ function run2048Tests(){
   ck('5x5-canMove-dead',t2048CanMove([2,4,2,4,2, 4,2,4,2,4, 2,4,2,4,2, 4,2,4,2,4, 2,4,2,4,2],5)===false);
   ck('hard-spawn-values',Array.from({length:30},(_,i)=>t2048SpawnValue(()=>i%10===0?.95:.1,'hard')).every(v=>v===4||v===8));
   ck('mode-goals',t2048Reached([2048],'easy')&&t2048Reached([2048],'normal')&&!t2048Reached([2048],'hard')&&t2048Reached([4096],'hard'));
+  {const bests={'2048':128,'2048_easy':64,'2048_hard':256};
+   const easy=t2048RecordScope('easy',id=>bests[id]),normal=t2048RecordScope('normal',id=>bests[id]),hard=t2048RecordScope('hard',id=>bests[id]);
+   ck('mode-record-scope-best',easy.recordId==='2048_easy'&&easy.best===64&&normal.recordId==='2048'&&normal.best===128&&hard.recordId==='2048_hard'&&hard.best===256);}
   return done();
 }
 if(typeof window!=='undefined'){window.run2048Tests=run2048Tests;SELFTESTS.push(run2048Tests);}
@@ -11228,7 +11236,7 @@ registerGame({
     }
     function recalcMax(){maxTile=Math.max(0,...cells);}
     function startMode(nextMode){
-      mode=nextMode;layout();cells=new Array(N*N).fill(0);ctx.setRecordScope(T2048_MODES[mode].recordId);
+      mode=nextMode;layout();cells=new Array(N*N).fill(0);ctx.setRecordScope(t2048RecordScope(mode).recordId);
       spawn();spawn();recalcMax();undoSnap=null;undoUsed=false;reachedGoal=false;moveCount=0;over=false;anim=null;ctx.setScore(0);A.pop();
     }
 
