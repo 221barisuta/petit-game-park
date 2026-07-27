@@ -624,7 +624,7 @@ window.PGP_RANKING={
   }
 };
 /* トータルランキング対象ゲーム (ranking-worker の TOTAL_METRICS と一致させる) */
-const RANK_TOTAL_GAMES=['tea','lane','spot','2048'];
+const RANK_TOTAL_GAMES=['tea','lane','spot','2048','2048_easy','2048_hard'];
 
 function rr(g,x,y,w,h,r){
   g.beginPath();
@@ -937,7 +937,7 @@ const UNLOCKS=[
 let curDef=null,game=null,phase='idle',elapsed=0,rafId=0,lastTs=0;
 let lastSec=-1,lastHudScore=null;
 let score=0,combo=0,maxCombo=0,judgeCounts={},feverT=0,feverCount=0;
-let isDaily=false,seed=0,bestKey='',best=0,bestBeaten=false;
+let isDaily=false,seed=0,bestKey='',best=0,bestBeaten=false,scoreRecordId='';
 let rankGen=0; // #feedback2 1件目: 結果画面を離れた後に古いランキング取得が割り込むのを防ぐ世代カウンタ
 let judgePop=null,resultInfo=null;
 const coreFlo=new Floaties(),coreParts=new Particles();
@@ -1091,6 +1091,12 @@ function makeCtx(def,rng,plays){
     // best更新演出(bestBeaten)は coreJudge と同条件で発火。既存ゲームは未使用のため影響なし。
     setScore(n){score=Math.max(0,Math.round(n));if(!bestBeaten&&best>0&&score>best)bestBeaten=true;},
     addScore(n){score=Math.max(0,Math.round(score+(n||0)));if(!bestBeaten&&best>0&&score>best)bestBeaten=true;},
+    // 独自ルールのゲームが記録を分けたい時だけ呼ぶ。未使用ゲームは従来どおりdef.idのまま。
+    setRecordScope(id){
+      scoreRecordId=id||def.id;
+      bestKey=isDaily?`pgp2_dbest_${seed}_${scoreRecordId}`:`pgp2_best_${scoreRecordId}`;
+      best=getInt(bestKey,0);bestBeaten=false;
+    },
     finishGame(o){finishFromGame(o||{})}
   };
 }
@@ -1100,6 +1106,7 @@ function openGame(def,opts){
   curDef=def;isDaily=!!opts.daily;
   seed=isDaily?todaySeed():Math.floor(Math.random()*2147483647);
   bestKey=isDaily?`pgp2_dbest_${seed}_${def.id}`:`pgp2_best_${def.id}`;
+  scoreRecordId=def.id;
   best=getInt(bestKey,0);
   score=0;combo=0;maxCombo=0;judgeCounts={};feverT=0;feverCount=0;bestBeaten=false;
   judgePop=null;coreFlo.list=[];coreParts.list=[];
@@ -1318,14 +1325,14 @@ function showResult(extra){
   stopLoop();phase='idle';
   AudioKit.pourStop();AudioKit.proxStop();
   const def=curDef;
-  const pk='pgp2_plays_'+def.id;
-  const plays=playsOf(def.id)+1;store.set(pk,String(plays));
+  const pk='pgp2_plays_'+scoreRecordId;
+  const plays=playsOf(scoreRecordId)+1;store.set(pk,String(plays));
   const tot=getInt('pgp2_plays_total',0)+1;store.set('pgp2_plays_total',String(tot));
-  const lk='pgp2_last_'+def.id+(isDaily?'_d':'');
+  const lk='pgp2_last_'+scoreRecordId+(isDaily?'_d':'');
   const last=getInt(lk,-1);store.set(lk,String(score));
   const isRec=score>best;
   if(isRec)store.set(bestKey,String(score));
-  statsRecordPlay(def.id,score); // #backlog1 きろく: 直近10回推移+今週のプレイ日数(デイリー/フリー問わず記録)
+  statsRecordPlay(scoreRecordId,score); // #backlog1 きろく: 直近10回推移+今週のプレイ日数(デイリー/フリー問わず記録)
   const c=judgeCounts;
   resultInfo={def,score,daily:isDaily,seed,counts:c,maxCombo,isRec,share:extra.share||null};
   // DOM
@@ -1373,25 +1380,25 @@ function showResult(extra){
   const myRankGen=++rankGen; // このshowResult呼び出し専用の世代番号(古い応答の書き込みを無視するため)
   const rankBase=(window.PGP_CONFIG||{}).rankingBase;
   const clearPending=()=>{const p=rankBox.querySelector('.rpending');if(p)p.remove();};
-  if(rankBase&&(isDaily||RANK_TOTAL_GAMES.includes(def.id))){
+  if(rankBase&&(isDaily||RANK_TOTAL_GAMES.includes(scoreRecordId))){
     // #feedback2 1件目: 反映まで間があるので「集計中」を出して無表示のまま止まって見えるのを防ぐ
     const pend=document.createElement('div');pend.className='rttl rpending';pend.textContent='📡 集計中…';
     rankBox.appendChild(pend);rankBox.classList.remove('hidden');
   }
   (async()=>{
     try{
-      const sub=await window.PGP_RANKING.submitScore(def.id,score,{daily:isDaily,seed,date:todaySeed()});
-      const tsub=await window.PGP_RANKING.submitTotal(def.id,score); // #15 オプトインON時のみ送信
-      const wsub=await window.PGP_RANKING.submitWeekly(def.id,score); // #backlog1 週間ランキングも同時送信
+      const sub=await window.PGP_RANKING.submitScore(scoreRecordId,score,{daily:isDaily,seed,date:todaySeed()});
+      const tsub=await window.PGP_RANKING.submitTotal(scoreRecordId,score); // #15 オプトインON時のみ送信
+      const wsub=await window.PGP_RANKING.submitWeekly(scoreRecordId,score); // #backlog1 週間ランキングも同時送信
       if(myRankGen!==rankGen)return; // #feedback2 1件目: 離脱後に次のプレイの結果画面が既に始まっている→古い応答は破棄
       if(isDaily){
-        const top=await window.PGP_RANKING.fetchTop(def.id,{mode:'daily'});
+        const top=await window.PGP_RANKING.fetchTop(scoreRecordId,{mode:'daily'});
         if(myRankGen!==rankGen)return;
         renderRank(top,sub,score); // box.innerHTML=''で自前クリアするためpending解除は不要
       }
-      if(RANK_TOTAL_GAMES.includes(def.id)){ // #15 デイリーの近くに「トータル」+ #backlog1「こんしゅう」タブ
-        const tt=await window.PGP_RANKING.fetchTotal(def.id,5);
-        const wt=await window.PGP_RANKING.fetchWeekly(def.id,5);
+      if(RANK_TOTAL_GAMES.includes(scoreRecordId)){ // #15 デイリーの近くに「トータル」+ #backlog1「こんしゅう」タブ
+        const tt=await window.PGP_RANKING.fetchTotal(scoreRecordId,5);
+        const wt=await window.PGP_RANKING.fetchWeekly(scoreRecordId,5);
         if(myRankGen!==rankGen)return;
         clearPending();renderTotalRank(tt,tsub,wt,wsub);
       }
@@ -1478,10 +1485,12 @@ function setupRecords(){
     const rows=[];
     for(const id of REC_SCORE_GAMES){
       const def=GAMES.find(x=>x.id===id);if(!def)continue;
-      const best=getInt('pgp2_best_'+id,0),plays=playsOf(id),days=statsWeekDays(id),last10=statsLast10(id);
+      const scoreModes=id==='2048'?[['2048','🔵 ふつう'],['2048_easy','🟢 かんたん'],['2048_hard','🔴 むずかしい']]:[[id,'']];
+      for(const [scoreId,modeLabel] of scoreModes){
+      const best=getInt('pgp2_best_'+scoreId,0),plays=playsOf(scoreId),days=statsWeekDays(scoreId),last10=statsLast10(scoreId);
       const row=document.createElement('div');row.className='rec-row';
       const head=document.createElement('div');head.className='rec-head';
-      head.innerHTML=`<span>${def.emoji} ${def.title}</span><span>ベスト ${best}</span>`;
+      head.innerHTML=`<span>${def.emoji} ${def.title}${modeLabel?' '+modeLabel:''}</span><span>ベスト ${best}</span>`;
       const sub=document.createElement('div');sub.className='rec-sub';
       sub.innerHTML=`<span>プレイ ${plays}かい</span><span>こんしゅう ${days}にちプレイ</span>`;
       row.appendChild(head);row.appendChild(sub);
@@ -1496,6 +1505,7 @@ function setupRecords(){
         row.appendChild(e);
       }
       rows.push(row);
+      }
     }
     for(const id of REC_VS_GAMES){
       const def=GAMES.find(x=>x.id===id);if(!def)continue;
@@ -11086,33 +11096,38 @@ if(typeof window!=='undefined'){
 
 /* =========================================================================
    🔢 2048 — スライドパズル (1人用・スワイプ/矢印。合成合計がスコア。アンドゥ1回)
-   盤面は長さ16の配列(row-major, 0=空)。move は純ロジック(?selftest対象)。
+   盤面は N×N の配列(row-major, 0=空)。move は純ロジック(?selftest対象)。
    ========================================================================= */
-function t2048Lines(dir){ // dir:'L'|'R'|'U'|'D' → 各ライン(壁側→外側)のセル添字4つ×4本
+function t2048Lines(dir,n=4){ // dir:'L'|'R'|'U'|'D' → 各ライン(壁側→外側)のセル添字n個×n本
   const lines=[];
-  for(let k=0;k<4;k++){
+  for(let k=0;k<n;k++){
     const idx=[];
-    for(let i=0;i<4;i++){
+    for(let i=0;i<n;i++){
       let r,c;
       if(dir==='L'){r=k;c=i;}
-      else if(dir==='R'){r=k;c=3-i;}
+      else if(dir==='R'){r=k;c=n-1-i;}
       else if(dir==='U'){r=i;c=k;}
-      else{r=3-i;c=k;} // 'D'
-      idx.push(r*4+c);
+      else{r=n-1-i;c=k;} // 'D'
+      idx.push(r*n+c);
     }
     lines.push(idx);
   }
   return lines;
 }
-function t2048Move(cells,dir){ // → {cells,gained,moved,moves:[{from,to,val,merged}]}
+const T2048_MODES={
+  easy:{label:'🟢 かんたん',size:5,spawn:[2,4],goal:2048,recordId:'2048_easy'},
+  normal:{label:'🔵 ふつう',size:4,spawn:[2,4],goal:2048,recordId:'2048'},
+  hard:{label:'🔴 むずかしい',size:4,spawn:[4,8],goal:4096,recordId:'2048_hard'}
+};
+function t2048Move(cells,dir,n=Math.sqrt(cells.length)){ // → {cells,gained,moved,moves:[{from,to,val,merged}]}
   const out=cells.slice();
   let gained=0,moved=false;const moves=[];
-  for(const idx of t2048Lines(dir)){
+  for(const idx of t2048Lines(dir,n)){
     const vals=idx.map(i=>cells[i]);
-    const slotVal=[0,0,0,0],slotMerged=[false,false,false,false];
-    const dest=[-1,-1,-1,-1];
+    const slotVal=new Array(n).fill(0),slotMerged=new Array(n).fill(false);
+    const dest=new Array(n).fill(-1);
     let w=0;
-    for(let p=0;p<4;p++){
+    for(let p=0;p<n;p++){
       const v=vals[p];if(!v)continue;
       if(w>0&&slotVal[w-1]===v&&!slotMerged[w-1]){
         slotVal[w-1]=v*2;slotMerged[w-1]=true;dest[p]=w-1;gained+=v*2;
@@ -11120,8 +11135,8 @@ function t2048Move(cells,dir){ // → {cells,gained,moved,moves:[{from,to,val,me
         slotVal[w]=v;dest[p]=w;w++;
       }
     }
-    for(let s=0;s<4;s++)out[idx[s]]=slotVal[s];
-    for(let p=0;p<4;p++){
+    for(let s=0;s<n;s++)out[idx[s]]=slotVal[s];
+    for(let p=0;p<n;p++){
       if(!vals[p])continue;
       const s=dest[p];
       if(s!==p)moved=true;
@@ -11130,15 +11145,17 @@ function t2048Move(cells,dir){ // → {cells,gained,moved,moves:[{from,to,val,me
   }
   return {cells:out,gained,moved,moves};
 }
-function t2048CanMove(cells){
-  for(let i=0;i<16;i++)if(!cells[i])return true;
-  for(let r=0;r<4;r++)for(let c=0;c<4;c++){
-    const v=cells[r*4+c];
-    if(c<3&&cells[r*4+c+1]===v)return true;
-    if(r<3&&cells[(r+1)*4+c]===v)return true;
+function t2048CanMove(cells,n=Math.sqrt(cells.length)){
+  for(let i=0;i<cells.length;i++)if(!cells[i])return true;
+  for(let r=0;r<n;r++)for(let c=0;c<n;c++){
+    const v=cells[r*n+c];
+    if(c<n-1&&cells[r*n+c+1]===v)return true;
+    if(r<n-1&&cells[(r+1)*n+c]===v)return true;
   }
   return false;
 }
+function t2048SpawnValue(rng,mode){const s=T2048_MODES[mode].spawn;return rng()<.9?s[0]:s[1];}
+function t2048Reached(cells,mode){return Math.max(0,...cells)>=T2048_MODES[mode].goal;}
 function run2048Tests(){
   const {ck,done}=makeTest('2048');
   {const r=t2048Move([2,2,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],'L');
@@ -11153,53 +11170,71 @@ function run2048Tests(){
   ck('canMove-empty',t2048CanMove([0,1,1,1, 2,2,2,2, 4,4,4,4, 8,8,8,8])===true);
   ck('canMove-adj',t2048CanMove([2,2,4,8, 16,32,64,128, 256,512,1024,2, 4,8,16,32])===true);
   ck('canMove-dead',t2048CanMove([2,4,2,4, 4,2,4,2, 2,4,2,4, 4,2,4,2])===false);
+  {const r=t2048Move([2,2,0,0,2, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0],'L',5);
+   ck('5x5-line-merge',r.cells[0]===4&&r.cells[1]===2&&r.cells[2]===0&&r.gained===4);}
+  {const r=t2048Move([2,0,0,0,0, 2,0,0,0,0, 2,0,0,0,0, 2,0,0,0,0, 2,0,0,0,0],'D',5);
+   ck('5x5-column-move',r.cells[20]===4&&r.cells[15]===4&&r.gained===8);}
+  ck('5x5-canMove-adj',t2048CanMove([2,4,8,16,32, 64,128,256,512,1024, 2,4,8,16,32, 64,128,256,512,1024, 2,2,8,16,32],5)===true);
+  ck('5x5-canMove-dead',t2048CanMove([2,4,2,4,2, 4,2,4,2,4, 2,4,2,4,2, 4,2,4,2,4, 2,4,2,4,2],5)===false);
+  ck('hard-spawn-values',Array.from({length:30},(_,i)=>t2048SpawnValue(()=>i%10===0?.95:.1,'hard')).every(v=>v===4||v===8));
+  ck('mode-goals',t2048Reached([2048],'easy')&&t2048Reached([2048],'normal')&&!t2048Reached([2048],'hard')&&t2048Reached([4096],'hard'));
   return done();
 }
 if(typeof window!=='undefined'){window.run2048Tests=run2048Tests;SELFTESTS.push(run2048Tests);}
 
 registerGame({
   id:'2048', emoji:'🔢', title:'2048',
-  desc:'スワイプで おなじ数をあわせて 2048をめざせ！',
+  desc:'かんたん=5×5・2048、ふつう=4×4・2048、むずかしい=4×4・4096を めざそう！',
   color:'#f6d365', duration:null,
   goal0:'🔢 まずは 4のタイルを つくってみよう！',
   hint(c,mx){return 'おおきい数を すみっこに あつめよう';},
   howto:[
     ['👆','スワイプ（か 矢印キー）で タイルを うごかす'],
     ['➕','おなじ数どうしが ぶつかると 合体して 2ばいに'],
-    ['🏆','合体した数の ごうけいが スコア。2048を めざそう！'],
+    ['📐','かんたん=5×5（25マス）・2048 / ふつう=4×4（16マス）・2048'],
+    ['🎯','むずかしい=4×4（16マス・4スタート）・4096を めざそう！'],
+    ['🏆','合体した数の ごうけいが スコア。もくひょうを めざそう！'],
     ['↩️','「もどす」で 1かいだけ やりなおせる'],
     ['🚫','うごかせなくなったら ゲームオーバー'],
   ],
   create(ctx){
     const A=ctx.audio,RNG=ctx.rng;
-    const BX=20,BY=150,CELL=80,GAP=12;              // 盤: x20..400,y150..530
-    const cellX=c=>BX+GAP+c*(CELL+GAP);             // セル左上x
-    const cellY=r=>BY+GAP+r*(CELL+GAP);             // セル左上y
+    let mode=null;
+    let N=4,CELL=80,GAP=12,BX=20,BY=165;
+    const layout=()=>{N=T2048_MODES[mode].size;CELL=N===5?62:80;GAP=N===5?8:12;BX=(W-(N*CELL+(N+1)*GAP))/2;BY=N===5?170:165;};
+    const cellX=c=>BX+GAP+c*(CELL+GAP);
+    const cellY=r=>BY+GAP+r*(CELL+GAP);
+    const boardSize=()=>N*CELL+(N+1)*GAP;
     const undoBtn={x:60,y:566,w:130,h:52};
     const restartBtn={x:230,y:566,w:130,h:52};
+    const modeBtns=[{x:38,y:245,w:344,h:54,mode:'easy'},{x:38,y:315,w:344,h:54,mode:'normal'},{x:38,y:385,w:344,h:54,mode:'hard'}];
     const COLORS={2:['#eee4da','#776e65'],4:['#ede0c8','#776e65'],8:['#f2b179','#fff'],
       16:['#f59563','#fff'],32:['#f67c5f','#fff'],64:['#f65e3b','#fff'],128:['#edcf72','#fff'],
-      256:['#edcc61','#fff'],512:['#edc850','#fff'],1024:['#edc53f','#fff'],2048:['#edc22e','#fff']};
+      256:['#edcc61','#fff'],512:['#edc850','#fff'],1024:['#edc53f','#fff'],2048:['#edc22e','#fff'],
+      4096:['#b66dff','#fff'],8192:['#5b8cff','#fff'],16384:['#e65391','#fff']};
     const colOf=v=>COLORS[v]||(v<2048?['#eee4da','#776e65']:['#3c3a32','#fff']);
-    let cells=new Array(16).fill(0);
+    let cells=[];
     let anim=null;          // {phase:'slide'|'pop',t,dur,...}
     let undoSnap=null,undoUsed=false;
-    let maxTile=0,reached2048=false,moveCount=0,over=false;
+    let maxTile=0,reachedGoal=false,moveCount=0,over=false;
     const parts=new Particles();
 
-    function emptyCells(){const e=[];for(let i=0;i<16;i++)if(!cells[i])e.push(i);return e;}
+    function emptyCells(){const e=[];for(let i=0;i<cells.length;i++)if(!cells[i])e.push(i);return e;}
     function spawn(){
       const e=emptyCells();if(!e.length)return -1;
       const i=e[Math.floor(RNG()*e.length)];
-      cells[i]=RNG()<0.9?2:4;
+      cells[i]=t2048SpawnValue(RNG,mode);
       return i;
     }
     function recalcMax(){maxTile=Math.max(0,...cells);}
-    spawn();spawn();recalcMax(); // 開始2枚
+    function startMode(nextMode){
+      mode=nextMode;layout();cells=new Array(N*N).fill(0);ctx.setRecordScope(T2048_MODES[mode].recordId);
+      spawn();spawn();recalcMax();undoSnap=null;undoUsed=false;reachedGoal=false;moveCount=0;over=false;anim=null;ctx.setScore(0);A.pop();
+    }
 
     function tryMove(dir){
       if(anim||over)return;
-      const res=t2048Move(cells,dir);
+      const res=t2048Move(cells,dir,N);
       if(!res.moved){A.tone({f:150,dur:.05,vol:.05});return;}
       if(!undoUsed)undoSnap={cells:cells.slice(),score:ctx.score()};
       A.pop();
@@ -11213,14 +11248,14 @@ registerGame({
       const pop=new Set(a.moves.filter(m=>m.merged).map(m=>m.to));
       const sp=spawn();if(sp>=0)pop.add(sp);
       recalcMax();
-      if(!reached2048&&maxTile>=2048){reached2048=true;A.record();ctx.flo.add('2048 たっせい！🎉',W/2,300,'#ffd23f',26,1.3);}
-      a.moves.filter(m=>m.merged).forEach(m=>{const r=Math.floor(m.to/4),c=m.to%4;
+      if(!reachedGoal&&maxTile>=T2048_MODES[mode].goal){reachedGoal=true;A.record();ctx.flo.add(T2048_MODES[mode].goal+' たっせい！🎉',W/2,300,'#ffd23f',26,1.3);parts.burst(W/2,300,16,{shape:'star',col:'#ffd23f',grav:160});}
+      a.moves.filter(m=>m.merged).forEach(m=>{const r=Math.floor(m.to/N),c=m.to%N;
         parts.burst(cellX(c)+CELL/2,cellY(r)+CELL/2,7,{shape:'star',col:'#ffd23f',grav:200});});
       anim={phase:'pop',t:0,dur:0.13,pop};
     }
     function afterPop(){
       anim=null;
-      if(!t2048CanMove(cells)){
+      if(!t2048CanMove(cells,N)){
         over=true;A.tone({f:300,dur:.4,vol:.15});
         ctx.finishGame({banner:'ゲームオーバー！'});
       }
@@ -11233,8 +11268,8 @@ registerGame({
     }
     function doRestart(){
       if(over)return;
-      cells=new Array(16).fill(0);spawn();spawn();recalcMax();
-      undoSnap=null;undoUsed=false;moveCount=0;reached2048=false;anim=null;
+      cells=new Array(N*N).fill(0);spawn();spawn();recalcMax();
+      undoSnap=null;undoUsed=false;moveCount=0;reachedGoal=false;anim=null;
       ctx.setScore(0);A.pop();
     }
     function drawTile(g,v,x,y,sc){
@@ -11258,22 +11293,27 @@ registerGame({
         bg.addColorStop(0,'#fceabb');bg.addColorStop(1,'#f8b500');
         g.fillStyle=bg;g.fillRect(0,0,W,H);
         outlinedText(g,'2048',W/2,95,30,'#7a5a1a','#fff',4);
-        outlinedText(g,'おなじ数を あわせよう！',W/2,124,15,'#8a6a2a','#fff',3);
-        g.fillStyle='#bbada0';rr(g,BX,BY,4*CELL+5*GAP,4*CELL+5*GAP,14);g.fill();
-        for(let r=0;r<4;r++)for(let c=0;c<4;c++){
+        if(!mode){
+          outlinedText(g,'むずかしさを えらぼう',W/2,170,18,'#8a6a2a','#fff',3);
+          modeBtns.forEach(b=>{const m=T2048_MODES[b.mode],sub=`${m.size}×${m.size}・${m.goal}をめざす`;drawBtn(g,b,m.label+'　'+sub,b.mode==='easy'?'#53ad72':b.mode==='normal'?'#4f82d8':'#c84f55',false,16);});
+          outlinedText(g,'スワイプで おなじ数を あわせよう！',W/2,500,15,'#8a6a2a','#fff',3);return;
+        }
+        outlinedText(g,T2048_MODES[mode].label+'　'+N+'×'+N+'　もくひょう '+T2048_MODES[mode].goal,W/2,140,15,'#8a6a2a','#fff',3);
+        g.fillStyle='#bbada0';rr(g,BX,BY,boardSize(),boardSize(),14);g.fill();
+        for(let r=0;r<N;r++)for(let c=0;c<N;c++){
           g.fillStyle='rgba(238,228,218,.35)';rr(g,cellX(c),cellY(r),CELL,CELL,10);g.fill();
         }
         if(anim&&anim.phase==='slide'){
           const k=anim.t/anim.dur;
           for(const m of anim.moves){
-            const fr=Math.floor(m.from/4),fc=m.from%4,tr=Math.floor(m.to/4),tc=m.to%4;
+            const fr=Math.floor(m.from/N),fc=m.from%N,tr=Math.floor(m.to/N),tc=m.to%N;
             drawTile(g,m.val,lerp(cellX(fc),cellX(tc),k),lerp(cellY(fr),cellY(tr),k),1);
           }
         }else{
           const pop=anim&&anim.phase==='pop'?anim.pop:null;
-          for(let i=0;i<16;i++){
+          for(let i=0;i<N*N;i++){
             if(!cells[i])continue;
-            const r=Math.floor(i/4),c=i%4;
+            const r=Math.floor(i/N),c=i%N;
             let sc=1;
             if(pop&&pop.has(i)){const k=clamp(anim.t/anim.dur,0,1);sc=lerp(0.55,1,easeOutBack(k));}
             drawTile(g,cells[i],cellX(c),cellY(r),sc);
@@ -11285,11 +11325,13 @@ registerGame({
         outlinedText(g,'スワイプ / 矢印キー',W/2,700,14,'#8a6a2a','#fff',3);
       },
       onFlick(f){
+        if(!mode)return;
         if(Math.abs(f.dx)>Math.abs(f.dy))tryMove(f.dx>0?'R':'L');
         else tryMove(f.dy>0?'D':'U');
       },
       onUp(x,y,info){
         if(info&&info.flicked)return;
+        if(!mode){const b=modeBtns.find(v=>hitBtn(v,x,y));if(b)startMode(b.mode);return;}
         if(hitBtn(undoBtn,x,y))doUndo();
         else if(hitBtn(restartBtn,x,y))doRestart();
       },
@@ -11300,9 +11342,9 @@ registerGame({
         else if(code==='ArrowUp')tryMove('U');
         else if(code==='ArrowDown')tryMove('D');
       },
-      hudInfo(){return '🏆'+maxTile;},
+      hudInfo(){return mode?'🏆'+maxTile:'';},
       finish(){return {stats:[['🏆 さいこうタイル',maxTile],['🔁 てすう',moveCount]],
-        share:`【プチゲー★パーク】2048で ${ctx.score()}てん！さいこうタイル ${maxTile} #プチゲーパーク`};},
+        share:`【プチゲー★パーク】2048 ${T2048_MODES[mode].label}で ${ctx.score()}てん！さいこうタイル ${maxTile} #プチゲーパーク`};},
     };
   }
 });
