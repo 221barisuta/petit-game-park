@@ -1151,7 +1151,7 @@ function showHowto(def){
 }
 function startCountdown(quick){
   $('howto').classList.add('hidden');
-  if(curDef&&curDef.type==='versus'){ // versusは制限時間なし: カウントダウン省略で即プレイ
+  if(curDef&&(curDef.type==='versus'||curDef.noCountdown)){ // versus/時間無制限は待たせる意味がないので即プレイ
     phase='play';lastTs=performance.now();
     return;
   }
@@ -11193,7 +11193,7 @@ if(typeof window!=='undefined'){window.run2048Tests=run2048Tests;SELFTESTS.push(
 registerGame({
   id:'2048', emoji:'🔢', title:'2048',
   desc:'かんたん=5×5・2048、ふつう=4×4・2048、むずかしい=4×4・4096を めざそう！',
-  color:'#f6d365', duration:null,
+  color:'#f6d365', duration:null, noCountdown:true,
   goal0:'🔢 まずは 4のタイルを つくってみよう！',
   hint(c,mx){return 'おおきい数を すみっこに あつめよう';},
   howto:[
@@ -11213,8 +11213,7 @@ registerGame({
     const cellX=c=>BX+GAP+c*(CELL+GAP);
     const cellY=r=>BY+GAP+r*(CELL+GAP);
     const boardSize=()=>N*CELL+(N+1)*GAP;
-    const undoBtn={x:60,y:566,w:130,h:52};
-    const restartBtn={x:230,y:566,w:130,h:52};
+    const undoBtn={x:145,y:566,w:130,h:52};
     const modeBtns=[{x:38,y:245,w:344,h:54,mode:'easy'},{x:38,y:315,w:344,h:54,mode:'normal'},{x:38,y:385,w:344,h:54,mode:'hard'}];
     const COLORS={2:['#eee4da','#776e65'],4:['#ede0c8','#776e65'],8:['#f2b179','#fff'],
       16:['#f59563','#fff'],32:['#f67c5f','#fff'],64:['#f65e3b','#fff'],128:['#edcf72','#fff'],
@@ -11237,7 +11236,7 @@ registerGame({
     function recalcMax(){maxTile=Math.max(0,...cells);}
     function startMode(nextMode){
       mode=nextMode;layout();cells=new Array(N*N).fill(0);ctx.setRecordScope(t2048RecordScope(mode).recordId);
-      spawn();spawn();recalcMax();undoSnap=null;undoUsed=false;reachedGoal=false;moveCount=0;over=false;anim=null;ctx.setScore(0);A.pop();
+      spawn();spawn();recalcMax();undoSnap=null;undoUsed=false;reachedGoal=false;moveCount=0;over=false;anim=null;ctx.setScore(0);A.pop();saveState();
     }
 
     function tryMove(dir){
@@ -11260,11 +11259,13 @@ registerGame({
       a.moves.filter(m=>m.merged).forEach(m=>{const r=Math.floor(m.to/N),c=m.to%N;
         parts.burst(cellX(c)+CELL/2,cellY(r)+CELL/2,7,{shape:'star',col:'#ffd23f',grav:200});});
       anim={phase:'pop',t:0,dur:0.13,pop};
+      saveState();
     }
     function afterPop(){
       anim=null;
       if(!t2048CanMove(cells,N)){
         over=true;A.tone({f:300,dur:.4,vol:.15});
+        clearSave();
         ctx.finishGame({banner:'ゲームオーバー！'});
       }
     }
@@ -11272,14 +11273,39 @@ registerGame({
       if(anim||over||undoUsed||!undoSnap)return;
       cells=undoSnap.cells.slice();ctx.setScore(undoSnap.score);
       undoUsed=true;undoSnap=null;recalcMax();
-      A.tone({f:520,dur:.08,vol:.12});
+      A.tone({f:520,dur:.08,vol:.12});saveState();
     }
-    function doRestart(){
-      if(over)return;
-      cells=new Array(N*N).fill(0);spawn();spawn();recalcMax();
-      undoSnap=null;undoUsed=false;moveCount=0;reachedGoal=false;anim=null;
-      ctx.setScore(0);A.pop();
+    /* 途中状態の保存/復元。戻るボタン・リロード・タブ移動で進行が消えるのを防ぐ。
+       デイリーは seed が一致する時だけ復元する(日をまたいだ盤面を持ち越さない)。 */
+    const SAVE_KEY='pgp2_2048_save';
+    function saveState(){
+      if(!mode)return;
+      try{
+        store.set(SAVE_KEY,JSON.stringify({
+          v:1,daily:ctx.daily?1:0,seed:ctx.daily?ctx.seed:0,
+          mode,cells,score:ctx.score(),maxTile,moveCount,reachedGoal,undoUsed,
+          undo:undoSnap?{cells:undoSnap.cells,score:undoSnap.score}:null
+        }));
+      }catch(e){}
     }
+    function clearSave(){store.set(SAVE_KEY,'');}
+    function restoreState(){
+      let s=null;
+      try{s=JSON.parse(store.get(SAVE_KEY,'')||'null');}catch(e){s=null;}
+      if(!s||s.v!==1||!T2048_MODES[s.mode])return false;
+      if(!!s.daily!==!!ctx.daily)return false;
+      if(ctx.daily&&s.seed!==ctx.seed)return false;
+      mode=s.mode;layout();
+      if(!Array.isArray(s.cells)||s.cells.length!==N*N){mode=null;return false;}
+      cells=s.cells.slice();
+      ctx.setRecordScope(t2048RecordScope(mode).recordId);
+      ctx.setScore(s.score||0);
+      moveCount=s.moveCount||0;reachedGoal=!!s.reachedGoal;undoUsed=!!s.undoUsed;
+      undoSnap=s.undo&&Array.isArray(s.undo.cells)?{cells:s.undo.cells.slice(),score:s.undo.score}:null;
+      over=false;anim=null;recalcMax();
+      return true;
+    }
+    restoreState();
     function drawTile(g,v,x,y,sc){
       const cc=colOf(v),cx=x+CELL/2,cyc=y+CELL/2;
       g.save();g.translate(cx,cyc);g.scale(sc,sc);g.translate(-cx,-cyc);
@@ -11329,7 +11355,6 @@ registerGame({
         }
         parts.draw(g);
         drawBtn(g,undoBtn,(undoUsed?'つかった':'↩ もどす'),'#8f7a66',(undoUsed||!undoSnap||over),17);
-        drawBtn(g,restartBtn,'🔄 リセット','#c0392b',over,17);
         outlinedText(g,'スワイプ / 矢印キー',W/2,700,14,'#8a6a2a','#fff',3);
       },
       onFlick(f){
@@ -11341,7 +11366,6 @@ registerGame({
         if(info&&info.flicked)return;
         if(!mode){const b=modeBtns.find(v=>hitBtn(v,x,y));if(b)startMode(b.mode);return;}
         if(hitBtn(undoBtn,x,y))doUndo();
-        else if(hitBtn(restartBtn,x,y))doRestart();
       },
       onKey(code,down){
         if(!down)return;
